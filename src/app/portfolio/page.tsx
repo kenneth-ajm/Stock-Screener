@@ -54,6 +54,7 @@ export default async function PortfolioPage() {
     redirect("/auth?next=/portfolio");
   }
 
+  // Default portfolio
   const { data: defaultPortfolio } = await supabase
     .from("portfolios")
     .select(
@@ -64,6 +65,7 @@ export default async function PortfolioPage() {
     .limit(1)
     .maybeSingle();
 
+  // All portfolios
   const { data: portfoliosRaw } = await supabase
     .from("portfolios")
     .select(
@@ -104,8 +106,8 @@ export default async function PortfolioPage() {
     closedPositions = (closedRaw ?? []) as any;
   }
 
+  // Open stats
   const openCount = openPositions.length;
-  const closedCount = closedPositions.length;
 
   const totalPositionValue = openPositions.reduce((sum, p) => {
     const entry = Number(p.entry_price);
@@ -124,6 +126,9 @@ export default async function PortfolioPage() {
 
   const slotsLeft = Math.max(maxPositions - openCount, 0);
   const pctDeployed = accountSize > 0 ? (totalPositionValue / accountSize) * 100 : 0;
+
+  // Closed stats (realized)
+  const closedCount = closedPositions.length;
 
   const realizedPnl = closedPositions.reduce((sum, p) => {
     const entry = Number(p.entry_price);
