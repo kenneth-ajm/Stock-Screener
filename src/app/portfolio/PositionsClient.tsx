@@ -12,12 +12,10 @@ type PositionRow = {
   entry_price: number | null;
   stop_price?: number | null;
 
-  // optional sizing fields
   shares?: number | null;
   quantity?: number | null;
   position_size?: number | null;
 
-  // closing fields
   exit_price: number | null;
   closed_at: string | null;
 
@@ -75,17 +73,13 @@ function Modal({
 
   return (
     <div className="fixed inset-0 z-50">
-      <div
-        className="absolute inset-0 bg-black/60"
-        onClick={onClose}
-        aria-hidden="true"
-      />
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
       <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b1020] p-5 shadow-2xl">
+        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
           <div className="flex items-start justify-between gap-3">
-            <div className="text-base font-semibold">{title}</div>
+            <div className="text-base font-semibold text-slate-900">{title}</div>
             <button
-              className="rounded-lg bg-white/10 px-2 py-1 text-xs hover:bg-white/15"
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 hover:bg-slate-50"
               onClick={onClose}
             >
               Close
@@ -109,7 +103,6 @@ export default function PositionsClient({
 }) {
   const [tab, setTab] = useState<"OPEN" | "CLOSED">("OPEN");
 
-  // Modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [activePosition, setActivePosition] = useState<PositionRow | null>(null);
   const [exitPriceInput, setExitPriceInput] = useState("");
@@ -117,10 +110,7 @@ export default function PositionsClient({
   const [submitting, setSubmitting] = useState(false);
 
   const closedWithPnL = useMemo(() => {
-    return closedPositions.map((p) => {
-      const pnl = computeClosedPnL(p);
-      return { ...p, pnl };
-    });
+    return closedPositions.map((p) => ({ ...p, pnl: computeClosedPnL(p) }));
   }, [closedPositions]);
 
   function openCloseModal(p: PositionRow) {
@@ -154,23 +144,14 @@ export default function PositionsClient({
       const res = await fetch("/api/positions/close", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          position_id: activePosition.id,
-          exit_price: exitPrice,
-        }),
+        body: JSON.stringify({ position_id: activePosition.id, exit_price: exitPrice }),
       });
 
       const payload = await res.json().catch(() => null);
-
       if (!res.ok || !payload?.ok) {
-        const msg =
-          payload?.error ||
-          (typeof payload === "string" ? payload : null) ||
-          "Close failed.";
-        throw new Error(msg);
+        throw new Error(payload?.error || "Close failed.");
       }
 
-      // Refresh server-rendered data
       window.location.reload();
     } catch (e: any) {
       setModalError(e?.message ?? "Close failed.");
@@ -181,12 +162,13 @@ export default function PositionsClient({
 
   return (
     <div className="space-y-4">
-      {/* Tabs */}
       <div className="flex items-center gap-2">
         <button
           className={clsx(
-            "rounded-lg px-3 py-1.5 text-sm",
-            tab === "OPEN" ? "bg-white/15" : "bg-white/5 hover:bg-white/10"
+            "rounded-xl border px-3 py-1.5 text-sm font-medium",
+            tab === "OPEN"
+              ? "border-slate-300 bg-slate-900 text-white"
+              : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50"
           )}
           onClick={() => setTab("OPEN")}
         >
@@ -194,8 +176,10 @@ export default function PositionsClient({
         </button>
         <button
           className={clsx(
-            "rounded-lg px-3 py-1.5 text-sm",
-            tab === "CLOSED" ? "bg-white/15" : "bg-white/5 hover:bg-white/10"
+            "rounded-xl border px-3 py-1.5 text-sm font-medium",
+            tab === "CLOSED"
+              ? "border-slate-300 bg-slate-900 text-white"
+              : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50"
           )}
           onClick={() => setTab("CLOSED")}
         >
@@ -203,13 +187,12 @@ export default function PositionsClient({
         </button>
       </div>
 
-      {/* OPEN */}
       {tab === "OPEN" ? (
-        <div className="rounded-xl border border-white/10 bg-white/5">
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="text-left text-xs text-white/60">
-                <tr className="border-b border-white/10">
+              <thead className="text-left text-xs text-slate-500">
+                <tr className="border-b border-slate-200">
                   <th className="p-3">Symbol</th>
                   <th className="p-3">Entry</th>
                   <th className="p-3">Stop</th>
@@ -221,21 +204,21 @@ export default function PositionsClient({
               <tbody>
                 {openPositions.length === 0 ? (
                   <tr>
-                    <td className="p-3 text-white/60" colSpan={6}>
+                    <td className="p-3 text-slate-500" colSpan={6}>
                       No open positions.
                     </td>
                   </tr>
                 ) : (
                   openPositions.map((p) => (
-                    <tr key={p.id} className="border-b border-white/5">
-                      <td className="p-3 font-semibold">{p.symbol}</td>
-                      <td className="p-3">{formatMoney(p.entry_price)}</td>
-                      <td className="p-3">{formatMoney(p.stop_price ?? null)}</td>
-                      <td className="p-3">{resolveQty(p) || "—"}</td>
-                      <td className="p-3">{formatDate(p.created_at ?? null)}</td>
+                    <tr key={p.id} className="border-b border-slate-100">
+                      <td className="p-3 font-semibold text-slate-900">{p.symbol}</td>
+                      <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
+                      <td className="p-3 text-slate-800">{formatMoney(p.stop_price ?? null)}</td>
+                      <td className="p-3 text-slate-800">{resolveQty(p) || "—"}</td>
+                      <td className="p-3 text-slate-800">{formatDate(p.created_at ?? null)}</td>
                       <td className="p-3 text-right">
                         <button
-                          className="rounded-lg bg-white/10 px-3 py-1.5 text-xs hover:bg-white/15"
+                          className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50"
                           onClick={() => openCloseModal(p)}
                         >
                           Close
@@ -254,35 +237,33 @@ export default function PositionsClient({
             onClose={closeModal}
           >
             <div className="space-y-3">
-              <div className="text-sm text-white/70">
-                Enter the exit price you actually sold at. This will be saved for closed-trade history and P/L.
+              <div className="text-sm text-slate-600">
+                Enter the exit price you sold at. This is saved for closed-trade history and P/L.
               </div>
 
               <div className="space-y-2">
-                <label className="block text-xs text-white/60">Exit price</label>
+                <label className="block text-xs text-slate-500">Exit price</label>
                 <input
                   value={exitPriceInput}
                   onChange={(e) => setExitPriceInput(e.target.value)}
                   inputMode="decimal"
                   placeholder="e.g. 12.34"
-                  className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none focus:border-white/20"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                   disabled={submitting}
                 />
-                {modalError ? (
-                  <div className="text-xs text-rose-300">{modalError}</div>
-                ) : null}
+                {modalError ? <div className="text-xs text-rose-600">{modalError}</div> : null}
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
-                  className="rounded-lg bg-white/5 px-3 py-2 text-sm hover:bg-white/10 disabled:opacity-50"
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
                   onClick={closeModal}
                   disabled={submitting}
                 >
                   Cancel
                 </button>
                 <button
-                  className="rounded-lg bg-white/15 px-3 py-2 text-sm hover:bg-white/20 disabled:opacity-50"
+                  className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
                   onClick={submitClose}
                   disabled={submitting}
                 >
@@ -293,15 +274,14 @@ export default function PositionsClient({
           </Modal>
         </div>
       ) : (
-        /* CLOSED */
         <div className="space-y-4">
           <ClosedTradeSummaryCards summary={closedSummary} />
 
-          <div className="rounded-xl border border-white/10 bg-white/5">
+          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-left text-xs text-white/60">
-                  <tr className="border-b border-white/10">
+                <thead className="text-left text-xs text-slate-500">
+                  <tr className="border-b border-slate-200">
                     <th className="p-3">Symbol</th>
                     <th className="p-3">Entry</th>
                     <th className="p-3">Exit</th>
@@ -312,7 +292,7 @@ export default function PositionsClient({
                 <tbody>
                   {closedWithPnL.length === 0 ? (
                     <tr>
-                      <td className="p-3 text-white/60" colSpan={5}>
+                      <td className="p-3 text-slate-500" colSpan={5}>
                         No closed positions.
                       </td>
                     </tr>
@@ -322,21 +302,21 @@ export default function PositionsClient({
                       const pnlClass =
                         typeof pnlPct === "number"
                           ? pnlPct > 0
-                            ? "text-emerald-300"
+                            ? "text-emerald-600"
                             : pnlPct < 0
-                              ? "text-rose-300"
-                              : "text-white/70"
-                          : "text-white/60";
+                              ? "text-rose-600"
+                              : "text-slate-600"
+                          : "text-slate-500";
 
                       return (
-                        <tr key={p.id} className="border-b border-white/5">
-                          <td className="p-3 font-semibold">{p.symbol}</td>
-                          <td className="p-3">{formatMoney(p.entry_price)}</td>
-                          <td className="p-3">{formatMoney(p.exit_price)}</td>
+                        <tr key={p.id} className="border-b border-slate-100">
+                          <td className="p-3 font-semibold text-slate-900">{p.symbol}</td>
+                          <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
+                          <td className="p-3 text-slate-800">{formatMoney(p.exit_price)}</td>
                           <td className={clsx("p-3 font-semibold", pnlClass)}>
                             {typeof pnlPct === "number" ? formatPct(pnlPct) : "—"}
                           </td>
-                          <td className="p-3">{formatDate(p.closed_at)}</td>
+                          <td className="p-3 text-slate-800">{formatDate(p.closed_at)}</td>
                         </tr>
                       );
                     })
@@ -346,7 +326,7 @@ export default function PositionsClient({
             </div>
           </div>
 
-          <div className="text-xs text-white/50">
+          <div className="text-xs text-slate-500">
             Tip: P/L % is computed from entry and exit. $ P/L is available if you store a quantity field (shares/quantity).
           </div>
         </div>
