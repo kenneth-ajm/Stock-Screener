@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import PortfolioClient from "./portfolioClient";
 import PositionsClient from "./PositionsClient";
 
@@ -29,7 +30,7 @@ type Position = {
 export default async function PortfolioPage() {
   const supabase = await supabaseServer();
 
-  // ✅ Route guard: require auth
+  // ✅ Route guard
   const { data: auth } = await supabase.auth.getUser();
   const user = auth.user;
 
@@ -37,7 +38,7 @@ export default async function PortfolioPage() {
     redirect("/auth?next=/portfolio");
   }
 
-  // Default (active) portfolio
+  // Default portfolio
   const { data: defaultPortfolio } = await supabase
     .from("portfolios")
     .select(
@@ -48,7 +49,7 @@ export default async function PortfolioPage() {
     .limit(1)
     .maybeSingle();
 
-  // All portfolios (for management section)
+  // All portfolios
   const { data: portfoliosRaw } = await supabase
     .from("portfolios")
     .select(
@@ -60,7 +61,7 @@ export default async function PortfolioPage() {
 
   const portfolios: Portfolio[] = (portfoliosRaw ?? []) as any;
 
-  // Open positions for default portfolio
+  // Open positions
   let positions: Position[] = [];
   if (defaultPortfolio?.id) {
     const { data: posRaw } = await supabase
@@ -78,7 +79,6 @@ export default async function PortfolioPage() {
   const accountSize = Number(defaultPortfolio?.account_size ?? 0);
   const maxPositions = Number(defaultPortfolio?.max_positions ?? 5);
 
-  // Stats
   const openCount = positions.length;
 
   const totalPositionValue = positions.reduce((sum, p) => {
@@ -97,14 +97,24 @@ export default async function PortfolioPage() {
   }, 0);
 
   const slotsLeft = Math.max(maxPositions - openCount, 0);
-  const pctDeployed = accountSize > 0 ? (totalPositionValue / accountSize) * 100 : 0;
+  const pctDeployed =
+    accountSize > 0 ? (totalPositionValue / accountSize) * 100 : 0;
 
   return (
     <div className="container-page space-y-6">
-      <div>
-        <h1 className="text-3xl font-semibold tracking-tight">Portfolio</h1>
-        <div className="mt-2 text-sm muted">
-          Your holdings dashboard. Positions are tied to the active (default) portfolio.
+      {/* Header with button */}
+      <div className="flex items-start justify-between gap-6">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">Portfolio</h1>
+          <div className="mt-2 text-sm muted">
+            Your holdings dashboard. Positions are tied to the active (default) portfolio.
+          </div>
+        </div>
+
+        <div>
+          <a href="/screener">
+            <Button variant="secondary">Back to Screener</Button>
+          </a>
         </div>
       </div>
 
@@ -113,7 +123,9 @@ export default async function PortfolioPage() {
           <CardHeader
             title="Open positions"
             subtitle={
-              defaultPortfolio ? `Active: ${defaultPortfolio.name}` : "No default portfolio found"
+              defaultPortfolio
+                ? `Active: ${defaultPortfolio.name}`
+                : "No default portfolio found"
             }
             right={
               <div className="flex items-center gap-2">
@@ -126,9 +138,15 @@ export default async function PortfolioPage() {
           />
           <CardContent>
             {defaultPortfolio ? (
-              <PositionsClient currency={currency} accountSize={accountSize} positions={positions} />
+              <PositionsClient
+                currency={currency}
+                accountSize={accountSize}
+                positions={positions}
+              />
             ) : (
-              <div className="text-sm muted">Create a portfolio below and set it as default.</div>
+              <div className="text-sm muted">
+                Create a portfolio below and set it as default.
+              </div>
             )}
           </CardContent>
         </Card>
@@ -159,7 +177,9 @@ export default async function PortfolioPage() {
 
                 <div className="flex items-center justify-between">
                   <div className="muted">% deployed</div>
-                  <div className="font-mono font-semibold">{pctDeployed.toFixed(1)}%</div>
+                  <div className="font-mono font-semibold">
+                    {pctDeployed.toFixed(1)}%
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between">
@@ -168,15 +188,11 @@ export default async function PortfolioPage() {
                     {currency} {totalRisk.toFixed(2)}
                   </div>
                 </div>
-
-                <div className="pt-3 border-t border-slate-200">
-                  <a className="underline muted" href="/screener">
-                    Back to screener
-                  </a>
-                </div>
               </div>
             ) : (
-              <div className="text-sm muted">No default portfolio set yet.</div>
+              <div className="text-sm muted">
+                No default portfolio set yet.
+              </div>
             )}
           </CardContent>
         </Card>
