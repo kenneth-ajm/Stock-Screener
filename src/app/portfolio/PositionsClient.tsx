@@ -60,20 +60,61 @@ function computeClosedPnL(p: PositionRow) {
   return { pnlUsd, pnlPct };
 }
 
+function Modal({
+  open,
+  title,
+  children,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div
+        className="absolute inset-0 bg-black/60"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b1020] p-5 shadow-2xl">
+          <div className="flex items-start justify-between gap-3">
+            <div className="text-base font-semibold">{title}</div>
+            <button
+              className="rounded-lg bg-white/10 px-2 py-1 text-xs hover:bg-white/15"
+              onClick={onClose}
+            >
+              Close
+            </button>
+          </div>
+          <div className="mt-4">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PositionsClient({
   openPositions,
   closedPositions,
   closedSummary,
-  onClosePosition,
 }: {
   openPositions: PositionRow[];
   closedPositions: PositionRow[];
   closedSummary: ClosedTradeSummary;
-  // keep your existing close handler signature if you already have one
-  onClosePosition?: (positionId: string, exitPrice: number) => Promise<void>;
 }) {
   const [tab, setTab] = useState<"OPEN" | "CLOSED">("OPEN");
-  const [closingId, setClosingId] = useState<string | null>(null);
+
+  // Modal state
+  const [modalOpen, setModalOpen] = useState(false);
+  const [activePosition, setActivePosition] = useState<PositionRow | null>(null);
+  const [exitPriceInput, setExitPriceInput] = useState("");
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const closedWithPnL = useMemo(() => {
     return closedPositions.map((p) => {
@@ -82,45 +123,65 @@ export default function PositionsClient({
     });
   }, [closedPositions]);
 
-  async function handleClose(positionId: string) {
-    // If you already have a modal, keep it. For now, we keep prompt to avoid scope creep.
-    const raw = window.prompt("Exit price (required):");
-    if (!raw) return;
-    const exitPrice = Number(raw);
+  function openCloseModal(p: PositionRow) {
+    setActivePosition(p);
+    setExitPriceInput("");
+    setModalError(null);
+    setModalOpen(true);
+  }
+
+  function closeModal() {
+    if (submitting) return;
+    setModalOpen(false);
+    setActivePosition(null);
+    setExitPriceInput("");
+    setModalError(null);
+  }
+
+  async function submitClose() {
+    if (!activePosition) return;
+
+    const exitPrice = Number(exitPriceInput);
     if (!Number.isFinite(exitPrice) || exitPrice <= 0) {
-      window.alert("Please enter a valid exit price.");
+      setModalError("Please enter a valid positive exit price.");
       return;
     }
 
     try {
-      setClosingId(positionId);
+      setSubmitting(true);
+      setModalError(null);
 
-      if (onClosePosition) {
-        await onClosePosition(positionId, exitPrice);
-      } else {
-        // default: call your existing API
-        const res = await fetch("/api/positions/close", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ position_id: positionId, exit_price: exitPrice }),
-        });
-        if (!res.ok) {
-          const msg = await res.text();
-          throw new Error(msg || "Close failed");
-        }
+      const res = await fetch("/api/positions/close", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          position_id: activePosition.id,
+          exit_price: exitPrice,
+        }),
+      });
+
+      const payload = await res.json().catch(() => null);
+
+      if (!res.ok || !payload?.ok) {
+        const msg =
+          payload?.error ||
+          (typeof payload === "string" ? payload : null) ||
+          "Close failed.";
+        throw new Error(msg);
       }
 
-      // refresh the page data from server
+      // Refresh server-rendered data
       window.location.reload();
     } catch (e: any) {
-      window.alert(e?.message ?? "Close failed");
+      setModalError(e?.message ?? "Close failed.");
     } finally {
-      setClosingId(null);
+      setSubmitting(false);
     }
   }
 
   return (
     <div className="space-y-4">
+      {/* Tabs */}
       <div className="flex items-center gap-2">
         <button
           className={clsx(
@@ -142,6 +203,7 @@ export default function PositionsClient({
         </button>
       </div>
 
+      {/* OPEN */}
       {tab === "OPEN" ? (
         <div className="rounded-xl border border-white/10 bg-white/5">
           <div className="overflow-x-auto">
@@ -173,11 +235,10 @@ export default function PositionsClient({
                       <td className="p-3">{formatDate(p.created_at ?? null)}</td>
                       <td className="p-3 text-right">
                         <button
-                          className="rounded-lg bg-white/10 px-3 py-1.5 text-xs hover:bg-white/15 disabled:opacity-50"
-                          onClick={() => handleClose(p.id)}
-                          disabled={closingId === p.id}
+                          className="rounded-lg bg-white/10 px-3 py-1.5 text-xs hover:bg-white/15"
+                          onClick={() => openCloseModal(p)}
                         >
-                          {closingId === p.id ? "Closing..." : "Close"}
+                          Close
                         </button>
                       </td>
                     </tr>
@@ -186,8 +247,53 @@ export default function PositionsClient({
               </tbody>
             </table>
           </div>
+
+          <Modal
+            open={modalOpen}
+            title={activePosition ? `Close Position: ${activePosition.symbol}` : "Close Position"}
+            onClose={closeModal}
+          >
+            <div className="space-y-3">
+              <div className="text-sm text-white/70">
+                Enter the exit price you actually sold at. This will be saved for closed-trade history and P/L.
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs text-white/60">Exit price</label>
+                <input
+                  value={exitPriceInput}
+                  onChange={(e) => setExitPriceInput(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="e.g. 12.34"
+                  className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none focus:border-white/20"
+                  disabled={submitting}
+                />
+                {modalError ? (
+                  <div className="text-xs text-rose-300">{modalError}</div>
+                ) : null}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  className="rounded-lg bg-white/5 px-3 py-2 text-sm hover:bg-white/10 disabled:opacity-50"
+                  onClick={closeModal}
+                  disabled={submitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="rounded-lg bg-white/15 px-3 py-2 text-sm hover:bg-white/20 disabled:opacity-50"
+                  onClick={submitClose}
+                  disabled={submitting}
+                >
+                  {submitting ? "Closing..." : "Confirm Close"}
+                </button>
+              </div>
+            </div>
+          </Modal>
         </div>
       ) : (
+        /* CLOSED */
         <div className="space-y-4">
           <ClosedTradeSummaryCards summary={closedSummary} />
 
