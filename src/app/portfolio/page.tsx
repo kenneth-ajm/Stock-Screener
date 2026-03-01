@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -27,15 +28,21 @@ type Position = {
 
 export default async function PortfolioPage() {
   const supabase = await supabaseServer();
+
+  // ✅ Route guard: require auth
   const { data: auth } = await supabase.auth.getUser();
   const user = auth.user;
 
-  if (!user) return null;
+  if (!user) {
+    redirect("/auth?next=/portfolio");
+  }
 
   // Default (active) portfolio
   const { data: defaultPortfolio } = await supabase
     .from("portfolios")
-    .select("id, name, account_currency, account_size, risk_per_trade, max_positions, is_default, created_at")
+    .select(
+      "id, name, account_currency, account_size, risk_per_trade, max_positions, is_default, created_at"
+    )
     .eq("user_id", user.id)
     .eq("is_default", true)
     .limit(1)
@@ -44,7 +51,9 @@ export default async function PortfolioPage() {
   // All portfolios (for management section)
   const { data: portfoliosRaw } = await supabase
     .from("portfolios")
-    .select("id, name, account_currency, account_size, risk_per_trade, max_positions, is_default, created_at")
+    .select(
+      "id, name, account_currency, account_size, risk_per_trade, max_positions, is_default, created_at"
+    )
     .eq("user_id", user.id)
     .order("is_default", { ascending: false })
     .order("created_at", { ascending: true });
@@ -88,8 +97,7 @@ export default async function PortfolioPage() {
   }, 0);
 
   const slotsLeft = Math.max(maxPositions - openCount, 0);
-  const pctDeployed =
-    accountSize > 0 ? (totalPositionValue / accountSize) * 100 : 0;
+  const pctDeployed = accountSize > 0 ? (totalPositionValue / accountSize) * 100 : 0;
 
   return (
     <div className="container-page space-y-6">
@@ -105,9 +113,7 @@ export default async function PortfolioPage() {
           <CardHeader
             title="Open positions"
             subtitle={
-              defaultPortfolio
-                ? `Active: ${defaultPortfolio.name}`
-                : "No default portfolio found"
+              defaultPortfolio ? `Active: ${defaultPortfolio.name}` : "No default portfolio found"
             }
             right={
               <div className="flex items-center gap-2">
@@ -120,15 +126,9 @@ export default async function PortfolioPage() {
           />
           <CardContent>
             {defaultPortfolio ? (
-              <PositionsClient
-                currency={currency}
-                accountSize={accountSize}
-                positions={positions}
-              />
+              <PositionsClient currency={currency} accountSize={accountSize} positions={positions} />
             ) : (
-              <div className="text-sm muted">
-                Create a portfolio below and set it as default.
-              </div>
+              <div className="text-sm muted">Create a portfolio below and set it as default.</div>
             )}
           </CardContent>
         </Card>
@@ -159,9 +159,7 @@ export default async function PortfolioPage() {
 
                 <div className="flex items-center justify-between">
                   <div className="muted">% deployed</div>
-                  <div className="font-mono font-semibold">
-                    {pctDeployed.toFixed(1)}%
-                  </div>
+                  <div className="font-mono font-semibold">{pctDeployed.toFixed(1)}%</div>
                 </div>
 
                 <div className="flex items-center justify-between">
@@ -178,9 +176,7 @@ export default async function PortfolioPage() {
                 </div>
               </div>
             ) : (
-              <div className="text-sm muted">
-                No default portfolio set yet.
-              </div>
+              <div className="text-sm muted">No default portfolio set yet.</div>
             )}
           </CardContent>
         </Card>

@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import ScanTableClient from "./scanTableClient";
 import UtilitiesClient from "./UtilitiesClient";
@@ -9,7 +10,15 @@ export const dynamic = "force-dynamic";
 
 export default async function ScreenerPage() {
   const supabase = await supabaseServer();
-  const { data } = await supabase.auth.getUser();
+
+  // ✅ Route guard: require auth
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/auth?next=/screener");
+  }
 
   // Default portfolio (active journey)
   const { data: defaultPortfolio } = await supabase
@@ -70,7 +79,7 @@ export default async function ScreenerPage() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Screener</h1>
           <div className="mt-2 text-sm muted">
-            Logged in as <span className="font-semibold">{data.user?.email}</span>
+            Logged in as <span className="font-semibold">{user.email}</span>
           </div>
         </div>
 
@@ -116,9 +125,11 @@ export default async function ScreenerPage() {
                   </span>
                 </div>
                 <div className="muted">
-                  Risk/trade: <span className="font-semibold">{defaultPortfolio.risk_per_trade}</span>
+                  Risk/trade:{" "}
+                  <span className="font-semibold">{defaultPortfolio.risk_per_trade}</span>
                   {" • "}
-                  Max positions: <span className="font-semibold">{defaultPortfolio.max_positions}</span>
+                  Max positions:{" "}
+                  <span className="font-semibold">{defaultPortfolio.max_positions}</span>
                 </div>
                 <a className="underline text-sm muted" href="/portfolio">
                   Manage portfolios
