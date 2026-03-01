@@ -2,24 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { supabaseBrowser } from "@/lib/supabase/browser";
 
 export default function AuthClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const supabase = useMemo(() => {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!url || !anonKey) {
-      throw new Error(
-        "Missing env vars: NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY"
-      );
-    }
-
-    return createClient(url, anonKey);
-  }, []);
+  const supabase = useMemo(() => supabaseBrowser(), []);
 
   const nextPath = searchParams.get("next") || "/screener";
 
@@ -52,31 +41,36 @@ export default function AuthClient() {
           return;
         }
 
-        if (data.session) {
-          router.push(nextPath);
-          router.refresh();
-        } else {
-          setMessage("Signed in but no session found. Please try again.");
-        }
-      } else {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-
-        if (error) {
-          setMessage(error.message);
+        // If sign-in succeeds, session should exist.
+        if (!data.session) {
+          setMessage("Signed in, but no session returned. Please try again.");
           return;
         }
 
-        if (data.session) {
-          router.push(nextPath);
-          router.refresh();
-        } else {
-          setMessage(
-            "Signup successful. If email confirmation is enabled, check your inbox."
-          );
-        }
+        router.push(nextPath);
+        router.refresh();
+        return;
+      }
+
+      // signup
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+
+      if (error) {
+        setMessage(error.message);
+        return;
+      }
+
+      // Some projects require email confirmation.
+      if (data.session) {
+        router.push(nextPath);
+        router.refresh();
+      } else {
+        setMessage(
+          "Signup successful. If email confirmation is enabled, check your inbox."
+        );
       }
     } finally {
       setLoading(false);
