@@ -101,11 +101,12 @@ export default async function PortfolioPage() {
         <div className="text-xl font-semibold">Portfolio</div>
         <div className="text-sm text-slate-600">No default portfolio found yet.</div>
         <Link
-          className="inline-flex items-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-          href="/screener"
-        >
-          Back to Screener
-        </Link>
+  href="/screener"
+  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
+>
+  <span aria-hidden="true">←</span>
+  Back to Screener
+</Link>
       </div>
     );
   }
