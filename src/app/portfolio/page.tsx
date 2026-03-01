@@ -1,284 +1,291 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
-import { supabaseServer } from "@/lib/supabase/server";
-import { Card, CardContent, CardHeader } from "@/components/ui/Card";
-import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
-import PortfolioClient from "./portfolioClient";
+import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/ssr";
+
 import PositionsClient from "./PositionsClient";
+import { computeClosedTradeSummary } from "@/lib/analytics/closedTradeSummary";
 
 type Portfolio = {
   id: string;
-  name: string;
-  account_currency: string;
-  account_size: number;
-  risk_per_trade: number;
-  max_positions: number;
-  is_default: boolean;
-  created_at: string;
+  user_id: string;
+  name?: string | null;
+  account_currency?: string | null;
+  account_size?: number | null;
+  risk_per_trade?: number | null;
+  max_positions?: number | null;
+  is_default?: boolean | null;
 };
 
-type OpenPosition = {
+type PositionRow = {
   id: string;
+  portfolio_id: string;
   symbol: string;
-  entry_date: string | null;
-  entry_price: number | null;
-  shares: number | null;
-  stop: number | null;
-  status: "OPEN";
-};
+  status: string;
 
-type ClosedPosition = {
-  id: string;
-  symbol: string;
-  entry_date: string | null;
   entry_price: number | null;
-  shares: number | null;
-  stop: number | null;
-  status: "CLOSED";
+  stop_price: number | null;
+
+  // sizing (your schema might use one of these)
+  shares?: number | null;
+  quantity?: number | null;
+  position_size?: number | null;
+
+  created_at: string | null;
+
   closed_at: string | null;
   exit_price: number | null;
 };
 
-function money(value: number, currency = "USD") {
-  if (!Number.isFinite(value)) return "-";
-  return `${currency} ${value.toFixed(2)}`;
+function formatMoney(x: number | null | undefined) {
+  if (typeof x !== "number" || !Number.isFinite(x)) return "—";
+  return `$${x.toFixed(2)}`;
+}
+
+async function makeSupabaseServerClient() {
+  // In your Next setup, cookies() is async
+  const cookieStore = await cookies();
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !anonKey) {
+    throw new Error(
+      "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY in env."
+    );
+  }
+
+  return createServerClient(url, anonKey, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieStore.set(name, value, options);
+          });
+        } catch {
+          // In Server Components, setting cookies can fail during render.
+          // That’s OK for our usage.
+        }
+      },
+    },
+  });
 }
 
 export default async function PortfolioPage() {
-  const supabase = await supabaseServer();
+  // IMPORTANT: await here, otherwise supabase is a Promise and TS complains
+  const supabase = await makeSupabaseServerClient();
 
-  const { data: auth } = await supabase.auth.getUser();
-  const user = auth.user;
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   if (!user) {
     redirect("/auth?next=/portfolio");
   }
 
-  // Default portfolio
-  const { data: defaultPortfolio } = await supabase
+  // 1) Load default portfolio
+  const { data: portfolio, error: pErr } = await supabase
     .from("portfolios")
-    .select(
-      "id, name, account_currency, account_size, risk_per_trade, max_positions, is_default, created_at"
-    )
+    .select("*")
     .eq("user_id", user.id)
     .eq("is_default", true)
-    .limit(1)
-    .maybeSingle();
+    .maybeSingle<Portfolio>();
 
-  // All portfolios
-  const { data: portfoliosRaw } = await supabase
-    .from("portfolios")
-    .select(
-      "id, name, account_currency, account_size, risk_per_trade, max_positions, is_default, created_at"
-    )
-    .eq("user_id", user.id)
-    .order("is_default", { ascending: false })
-    .order("created_at", { ascending: true });
-
-  const portfolios: Portfolio[] = (portfoliosRaw ?? []) as any;
-
-  const currency = defaultPortfolio?.account_currency ?? "USD";
-  const accountSize = Number(defaultPortfolio?.account_size ?? 0);
-  const maxPositions = Number(defaultPortfolio?.max_positions ?? 5);
-
-  let openPositions: OpenPosition[] = [];
-  let closedPositions: ClosedPosition[] = [];
-
-  if (defaultPortfolio?.id) {
-    const { data: openRaw } = await supabase
-      .from("portfolio_positions")
-      .select("id, symbol, entry_date, entry_price, shares, stop, status")
-      .eq("user_id", user.id)
-      .eq("portfolio_id", defaultPortfolio.id)
-      .eq("status", "OPEN")
-      .order("created_at", { ascending: false });
-
-    openPositions = (openRaw ?? []) as any;
-
-    const { data: closedRaw } = await supabase
-      .from("portfolio_positions")
-      .select("id, symbol, entry_date, entry_price, shares, stop, status, closed_at, exit_price")
-      .eq("user_id", user.id)
-      .eq("portfolio_id", defaultPortfolio.id)
-      .eq("status", "CLOSED")
-      .order("closed_at", { ascending: false });
-
-    closedPositions = (closedRaw ?? []) as any;
+  if (pErr) {
+    return (
+      <div className="p-6">
+        <div className="text-sm text-rose-200">
+          Error loading portfolio: {pErr.message}
+        </div>
+      </div>
+    );
   }
 
-  // Open stats
-  const openCount = openPositions.length;
+  if (!portfolio) {
+    return (
+      <div className="p-6 space-y-3">
+        <div className="text-xl font-semibold">Portfolio</div>
+        <div className="text-sm text-white/60">
+          No default portfolio found yet.
+        </div>
+        <Link
+          className="inline-block rounded-lg bg-white/10 px-3 py-2 text-sm hover:bg-white/15"
+          href="/screener"
+        >
+          Back to Screener
+        </Link>
+      </div>
+    );
+  }
 
-  const totalPositionValue = openPositions.reduce((sum, p) => {
-    const entry = Number(p.entry_price);
-    const shares = Number(p.shares);
-    if (!Number.isFinite(entry) || !Number.isFinite(shares)) return sum;
-    return sum + entry * shares;
-  }, 0);
+  // 2) Fetch positions
+  // If your DB uses lowercase statuses, change "OPEN"/"CLOSED" to match.
+  const { data: openPositions, error: oErr } = await supabase
+    .from("portfolio_positions")
+    .select("*")
+    .eq("portfolio_id", portfolio.id)
+    .eq("status", "OPEN")
+    .order("created_at", { ascending: false })
+    .returns<PositionRow[]>();
 
-  const totalRisk = openPositions.reduce((sum, p) => {
-    const entry = Number(p.entry_price);
-    const stop = Number(p.stop);
-    const shares = Number(p.shares);
-    if (![entry, stop, shares].every(Number.isFinite)) return sum;
-    return sum + Math.max((entry - stop) * shares, 0);
-  }, 0);
+  const { data: closedPositions, error: cErr } = await supabase
+    .from("portfolio_positions")
+    .select("*")
+    .eq("portfolio_id", portfolio.id)
+    .eq("status", "CLOSED")
+    .order("closed_at", { ascending: false })
+    .returns<PositionRow[]>();
 
-  const slotsLeft = Math.max(maxPositions - openCount, 0);
-  const pctDeployed = accountSize > 0 ? (totalPositionValue / accountSize) * 100 : 0;
+  if (oErr || cErr) {
+    return (
+      <div className="p-6">
+        <div className="text-sm text-rose-200">
+          Error loading positions: {(oErr?.message ?? "") + " " + (cErr?.message ?? "")}
+        </div>
+      </div>
+    );
+  }
 
-  // Closed stats (realized)
-  const closedCount = closedPositions.length;
+  const open = openPositions ?? [];
+  const closed = closedPositions ?? [];
 
-  const realizedPnl = closedPositions.reduce((sum, p) => {
-    const entry = Number(p.entry_price);
-    const exit = Number(p.exit_price);
-    const shares = Number(p.shares);
-    if (![entry, exit, shares].every(Number.isFinite)) return sum;
-    return sum + (exit - entry) * shares;
-  }, 0);
+  // 3) Realized stats (basic)
+  let realizedPnL = 0;
+  let realizedWins = 0;
+  let realizedLosses = 0;
 
-  const closedCapital = closedPositions.reduce((sum, p) => {
-    const entry = Number(p.entry_price);
-    const shares = Number(p.shares);
-    if (![entry, shares].every(Number.isFinite)) return sum;
-    return sum + entry * shares;
-  }, 0);
+  for (const p of closed) {
+    if (typeof p.entry_price !== "number" || typeof p.exit_price !== "number") continue;
 
-  const realizedPct = closedCapital > 0 ? (realizedPnl / closedCapital) * 100 : 0;
+    const qty =
+      (typeof p.shares === "number" ? p.shares : null) ??
+      (typeof p.quantity === "number" ? p.quantity : null) ??
+      (typeof p.position_size === "number" ? p.position_size : null) ??
+      0;
 
-  const wins = closedPositions.reduce((count, p) => {
-    const entry = Number(p.entry_price);
-    const exit = Number(p.exit_price);
-    const shares = Number(p.shares);
-    if (![entry, exit, shares].every(Number.isFinite)) return count;
-    return (exit - entry) * shares > 0 ? count + 1 : count;
-  }, 0);
+    const pnl = (p.exit_price - p.entry_price) * (qty ?? 0);
+    realizedPnL += pnl;
+    if (pnl > 0) realizedWins += 1;
+    if (pnl < 0) realizedLosses += 1;
+  }
 
-  const winRate = closedCount > 0 ? (wins / closedCount) * 100 : 0;
+  const realizedTrades = realizedWins + realizedLosses;
+  const winRate = realizedTrades ? realizedWins / realizedTrades : 0;
+
+  // 4) Closed Summary Cards
+  const closedSummary = computeClosedTradeSummary(
+    closed.map((p: PositionRow) => ({
+      symbol: p.symbol,
+      entry_price: p.entry_price,
+      exit_price: p.exit_price,
+      shares: p.shares ?? null,
+      quantity: p.quantity ?? null,
+      position_size: p.position_size ?? null,
+      closed_at: p.closed_at,
+    }))
+  );
+
+  // 5) Open exposure
+  let capitalDeployed = 0;
+  let riskDeployed = 0;
+
+  for (const p of open) {
+    const entry = p.entry_price;
+    const stop = p.stop_price;
+    const qty =
+      (typeof p.shares === "number" ? p.shares : null) ??
+      (typeof p.quantity === "number" ? p.quantity : null) ??
+      (typeof p.position_size === "number" ? p.position_size : null) ??
+      0;
+
+    if (typeof entry === "number" && entry > 0 && typeof qty === "number" && qty > 0) {
+      capitalDeployed += entry * qty;
+    }
+    if (
+      typeof entry === "number" &&
+      typeof stop === "number" &&
+      entry > 0 &&
+      typeof qty === "number" &&
+      qty > 0
+    ) {
+      riskDeployed += Math.max(0, (entry - stop) * qty);
+    }
+  }
+
+  const acctSize = portfolio.account_size ?? null;
+  const pctDeployed =
+    typeof acctSize === "number" && acctSize > 0 ? capitalDeployed / acctSize : null;
 
   return (
-    <div className="container-page space-y-6">
-      <div className="flex items-start justify-between gap-6">
+    <div className="mx-auto max-w-6xl p-6 space-y-6">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Portfolio</h1>
-          <div className="mt-2 text-sm muted">
-            Your holdings dashboard. Positions are tied to the active (default) portfolio.
+          <div className="text-2xl font-semibold tracking-tight">Portfolio</div>
+          <div className="text-sm text-white/60">
+            Default journey{portfolio.name ? `: ${portfolio.name}` : ""}
           </div>
         </div>
 
-        <div>
-          <a href="/screener">
-            <Button variant="secondary">Back to Screener</Button>
-          </a>
+        <Link
+          href="/screener"
+          className="rounded-lg bg-white/10 px-3 py-2 text-sm hover:bg-white/15 whitespace-nowrap"
+        >
+          Back to Screener
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+          <div className="text-xs text-white/60">Open exposure</div>
+          <div className="mt-1 text-sm text-white/80">
+            Capital deployed:{" "}
+            <span className="font-semibold">{formatMoney(capitalDeployed)}</span>
+          </div>
+          <div className="mt-1 text-sm text-white/80">
+            Risk deployed:{" "}
+            <span className="font-semibold">{formatMoney(riskDeployed)}</span>
+          </div>
+          <div className="mt-1 text-xs text-white/50">
+            {pctDeployed !== null
+              ? `${(pctDeployed * 100).toFixed(1)}% of account size`
+              : "—"}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+          <div className="text-xs text-white/60">Realized performance</div>
+          <div className="mt-1 text-sm text-white/80">
+            Realized P/L:{" "}
+            <span className="font-semibold">{formatMoney(realizedPnL)}</span>
+          </div>
+          <div className="mt-1 text-sm text-white/80">
+            Win rate:{" "}
+            <span className="font-semibold">{(winRate * 100).toFixed(0)}%</span>
+          </div>
+          <div className="mt-1 text-xs text-white/50">
+            {realizedTrades} closed trades
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+          <div className="text-xs text-white/60">Account</div>
+          <div className="mt-1 text-sm text-white/80">
+            Size: <span className="font-semibold">{formatMoney(acctSize)}</span>
+          </div>
+          <div className="mt-1 text-xs text-white/50">
+            Currency: {portfolio.account_currency ?? "—"}
+          </div>
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader
-            title="Positions"
-            subtitle={defaultPortfolio ? `Active: ${defaultPortfolio.name}` : "No default portfolio found"}
-            right={
-              <div className="flex items-center gap-2">
-                <Badge variant="neutral">OPEN {openCount}</Badge>
-                <Badge variant="neutral">CLOSED {closedCount}</Badge>
-                <Badge variant={slotsLeft > 0 ? "watch" : "avoid"}>
-                  Slots left {slotsLeft}/{maxPositions}
-                </Badge>
-              </div>
-            }
-          />
-          <CardContent>
-            {defaultPortfolio ? (
-              <PositionsClient
-                currency={currency}
-                accountSize={accountSize}
-                openPositions={openPositions}
-                closedPositions={closedPositions}
-              />
-            ) : (
-              <div className="text-sm muted">Create a portfolio below and set it as default.</div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader title="Portfolio stats" subtitle="Open exposure + realized results" />
-          <CardContent>
-            {defaultPortfolio ? (
-              <div className="space-y-3 text-sm">
-                <div className="flex items-center justify-between">
-                  <div className="muted">Portfolio</div>
-                  <div className="font-semibold">{defaultPortfolio.name}</div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="muted">Account size</div>
-                  <div className="font-mono font-semibold">
-                    {currency} {accountSize.toFixed(0)}
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-slate-200" />
-
-                <div className="text-xs uppercase tracking-wide muted">Open positions</div>
-
-                <div className="flex items-center justify-between">
-                  <div className="muted">Capital deployed</div>
-                  <div className="font-mono font-semibold">
-                    {currency} {totalPositionValue.toFixed(2)}
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="muted">% deployed</div>
-                  <div className="font-mono font-semibold">{pctDeployed.toFixed(1)}%</div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="muted">Risk deployed</div>
-                  <div className="font-mono font-semibold">
-                    {currency} {totalRisk.toFixed(2)}
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-slate-200" />
-
-                <div className="text-xs uppercase tracking-wide muted">Closed trades</div>
-
-                <div className="flex items-center justify-between">
-                  <div className="muted">Realized P/L</div>
-                  <div className="font-mono font-semibold">{money(realizedPnl, currency)}</div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="muted">Realized return</div>
-                  <div className="font-mono font-semibold">
-                    {closedCapital > 0 ? `${realizedPct.toFixed(1)}%` : "-"}
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="muted">Win rate</div>
-                  <div className="font-mono font-semibold">
-                    {closedCount > 0 ? `${winRate.toFixed(0)}%` : "-"}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="text-sm muted">No default portfolio set yet.</div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader title="Manage portfolios" subtitle="Create multiple investment journeys and choose a default" />
-        <CardContent>
-          <PortfolioClient initialPortfolios={portfolios} />
-        </CardContent>
-      </Card>
+      <PositionsClient
+        openPositions={open as any}
+        closedPositions={closed as any}
+        closedSummary={closedSummary}
+      />
     </div>
   );
 }

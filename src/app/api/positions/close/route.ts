@@ -31,20 +31,61 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const positionId = String(body?.position_id ?? "").trim();
 
+  // ✅ Require exit_price for proper closed-history + P/L
+  const exitPriceRaw = body?.exit_price;
+  const exitPrice = Number(exitPriceRaw);
+
   if (!positionId) {
     return NextResponse.json({ ok: false, error: "position_id is required" }, { status: 400 });
   }
 
-  // Mark as CLOSED. (We’ll add exit_price / exit_date later.)
-  const { error } = await supabase
+  if (!Number.isFinite(exitPrice) || exitPrice <= 0) {
+    return NextResponse.json(
+      { ok: false, error: "exit_price is required and must be a positive number" },
+      { status: 400 }
+    );
+  }
+
+  // Optional safety: only close OPEN positions
+  const { data: existing, error: readErr } = await supabase
     .from("portfolio_positions")
-    .update({ status: "CLOSED" })
+    .select("id, status")
     .eq("id", positionId)
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (readErr) {
+    return NextResponse.json({ ok: false, error: readErr.message }, { status: 500 });
+  }
+
+  if (!existing) {
+    return NextResponse.json({ ok: false, error: "Position not found" }, { status: 404 });
+  }
+
+  if (existing.status !== "OPEN") {
+    return NextResponse.json(
+      { ok: false, error: "Position is not OPEN" },
+      { status: 400 }
+    );
+  }
+
+  const closedAt = new Date().toISOString();
+
+  const { data: updated, error } = await supabase
+    .from("portfolio_positions")
+    .update({
+      status: "CLOSED",
+      closed_at: closedAt,
+      exit_price: exitPrice,
+    })
+    .eq("id", positionId)
+    .eq("user_id", user.id)
+    .select("id, status, closed_at, exit_price")
+    .maybeSingle();
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, position: updated });
 }
