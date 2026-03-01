@@ -168,6 +168,10 @@ export async function POST() {
     const sma20 = sma(closes, 20);
     const sma50 = sma(closes, 50);
     const sma200 = sma(closes, 200);
+
+    // NEW: previous day's SMA50 to check slope/rising trend
+    const prevSma50 = sma(closes.slice(0, -1), 50);
+
     const rsi14 = rsi(closes, 14);
     const atr14 = atr(highs, lows, closes, 14);
     const vol20 = sma(vols, 20);
@@ -181,6 +185,9 @@ export async function POST() {
     const above20 = latestClose > sma20;
     const above50 = latestClose > sma50;
     const above200 = latestClose > sma200;
+
+    // NEW: SMA50 rising filter (tighten BUY)
+    const sma50Rising = prevSma50 ? sma50 > prevSma50 : false;
 
     // Score breakdown (so we can explain confidence)
     const breakdown: Array<{ k: string; pts: number }> = [];
@@ -230,8 +237,17 @@ export async function POST() {
 
     // Signal logic
     let signal: "BUY" | "WATCH" | "AVOID" = "AVOID";
+
+    // TIGHTENED BUY:
+    // - require SMA50 rising
+    // - require stronger volume spike (>= 1.3x)
     const baseBuy =
-      above50 && above200 && rsi14 >= 45 && rsi14 <= 70 && volSpike >= 1.1;
+      above50 &&
+      above200 &&
+      sma50Rising &&
+      rsi14 >= 45 &&
+      rsi14 <= 70 &&
+      volSpike >= 1.3;
 
     if (baseBuy && score >= 60) signal = "BUY";
     else if (score >= 40) signal = "WATCH";
@@ -250,12 +266,43 @@ export async function POST() {
 
     // ---- Explainability ----
     const whyLines: WhyLine[] = [
-      { ok: above200, label: "Above SMA200", detail: `close ${entry.toFixed(2)} vs ${sma200.toFixed(2)}` },
-      { ok: above50, label: "Above SMA50", detail: `close ${entry.toFixed(2)} vs ${sma50.toFixed(2)}` },
-      { ok: above20, label: "Above SMA20", detail: `close ${entry.toFixed(2)} vs ${sma20.toFixed(2)}` },
-      { ok: rsi14 >= 45 && rsi14 <= 70, label: "RSI healthy", detail: `RSI ${rsi14.toFixed(1)} (target 45–70)` },
-      { ok: volSpike >= 1.1, label: "Volume confirms", detail: `${volSpike.toFixed(2)}x vs 20D avg` },
-      { ok: !downgraded, label: "Regime allows aggression", detail: `SPY regime: ${regimeState}` },
+      {
+        ok: above200,
+        label: "Above SMA200",
+        detail: `close ${entry.toFixed(2)} vs ${sma200.toFixed(2)}`,
+      },
+      {
+        ok: above50,
+        label: "Above SMA50",
+        detail: `close ${entry.toFixed(2)} vs ${sma50.toFixed(2)}`,
+      },
+      {
+        ok: sma50Rising,
+        label: "SMA50 rising",
+        detail: prevSma50
+          ? `SMA50 ${sma50.toFixed(2)} vs prev ${prevSma50.toFixed(2)}`
+          : "Not enough data for SMA50 slope",
+      },
+      {
+        ok: above20,
+        label: "Above SMA20",
+        detail: `close ${entry.toFixed(2)} vs ${sma20.toFixed(2)}`,
+      },
+      {
+        ok: rsi14 >= 45 && rsi14 <= 70,
+        label: "RSI healthy",
+        detail: `RSI ${rsi14.toFixed(1)} (target 45–70)`,
+      },
+      {
+        ok: volSpike >= 1.3,
+        label: "Volume confirms",
+        detail: `${volSpike.toFixed(2)}x vs 20D avg (need ≥ 1.30x)`,
+      },
+      {
+        ok: !downgraded,
+        label: "Regime allows aggression",
+        detail: `SPY regime: ${regimeState}`,
+      },
     ];
 
     const reason_summary = summarizeWhy(whyLines);
@@ -266,7 +313,14 @@ export async function POST() {
       checks: whyLines,
       score_breakdown: breakdown,
       indicators: {
-        sma20, sma50, sma200, rsi14, atr14, volSpike,
+        sma20,
+        sma50,
+        sma200,
+        rsi14,
+        atr14,
+        volSpike,
+        prevSma50,
+        sma50Rising,
       },
       levels: { entry, stop, tp1, tp2 },
     };
@@ -294,10 +348,9 @@ export async function POST() {
   }
 
   if (insertedRows.length > 0) {
-    const { error: insErr } = await supabase.from("daily_scans").upsert(
-      insertedRows,
-      { onConflict: "date,universe_slug,symbol,strategy_version" }
-    );
+    const { error: insErr } = await supabase.from("daily_scans").upsert(insertedRows, {
+      onConflict: "date,universe_slug,symbol,strategy_version",
+    });
 
     if (insErr) {
       return NextResponse.json({ ok: false, error: insErr.message }, { status: 500 });
