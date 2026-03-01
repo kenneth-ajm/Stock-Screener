@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-function calculateSMA(values: number[], period: number) {
+function sma(values: number[], period: number) {
   if (values.length < period) return null;
   const slice = values.slice(-period);
   const sum = slice.reduce((a, b) => a + b, 0);
@@ -11,7 +11,7 @@ function calculateSMA(values: number[], period: number) {
 export async function GET() {
   return NextResponse.json({
     ok: false,
-    message: "Use POST. Go to /screener and click 'Calculate SPY Regime'.",
+    message: "Use POST (this endpoint recalculates and stores SPY regime).",
   });
 }
 
@@ -21,22 +21,26 @@ export async function POST() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
+  // Pull the most recent ~260 bars so we can compute SMA200 cheaply and correctly.
   const { data: bars, error } = await supabase
     .from("price_bars")
     .select("date, close")
     .eq("symbol", "SPY")
-    .order("date", { ascending: true });
+    .order("date", { ascending: false })
+    .limit(260);
 
-  if (error || !bars) {
+  if (error || !bars || bars.length === 0) {
     return NextResponse.json(
-      { ok: false, error: error?.message || "No SPY data" },
+      { ok: false, error: error?.message || "No SPY data found" },
       { status: 500 }
     );
   }
 
-  const closes = bars.map((b) => Number(b.close));
-  const sma200 = calculateSMA(closes, 200);
+  // bars are DESC; reverse to ASC for SMA calc
+  const asc = [...bars].reverse();
+  const closes = asc.map((b) => Number(b.close));
 
+  const sma200 = sma(closes, 200);
   if (!sma200) {
     return NextResponse.json(
       { ok: false, error: "Not enough data for SMA200" },
@@ -44,7 +48,7 @@ export async function POST() {
     );
   }
 
-  const latest = bars[bars.length - 1];
+  const latest = bars[0]; // most recent (DESC)
   const latestClose = Number(latest.close);
   const state = latestClose > sma200 ? "FAVORABLE" : "DEFENSIVE";
 

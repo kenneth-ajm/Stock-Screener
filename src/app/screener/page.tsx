@@ -1,16 +1,25 @@
 import { supabaseServer } from "@/lib/supabase/server";
+import ScanTableClient from "./scanTableClient";
+import UtilitiesClient from "./UtilitiesClient";
+import { Card, CardContent, CardHeader } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+
+export const dynamic = "force-dynamic";
 
 export default async function ScreenerPage() {
   const supabase = await supabaseServer();
   const { data } = await supabase.auth.getUser();
 
+  // Default portfolio (active journey)
   const { data: defaultPortfolio } = await supabase
     .from("portfolios")
-    .select("id, name, account_currency, account_size, risk_per_trade, max_positions, is_default")
+    .select("id, name, account_currency, account_size, risk_per_trade, max_positions")
     .eq("is_default", true)
     .limit(1)
     .maybeSingle();
 
+  // Latest regime
   const { data: regimeRows } = await supabase
     .from("market_regime")
     .select("date, state, close, sma200")
@@ -20,6 +29,7 @@ export default async function ScreenerPage() {
 
   const regime = regimeRows?.[0] ?? null;
 
+  // Latest scan date for core_400 v1
   const { data: latestScan } = await supabase
     .from("daily_scans")
     .select("date")
@@ -30,123 +40,123 @@ export default async function ScreenerPage() {
 
   const latestScanDate = latestScan?.[0]?.date ?? null;
 
+  // Scan rows (compact fields; Why loaded on-demand from /api/why)
   let scanRows: any[] = [];
   if (latestScanDate) {
     const { data: rows } = await supabase
       .from("daily_scans")
-      .select("date, symbol, signal, confidence, entry, stop, tp1, tp2")
+      .select("symbol, signal, confidence, entry, stop, tp1, tp2")
       .eq("universe_slug", "core_400")
       .eq("strategy_version", "v1")
       .eq("date", latestScanDate)
       .order("confidence", { ascending: false })
-      .limit(50);
+      .limit(80);
 
     scanRows = rows ?? [];
   }
 
+  const regimeBadge =
+    regime?.state === "FAVORABLE" ? (
+      <Badge variant="buy">FAVORABLE</Badge>
+    ) : regime?.state === "DEFENSIVE" ? (
+      <Badge variant="avoid">DEFENSIVE</Badge>
+    ) : (
+      <Badge variant="watch">CAUTION</Badge>
+    );
+
   return (
-    <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Screener</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Logged in as: {data.user?.email}
-        </p>
-      </div>
-
-      <div className="rounded-2xl border p-4 bg-white/50">
-        <div className="font-medium">Active portfolio</div>
-        {defaultPortfolio ? (
-          <div className="mt-2 text-sm">
-            <div className="font-semibold">{defaultPortfolio.name}</div>
-            <div className="text-muted-foreground">
-              {defaultPortfolio.account_currency} {Number(defaultPortfolio.account_size).toFixed(0)} | risk/trade{" "}
-              {defaultPortfolio.risk_per_trade} | max positions {defaultPortfolio.max_positions}
-            </div>
-            <a className="underline text-sm" href="/portfolio">
-              Manage portfolios
-            </a>
+    <div className="container-page space-y-6">
+      <div className="flex items-start justify-between gap-6">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">Screener</h1>
+          <div className="mt-2 text-sm muted">
+            Logged in as <span className="font-semibold">{data.user?.email}</span>
           </div>
-        ) : (
-          <div className="mt-2 text-sm text-muted-foreground">
-            No default portfolio found. Go to <a className="underline" href="/portfolio">/portfolio</a>.
-          </div>
-        )}
-      </div>
+        </div>
 
-      <div className="rounded-2xl border p-4 bg-white/50">
-        <div className="font-medium">Utilities</div>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <form action="/api/ingest" method="post">
-            <button className="rounded-xl border px-4 py-2">Ingest SPY</button>
-          </form>
-          <form action="/api/regime" method="post">
-            <button className="rounded-xl border px-4 py-2">Calculate SPY Regime</button>
-          </form>
-          <form action="/api/ingest-universe" method="post">
-            <button className="rounded-xl border px-4 py-2">Ingest core_400 (test 10)</button>
-          </form>
-          <form action="/api/scan" method="post">
-            <button className="rounded-xl border px-4 py-2">Run Daily Scan</button>
-          </form>
+        <div className="flex gap-3">
+          <a href="/portfolio">
+            <Button variant="secondary">Portfolios</Button>
+          </a>
         </div>
       </div>
 
-      <div className="rounded-2xl border p-4 bg-white/50">
-        <div className="font-medium">Market Regime (SPY)</div>
-        {regime ? (
-          <div className="mt-2 text-sm">
-            <div>Date: <span className="font-mono">{regime.date}</span></div>
-            <div>State: <span className="font-semibold">{regime.state}</span></div>
-            <div className="text-muted-foreground">
-              Close: {Number(regime.close).toFixed(2)} | SMA200: {Number(regime.sma200).toFixed(2)}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="Latest scan"
+            subtitle={
+              latestScanDate
+                ? `Scan date: ${latestScanDate} • Universe: core_400`
+                : "Run a scan to populate results"
+            }
+            right={regime ? regimeBadge : <Badge variant="neutral">No regime</Badge>}
+          />
+          <CardContent>
+            {!latestScanDate ? (
+              <div className="text-sm muted">
+                No scan results yet. Use Utilities below to ingest and scan.
+              </div>
+            ) : (
+              <ScanTableClient rows={scanRows} scanDate={latestScanDate} />
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader title="Active portfolio" subtitle="Sizing uses the default portfolio" />
+          <CardContent>
+            {defaultPortfolio ? (
+              <div className="space-y-2 text-sm">
+                <div className="text-base font-semibold">{defaultPortfolio.name}</div>
+                <div className="muted">
+                  <span className="font-mono">
+                    {defaultPortfolio.account_currency}{" "}
+                    {Number(defaultPortfolio.account_size).toFixed(0)}
+                  </span>
+                </div>
+                <div className="muted">
+                  Risk/trade: <span className="font-semibold">{defaultPortfolio.risk_per_trade}</span>
+                  {" • "}
+                  Max positions: <span className="font-semibold">{defaultPortfolio.max_positions}</span>
+                </div>
+                <a className="underline text-sm muted" href="/portfolio">
+                  Manage portfolios
+                </a>
+              </div>
+            ) : (
+              <div className="text-sm muted">No default portfolio found.</div>
+            )}
+
+            <div className="mt-5 border-t border-slate-200 pt-4 space-y-2">
+              <div className="text-sm font-semibold">Market regime (SPY)</div>
+              {regime ? (
+                <div className="text-sm">
+                  <div className="muted">
+                    Date: <span className="font-mono">{regime.date}</span>
+                  </div>
+                  <div className="mt-1">
+                    State: <span className="font-semibold">{regime.state}</span>
+                  </div>
+                  <div className="mt-1 muted font-mono">
+                    Close {Number(regime.close).toFixed(2)} • SMA200{" "}
+                    {Number(regime.sma200).toFixed(2)}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm muted">No regime computed yet.</div>
+              )}
             </div>
-          </div>
-        ) : (
-          <div className="mt-2 text-sm text-muted-foreground">No regime record yet.</div>
-        )}
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="rounded-2xl border p-4 bg-white/50">
-        <div className="font-medium">Latest Scan Results (core_400)</div>
-        {!latestScanDate ? (
-          <div className="mt-2 text-sm text-muted-foreground">No scan results yet.</div>
-        ) : (
-          <>
-            <div className="mt-2 text-sm text-muted-foreground">
-              Showing results for <span className="font-mono">{latestScanDate}</span>
-            </div>
-
-            <div className="mt-4 overflow-x-auto">
-              <table className="min-w-[900px] w-full text-sm">
-                <thead>
-                  <tr className="text-left border-b">
-                    <th className="py-2 pr-4">Symbol</th>
-                    <th className="py-2 pr-4">Signal</th>
-                    <th className="py-2 pr-4">Confidence</th>
-                    <th className="py-2 pr-4">Entry</th>
-                    <th className="py-2 pr-4">Stop</th>
-                    <th className="py-2 pr-4">TP1</th>
-                    <th className="py-2 pr-4">TP2</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {scanRows.map((r) => (
-                    <tr key={r.symbol} className="border-b">
-                      <td className="py-2 pr-4 font-mono">{r.symbol}</td>
-                      <td className="py-2 pr-4 font-semibold">{r.signal}</td>
-                      <td className="py-2 pr-4">{r.confidence}</td>
-                      <td className="py-2 pr-4">{r.entry == null ? "-" : Number(r.entry).toFixed(2)}</td>
-                      <td className="py-2 pr-4">{r.stop == null ? "-" : Number(r.stop).toFixed(2)}</td>
-                      <td className="py-2 pr-4">{r.tp1 == null ? "-" : Number(r.tp1).toFixed(2)}</td>
-                      <td className="py-2 pr-4">{r.tp2 == null ? "-" : Number(r.tp2).toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </div>
+      <Card>
+        <CardHeader title="Utilities" subtitle="Run server jobs without leaving the page" />
+        <CardContent>
+          <UtilitiesClient />
+        </CardContent>
+      </Card>
     </div>
   );
 }

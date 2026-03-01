@@ -57,6 +57,17 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+type WhyLine = { ok: boolean; label: string; detail?: string };
+
+function summarizeWhy(lines: WhyLine[]) {
+  // 1-liner summary: count ok vs not ok and show the top 2 blockers
+  const okCount = lines.filter((l) => l.ok).length;
+  const bad = lines.filter((l) => !l.ok).map((l) => l.label);
+  const blockers = bad.slice(0, 2).join(", ");
+  if (!bad.length) return `Strong setup (${okCount}/${lines.length} checks passed).`;
+  return `Mixed setup (${okCount}/${lines.length} checks). Missing: ${blockers}.`;
+}
+
 export async function GET() {
   return NextResponse.json({
     ok: false,
@@ -70,7 +81,7 @@ export async function POST() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // 1) Use SPY latest bar as the global scan date
+  // 1) Global scan date = latest SPY date
   const { data: spyLatest, error: spyErr } = await supabase
     .from("price_bars")
     .select("date, close")
@@ -123,7 +134,7 @@ export async function POST() {
   const skipped: { symbol: string; reason: string }[] = [];
 
   for (const symbol of symbols) {
-    // Pull bars only up to scanDate (global)
+    // bars up to scanDate
     const { data: bars, error: barErr } = await supabase
       .from("price_bars")
       .select("date, high, low, close, volume")
@@ -167,29 +178,57 @@ export async function POST() {
       continue;
     }
 
-    // Score
-    let score = 0;
     const above20 = latestClose > sma20;
     const above50 = latestClose > sma50;
     const above200 = latestClose > sma200;
 
-    if (above20) score += 10;
-    if (above50) score += 20;
-    if (above200) score += 25;
+    // Score breakdown (so we can explain confidence)
+    const breakdown: Array<{ k: string; pts: number }> = [];
+    let score = 0;
 
-    if (rsi14 >= 45 && rsi14 <= 65) score += 20;
-    else if (rsi14 >= 35 && rsi14 < 45) score += 10;
-    else if (rsi14 > 65 && rsi14 <= 75) score += 5;
+    if (above20) {
+      score += 10;
+      breakdown.push({ k: "Above SMA20", pts: 10 });
+    } else breakdown.push({ k: "Above SMA20", pts: 0 });
 
-    if (volSpike >= 1.5) score += 15;
-    else if (volSpike >= 1.2) score += 8;
+    if (above50) {
+      score += 20;
+      breakdown.push({ k: "Above SMA50", pts: 20 });
+    } else breakdown.push({ k: "Above SMA50", pts: 0 });
 
+    if (above200) {
+      score += 25;
+      breakdown.push({ k: "Above SMA200", pts: 25 });
+    } else breakdown.push({ k: "Above SMA200", pts: 0 });
+
+    // RSI scoring
+    let rsiPts = 0;
+    if (rsi14 >= 45 && rsi14 <= 65) rsiPts = 20;
+    else if (rsi14 >= 35 && rsi14 < 45) rsiPts = 10;
+    else if (rsi14 > 65 && rsi14 <= 75) rsiPts = 5;
+    score += rsiPts;
+    breakdown.push({ k: `RSI ${rsi14.toFixed(1)}`, pts: rsiPts });
+
+    // Volume confirmation
+    let volPts = 0;
+    if (volSpike >= 1.5) volPts = 15;
+    else if (volSpike >= 1.2) volPts = 8;
+    score += volPts;
+    breakdown.push({ k: `Volume spike ${volSpike.toFixed(2)}x`, pts: volPts });
+
+    // Extension penalty
     const distFrom20 = Math.abs(latestClose - sma20);
-    if (distFrom20 > 2 * atr14) score -= 10;
+    let penalty = 0;
+    if (distFrom20 > 2 * atr14) penalty = -10;
+    score += penalty;
+    breakdown.push({
+      k: `Extension vs SMA20`,
+      pts: penalty,
+    });
 
     score = clamp(score, 0, 100);
 
-    // Signal
+    // Signal logic
     let signal: "BUY" | "WATCH" | "AVOID" = "AVOID";
     const baseBuy =
       above50 && above200 && rsi14 >= 45 && rsi14 <= 70 && volSpike >= 1.1;
@@ -197,20 +236,43 @@ export async function POST() {
     if (baseBuy && score >= 60) signal = "BUY";
     else if (score >= 40) signal = "WATCH";
 
-    if (regimeState === "DEFENSIVE" && signal === "BUY") {
+    const downgraded = regimeState === "DEFENSIVE" && signal === "BUY";
+    if (downgraded) {
       signal = "WATCH";
       score = clamp(score - 10, 0, 100);
     }
 
-    // Trade levels
     const entry = latestClose;
     const stop = entry - 2 * atr14;
     const R = entry - stop;
     const tp1 = entry + 2 * R;
     const tp2 = entry + 3 * R;
 
+    // ---- Explainability ----
+    const whyLines: WhyLine[] = [
+      { ok: above200, label: "Above SMA200", detail: `close ${entry.toFixed(2)} vs ${sma200.toFixed(2)}` },
+      { ok: above50, label: "Above SMA50", detail: `close ${entry.toFixed(2)} vs ${sma50.toFixed(2)}` },
+      { ok: above20, label: "Above SMA20", detail: `close ${entry.toFixed(2)} vs ${sma20.toFixed(2)}` },
+      { ok: rsi14 >= 45 && rsi14 <= 70, label: "RSI healthy", detail: `RSI ${rsi14.toFixed(1)} (target 45–70)` },
+      { ok: volSpike >= 1.1, label: "Volume confirms", detail: `${volSpike.toFixed(2)}x vs 20D avg` },
+      { ok: !downgraded, label: "Regime allows aggression", detail: `SPY regime: ${regimeState}` },
+    ];
+
+    const reason_summary = summarizeWhy(whyLines);
+
+    const reason_json = {
+      regime: regimeState,
+      downgraded_buy_to_watch: downgraded,
+      checks: whyLines,
+      score_breakdown: breakdown,
+      indicators: {
+        sma20, sma50, sma200, rsi14, atr14, volSpike,
+      },
+      levels: { entry, stop, tp1, tp2 },
+    };
+
     insertedRows.push({
-      date: scanDate, // GLOBAL scan date
+      date: scanDate,
       universe_slug: "core_400",
       symbol,
       strategy_version,
@@ -226,6 +288,8 @@ export async function POST() {
       rsi14,
       atr14,
       vol_spike: volSpike,
+      reason_summary,
+      reason_json,
     });
   }
 
