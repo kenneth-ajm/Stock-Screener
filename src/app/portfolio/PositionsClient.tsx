@@ -113,31 +113,48 @@ export default function PositionsClient({
 }) {
   const [tab, setTab] = useState<"OPEN" | "CLOSED">("OPEN");
 
-  const [modalOpen, setModalOpen] = useState(false);
+  // toast
+  const [toast, setToast] = useState<string | null>(null);
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 1800);
+  }
+
+  // Close modal state
+  const [closeModalOpen, setCloseModalOpen] = useState(false);
   const [activePosition, setActivePosition] = useState<PositionRow | null>(null);
   const [exitPriceInput, setExitPriceInput] = useState("");
-  const [modalError, setModalError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [closeError, setCloseError] = useState<string | null>(null);
+  const [closing, setClosing] = useState(false);
 
-  const [toast, setToast] = useState<string | null>(null);
+  // Manual add modal state
+  const [manualOpen, setManualOpen] = useState(false);
+  const [mSymbol, setMSymbol] = useState("");
+  const [mEntry, setMEntry] = useState("");
+  const [mStop, setMStop] = useState("");
+  const [mQty, setMQty] = useState("");
+  const [manualError, setManualError] = useState<string | null>(null);
+  const [manualBusy, setManualBusy] = useState(false);
 
   const closedWithPnL = useMemo(() => {
     return closedPositions.map((p) => ({ ...p, pnl: computeClosedPnL(p) }));
   }, [closedPositions]);
 
+  const hasClosedTrades = (closedSummary?.trades ?? 0) > 0;
+
   function openCloseModal(p: PositionRow) {
     setActivePosition(p);
     setExitPriceInput("");
-    setModalError(null);
-    setModalOpen(true);
+    setCloseError(null);
+    setCloseModalOpen(true);
   }
 
-  function closeModal() {
-    if (submitting) return;
-    setModalOpen(false);
+  function closeCloseModal() {
+    if (closing) return;
+    setCloseModalOpen(false);
     setActivePosition(null);
     setExitPriceInput("");
-    setModalError(null);
+    setCloseError(null);
   }
 
   async function submitClose() {
@@ -145,13 +162,13 @@ export default function PositionsClient({
 
     const exitPrice = Number(exitPriceInput);
     if (!Number.isFinite(exitPrice) || exitPrice <= 0) {
-      setModalError("Please enter a valid positive exit price.");
+      setCloseError("Please enter a valid positive exit price.");
       return;
     }
 
     try {
-      setSubmitting(true);
-      setModalError(null);
+      setClosing(true);
+      setCloseError(null);
 
       const res = await fetch("/api/positions/close", {
         method: "POST",
@@ -164,24 +181,77 @@ export default function PositionsClient({
         throw new Error(payload?.error || "Close failed.");
       }
 
-      // success toast + gentle refresh
-      closeModal();
-      setToast("Position closed ✅");
-      setTimeout(() => setToast(null), 1800);
+      closeCloseModal();
+      showToast("Position closed ✅");
       setTimeout(() => window.location.reload(), 650);
     } catch (e: any) {
-      setModalError(e?.message ?? "Close failed.");
+      setCloseError(e?.message ?? "Close failed.");
     } finally {
-      setSubmitting(false);
+      setClosing(false);
     }
   }
 
-  const hasClosedTrades = (closedSummary?.trades ?? 0) > 0;
+  function openManual() {
+    setMSymbol("");
+    setMEntry("");
+    setMStop("");
+    setMQty("");
+    setManualError(null);
+    setManualOpen(true);
+  }
+
+  function closeManual() {
+    if (manualBusy) return;
+    setManualOpen(false);
+    setManualError(null);
+  }
+
+  async function submitManual() {
+    const symbol = mSymbol.trim().toUpperCase();
+    const entry = Number(mEntry);
+    const stop = Number(mStop);
+    const qty = Number(mQty);
+
+    if (!symbol) return setManualError("Symbol is required (e.g. AAPL).");
+    if (!Number.isFinite(entry) || entry <= 0) return setManualError("Entry price must be a positive number.");
+    if (mStop.trim() && (!Number.isFinite(stop) || stop <= 0)) return setManualError("Stop must be blank or a positive number.");
+    if (mQty.trim() && (!Number.isFinite(qty) || qty <= 0)) return setManualError("Quantity must be blank or a positive number.");
+
+    try {
+      setManualBusy(true);
+      setManualError(null);
+
+      const res = await fetch("/api/positions/manual-add", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          symbol,
+          entry_price: entry,
+          stop_price: mStop.trim() ? stop : null,
+          quantity: mQty.trim() ? qty : null,
+        }),
+      });
+
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(payload?.error || "Manual add failed.");
+      }
+
+      closeManual();
+      showToast("Holding added ✅");
+      setTimeout(() => window.location.reload(), 650);
+    } catch (e: any) {
+      setManualError(e?.message ?? "Manual add failed.");
+    } finally {
+      setManualBusy(false);
+    }
+  }
 
   return (
     <div className="space-y-4">
       {toast ? <Toast message={toast} /> : null}
 
+      {/* Tabs */}
       <div className="flex items-center gap-2">
         <button
           className={clsx(
@@ -207,8 +277,19 @@ export default function PositionsClient({
         </button>
       </div>
 
+      {/* OPEN */}
       {tab === "OPEN" ? (
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between gap-3 p-3 border-b border-slate-200">
+            <div className="text-sm font-semibold text-slate-900">Open positions</div>
+            <button
+              className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+              onClick={openManual}
+            >
+              + Add Existing Holding
+            </button>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-left text-xs text-slate-500">
@@ -251,10 +332,11 @@ export default function PositionsClient({
             </table>
           </div>
 
+          {/* Close modal */}
           <Modal
-            open={modalOpen}
+            open={closeModalOpen}
             title={activePosition ? `Close Position: ${activePosition.symbol}` : "Close Position"}
-            onClose={closeModal}
+            onClose={closeCloseModal}
           >
             <div className="space-y-3">
               <div className="text-sm text-slate-600">
@@ -269,31 +351,109 @@ export default function PositionsClient({
                   inputMode="decimal"
                   placeholder="e.g. 12.34"
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-                  disabled={submitting}
+                  disabled={closing}
                 />
-                {modalError ? <div className="text-xs text-rose-600">{modalError}</div> : null}
+                {closeError ? <div className="text-xs text-rose-600">{closeError}</div> : null}
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
-                  onClick={closeModal}
-                  disabled={submitting}
+                  onClick={closeCloseModal}
+                  disabled={closing}
                 >
                   Cancel
                 </button>
                 <button
                   className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
                   onClick={submitClose}
-                  disabled={submitting}
+                  disabled={closing}
                 >
-                  {submitting ? "Closing..." : "Confirm Close"}
+                  {closing ? "Closing..." : "Confirm Close"}
+                </button>
+              </div>
+            </div>
+          </Modal>
+
+          {/* Manual add modal */}
+          <Modal open={manualOpen} title="Add Existing Holding" onClose={closeManual}>
+            <div className="space-y-3">
+              <div className="text-sm text-slate-600">
+                Add a holding you already own. This creates an OPEN position in your default portfolio.
+              </div>
+
+              <div className="grid gap-2">
+                <div className="space-y-1">
+                  <label className="text-xs text-slate-500">Symbol</label>
+                  <input
+                    value={mSymbol}
+                    onChange={(e) => setMSymbol(e.target.value)}
+                    placeholder="e.g. AAPL"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                    disabled={manualBusy}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs text-slate-500">Entry price</label>
+                  <input
+                    value={mEntry}
+                    onChange={(e) => setMEntry(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="e.g. 185.20"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                    disabled={manualBusy}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs text-slate-500">Stop price (optional)</label>
+                  <input
+                    value={mStop}
+                    onChange={(e) => setMStop(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="e.g. 176.00"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                    disabled={manualBusy}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs text-slate-500">Quantity (optional)</label>
+                  <input
+                    value={mQty}
+                    onChange={(e) => setMQty(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="e.g. 10"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                    disabled={manualBusy}
+                  />
+                </div>
+              </div>
+
+              {manualError ? <div className="text-sm text-rose-600">{manualError}</div> : null}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                  onClick={closeManual}
+                  disabled={manualBusy}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                  onClick={submitManual}
+                  disabled={manualBusy}
+                >
+                  {manualBusy ? "Saving..." : "Save Holding"}
                 </button>
               </div>
             </div>
           </Modal>
         </div>
       ) : (
+        // CLOSED
         <div className="space-y-4">
           {hasClosedTrades ? (
             <>
