@@ -18,18 +18,24 @@ function Modal({
   return (
     <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+
       <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
-          <div className="flex items-start justify-between gap-3">
+        <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          {/* Header stays fixed */}
+          <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
             <div className="text-base font-semibold text-slate-900">{title}</div>
-            <button
-              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 hover:bg-slate-50"
-              onClick={onClose}
-            >
-              Close
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50"
+                onClick={onClose}
+              >
+                Close
+              </button>
+            </div>
           </div>
-          <div className="mt-4">{children}</div>
+
+          {/* Body scrolls */}
+          <div className="max-h-[75vh] overflow-y-auto p-4">{children}</div>
         </div>
       </div>
     </div>
@@ -96,23 +102,32 @@ export default function ScreenerSearchClient() {
         {error ? (
           <div className="text-sm text-rose-600">{error}</div>
         ) : result ? (
-          <div className="space-y-3 text-sm text-slate-800">
-            <div>
-              <span className="font-semibold">{result.symbol}</span>
+          <div className="space-y-4 text-sm text-slate-800">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-semibold">{result.symbol}</span>
+                {result.scanDate ? (
+                  <span className="text-slate-500"> • {result.scanDate}</span>
+                ) : null}
+              </div>
+
+              {result.signal ? (
+                <div className="text-right">
+                  <div className="text-xs text-slate-500">Signal</div>
+                  <div className="font-semibold">{result.signal}</div>
+                </div>
+              ) : null}
             </div>
 
-            {result.signal ? (
-              <div>
-                Signal: <span className="font-semibold">{result.signal}</span>
-                {typeof result.confidence === "number" ? (
-                  <span className="text-slate-500"> • Confidence {result.confidence}</span>
-                ) : null}
+            {typeof result.confidence === "number" ? (
+              <div className="text-slate-700">
+                Confidence: <span className="font-semibold">{result.confidence}</span>
               </div>
             ) : null}
 
             {result.reason_summary ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="text-xs font-semibold text-slate-600">Why</div>
+                <div className="text-xs font-semibold text-slate-600">Summary</div>
                 <div className="mt-1">{result.reason_summary}</div>
               </div>
             ) : null}
@@ -120,15 +135,15 @@ export default function ScreenerSearchClient() {
             {result.reason_json ? (
               <details className="rounded-xl border border-slate-200 bg-white p-3">
                 <summary className="cursor-pointer text-xs font-semibold text-slate-600">
-                  Show details
+                  More details (technical)
                 </summary>
-                <pre className="mt-2 overflow-auto text-xs text-slate-700">
+                <pre className="mt-2 max-h-[45vh] overflow-auto rounded-lg bg-slate-50 p-3 text-xs text-slate-700">
                   {JSON.stringify(result.reason_json, null, 2)}
                 </pre>
               </details>
             ) : (
               <div className="text-xs text-slate-500">
-                (This endpoint is returning minimal info right now. We can upgrade it to return full explainability.)
+                (No detailed JSON available.)
               </div>
             )}
           </div>
