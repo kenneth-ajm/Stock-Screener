@@ -160,6 +160,8 @@ export default function PositionsClient({
     }
   }
 
+  const hasClosedTrades = (closedSummary?.trades ?? 0) > 0;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
@@ -275,60 +277,63 @@ export default function PositionsClient({
         </div>
       ) : (
         <div className="space-y-4">
-          <ClosedTradeSummaryCards summary={closedSummary} />
+          {hasClosedTrades ? (
+            <>
+              <ClosedTradeSummaryCards summary={closedSummary} />
 
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="text-left text-xs text-slate-500">
-                  <tr className="border-b border-slate-200">
-                    <th className="p-3">Symbol</th>
-                    <th className="p-3">Entry</th>
-                    <th className="p-3">Exit</th>
-                    <th className="p-3">P/L %</th>
-                    <th className="p-3">Closed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {closedWithPnL.length === 0 ? (
-                    <tr>
-                      <td className="p-3 text-slate-500" colSpan={5}>
-                        No closed positions.
-                      </td>
-                    </tr>
-                  ) : (
-                    closedWithPnL.map((p) => {
-                      const pnlPct = p.pnl?.pnlPct ?? null;
-                      const pnlClass =
-                        typeof pnlPct === "number"
-                          ? pnlPct > 0
-                            ? "text-emerald-600"
-                            : pnlPct < 0
-                              ? "text-rose-600"
-                              : "text-slate-600"
-                          : "text-slate-500";
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="text-left text-xs text-slate-500">
+                      <tr className="border-b border-slate-200">
+                        <th className="p-3">Symbol</th>
+                        <th className="p-3">Entry</th>
+                        <th className="p-3">Exit</th>
+                        <th className="p-3">P/L %</th>
+                        <th className="p-3">Closed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {closedWithPnL.map((p) => {
+                        const pnlPct = p.pnl?.pnlPct ?? null;
+                        const pnlClass =
+                          typeof pnlPct === "number"
+                            ? pnlPct > 0
+                              ? "text-emerald-600"
+                              : pnlPct < 0
+                                ? "text-rose-600"
+                                : "text-slate-600"
+                            : "text-slate-500";
 
-                      return (
-                        <tr key={p.id} className="border-b border-slate-100">
-                          <td className="p-3 font-semibold text-slate-900">{p.symbol}</td>
-                          <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
-                          <td className="p-3 text-slate-800">{formatMoney(p.exit_price)}</td>
-                          <td className={clsx("p-3 font-semibold", pnlClass)}>
-                            {typeof pnlPct === "number" ? formatPct(pnlPct) : "—"}
-                          </td>
-                          <td className="p-3 text-slate-800">{formatDate(p.closed_at)}</td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
+                        return (
+                          <tr key={p.id} className="border-b border-slate-100">
+                            <td className="p-3 font-semibold text-slate-900">{p.symbol}</td>
+                            <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
+                            <td className="p-3 text-slate-800">{formatMoney(p.exit_price)}</td>
+                            <td className={clsx("p-3 font-semibold", pnlClass)}>
+                              {typeof pnlPct === "number" ? formatPct(pnlPct) : "—"}
+                            </td>
+                            <td className="p-3 text-slate-800">{formatDate(p.closed_at)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-500">
+                Tip: P/L % is computed from entry and exit. $ P/L is available if you store a quantity field (shares/quantity).
+              </div>
+            </>
+          ) : (
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="text-sm font-semibold text-slate-900">No closed trades yet</div>
+              <div className="mt-1 text-sm text-slate-600">
+                When you close your first position with an exit price, your performance summary will appear here.
+              </div>
             </div>
-          </div>
-
-          <div className="text-xs text-slate-500">
-            Tip: P/L % is computed from entry and exit. $ P/L is available if you store a quantity field (shares/quantity).
-          </div>
+          )}
         </div>
       )}
     </div>
