@@ -308,11 +308,6 @@ export default function ScanTableClient({
     setWhy(null); // clear previous Why, user can load again for the expanded row
   }
 
-  const expandedRow = useMemo(
-    () => filteredRows.find((r) => r.symbol === expanded) ?? null,
-    [filteredRows, expanded]
-  );
-
   const actualEntry = ticket ? Number(ticket.entryPrice) : NaN;
   const actualStop = ticket ? Number(ticket.stop) : NaN;
   const actualShares = ticket ? Number(ticket.shares) : NaN;
@@ -351,8 +346,9 @@ export default function ScanTableClient({
         </div>
 
         <div className="text-sm muted">
-          <span className="font-semibold">Confidence</span> is a 0–100 score from trend
-          alignment (SMA), RSI, volume confirmation, and extension penalties (regime may downgrade).
+          <span className="font-semibold">Confidence</span> is a 0–100 score from
+          trend alignment (SMA), RSI, volume confirmation, and extension
+          penalties (regime may downgrade).
         </div>
       </div>
 
@@ -448,7 +444,9 @@ export default function ScanTableClient({
                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm ring-1 ring-black/5 focus:outline-none focus:ring-2 focus:ring-emerald-200"
                 value={ticket.entryPrice}
                 onChange={(e) =>
-                  setTicket((prev) => (prev ? { ...prev, entryPrice: e.target.value } : prev))
+                  setTicket((prev) =>
+                    prev ? { ...prev, entryPrice: e.target.value } : prev
+                  )
                 }
                 inputMode="decimal"
               />
@@ -489,16 +487,16 @@ export default function ScanTableClient({
         </div>
       ) : null}
 
-      {/* Compact table with fixed column sizing */}
+      {/* Screener table (fixed columns, no overlap) */}
       <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
         <table className="w-full table-fixed border-collapse">
           <colgroup>
-            <col className="w-[11%]" />
+            <col className="w-[12%]" />
+            <col className="w-[14%]" />
+            <col className="w-[10%]" />
             <col className="w-[12%]" />
             <col className="w-[12%]" />
-            <col className="w-[12%]" />
-            <col className="w-[12%]" />
-            <col className="w-[41%]" />
+            <col className="w-[40%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-slate-200 bg-white text-xs font-semibold uppercase tracking-wide muted">
@@ -510,6 +508,7 @@ export default function ScanTableClient({
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
+
           <tbody>
             {filteredRows.map((r, idx) => {
               const isOpen = expanded === r.symbol;
@@ -525,7 +524,7 @@ export default function ScanTableClient({
                     <td className="px-4 py-3 font-mono font-semibold whitespace-nowrap">
                       {r.symbol}
                     </td>
-                    <td className="px-2 py-3">
+                    <td className="px-2 py-3 whitespace-nowrap">
                       <Badge variant={variant(r.signal)}>{r.signal}</Badge>
                     </td>
                     <td className="px-2 py-3 whitespace-nowrap font-mono text-right">
@@ -537,13 +536,16 @@ export default function ScanTableClient({
                     <td className="px-2 py-3 whitespace-nowrap font-mono text-right">
                       {fmt(r.stop)}
                     </td>
-                    <td className="px-4 py-3">
+
+                    <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2 flex-nowrap whitespace-nowrap">
                         <Button
                           variant="secondary"
                           className="px-3 py-2 text-sm whitespace-nowrap"
                           disabled={
-                            r.entry == null || r.stop == null || busyKey === `size-${r.symbol}`
+                            r.entry == null ||
+                            r.stop == null ||
+                            busyKey === `size-${r.symbol}`
                           }
                           onClick={() => calculatePlan(r)}
                         >
@@ -572,75 +574,76 @@ export default function ScanTableClient({
 
                   {/* Accordion details */}
                   {isOpen ? (
-                    <tr>
-                      <td colSpan={6} className="bg-white px-4 pb-4 pt-2">
+                    <tr className="border-b border-slate-100 bg-white">
+                      <td colSpan={6} className="px-4 pb-4 pt-2">
                         <div className="grid gap-4 lg:grid-cols-3">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
-                      <div className="text-sm font-semibold">Levels</div>
-                      <div className="mt-2 text-sm muted space-y-1">
-                        <div>
-                          TP1:{" "}
-                          <span className="font-mono font-semibold text-slate-900">
-                            {fmt(r.tp1)}
-                          </span>
-                        </div>
-                        <div>
-                          TP2:{" "}
-                          <span className="font-mono font-semibold text-slate-900">
-                            {fmt(r.tp2)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4 lg:col-span-2">
-                      <div className="flex items-center justify-between">
-                        <div className="text-sm font-semibold">Why this signal</div>
-                        <Button
-                          variant="secondary"
-                          disabled={busyKey === `why-${r.symbol}`}
-                          onClick={() => loadWhy(r.symbol)}
-                        >
-                          {busyKey === `why-${r.symbol}` ? "Loading..." : "Load Why"}
-                        </Button>
-                      </div>
-
-                      {why && why.symbol === r.symbol ? (
-                        <div className="mt-3">
-                          <div className="text-sm">{why.reason_summary ?? "—"}</div>
-
-                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                            {(why.reason_json?.checks ?? []).map((c: any, i: number) => (
-                              <CheckLine
-                                key={i}
-                                ok={Boolean(c.ok)}
-                                label={String(c.label ?? "")}
-                                detail={c.detail ? String(c.detail) : undefined}
-                              />
-                            ))}
-                          </div>
-
-                          <div className="mt-4 border-t border-slate-200 pt-4">
-                            <div className="text-sm font-semibold">Score breakdown</div>
-                            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                              {(why.reason_json?.score_breakdown ?? []).map((b: any, i: number) => (
-                                <div
-                                  key={i}
-                                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
-                                >
-                                  <div className="text-sm font-medium">{String(b.k)}</div>
-                                  <div className="text-sm muted">Points: {String(b.pts)}</div>
-                                </div>
-                              ))}
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
+                            <div className="text-sm font-semibold">Levels</div>
+                            <div className="mt-2 text-sm muted space-y-1">
+                              <div>
+                                TP1:{" "}
+                                <span className="font-mono font-semibold text-slate-900">
+                                  {fmt(r.tp1)}
+                                </span>
+                              </div>
+                              <div>
+                                TP2:{" "}
+                                <span className="font-mono font-semibold text-slate-900">
+                                  {fmt(r.tp2)}
+                                </span>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      ) : (
-                        <div className="mt-3 text-sm muted">
-                          Click “Load Why” to fetch the explanation for {r.symbol}.
-                        </div>
-                      )}
-                    </div>
+
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4 lg:col-span-2">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-sm font-semibold">Why this signal</div>
+                              <Button
+                                variant="secondary"
+                                className="whitespace-nowrap"
+                                disabled={busyKey === `why-${r.symbol}`}
+                                onClick={() => loadWhy(r.symbol)}
+                              >
+                                {busyKey === `why-${r.symbol}` ? "Loading..." : "Load Why"}
+                              </Button>
+                            </div>
+
+                            {why && why.symbol === r.symbol ? (
+                              <div className="mt-3">
+                                <div className="text-sm">{why.reason_summary ?? "—"}</div>
+
+                                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                  {(why.reason_json?.checks ?? []).map((c: any, i: number) => (
+                                    <CheckLine
+                                      key={i}
+                                      ok={Boolean(c.ok)}
+                                      label={String(c.label ?? "")}
+                                      detail={c.detail ? String(c.detail) : undefined}
+                                    />
+                                  ))}
+                                </div>
+
+                                <div className="mt-4 border-t border-slate-200 pt-4">
+                                  <div className="text-sm font-semibold">Score breakdown</div>
+                                  <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                    {(why.reason_json?.score_breakdown ?? []).map((b: any, i: number) => (
+                                      <div
+                                        key={i}
+                                        className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
+                                      >
+                                        <div className="text-sm font-medium">{String(b.k)}</div>
+                                        <div className="text-sm muted">Points: {String(b.pts)}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="mt-3 text-sm muted">
+                                Click “Load Why” to fetch the explanation for {r.symbol}.
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </td>
                     </tr>
@@ -648,6 +651,7 @@ export default function ScanTableClient({
                 </Fragment>
               );
             })}
+
             {filteredRows.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-4 py-8 muted text-sm">
