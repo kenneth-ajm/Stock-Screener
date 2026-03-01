@@ -30,28 +30,39 @@ export default function PositionsClient({
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  async function closePosition(id: string, symbol: string) {
+  async function closePosition(p: Position) {
     setMsg(null);
-    setBusy(id);
+
+    // ✅ Prompt for exit price (required for closed history + P/L)
+    const raw = window.prompt(`Exit price for ${p.symbol} (e.g., 177.50):`);
+    if (raw == null) return; // user cancelled
+
+    const exit_price = Number(String(raw).trim());
+    if (!Number.isFinite(exit_price) || exit_price <= 0) {
+      setMsg(`${p.symbol}: Please enter a valid positive exit price.`);
+      return;
+    }
+
+    setBusy(p.id);
 
     try {
       const res = await fetch("/api/positions/close", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ position_id: id }),
+        body: JSON.stringify({ position_id: p.id, exit_price }),
       });
 
       const json = await res.json().catch(() => null);
 
       if (!res.ok || !json?.ok) {
-        setMsg(`${symbol}: ${json?.error || `Failed (${res.status})`}`);
+        setMsg(`${p.symbol}: ${json?.error || `Failed (${res.status})`}`);
         return;
       }
 
       // simplest: refresh page to re-fetch server data
       window.location.reload();
-    } catch (e) {
-      setMsg(`${symbol}: Failed to close position`);
+    } catch {
+      setMsg(`${p.symbol}: Failed to close position`);
     } finally {
       setBusy(null);
     }
@@ -134,7 +145,7 @@ export default function PositionsClient({
                     <Button
                       variant="secondary"
                       disabled={busy === p.id}
-                      onClick={() => closePosition(p.id, p.symbol)}
+                      onClick={() => closePosition(p)}
                     >
                       {busy === p.id ? "Closing..." : "Close"}
                     </Button>
