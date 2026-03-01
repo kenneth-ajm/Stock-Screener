@@ -493,12 +493,12 @@ export default function ScanTableClient({
       <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
         <table className="w-full table-fixed border-collapse">
           <colgroup>
-            <col className="w-[11%]" />
+            <col className="w-[12%]" />
+            <col className="w-[14%]" />
+            <col className="w-[10%]" />
             <col className="w-[12%]" />
             <col className="w-[12%]" />
-            <col className="w-[12%]" />
-            <col className="w-[12%]" />
-            <col className="w-[41%]" />
+            <col className="w-[40%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-slate-200 bg-white text-xs font-semibold uppercase tracking-wide muted">
@@ -537,7 +537,7 @@ export default function ScanTableClient({
                     <td className="px-2 py-3 whitespace-nowrap font-mono text-right">
                       {fmt(r.stop)}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2 flex-nowrap whitespace-nowrap">
                         <Button
                           variant="secondary"
