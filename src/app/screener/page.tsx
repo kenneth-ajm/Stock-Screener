@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import ScanTableClient from "./scanTableClient";
 import UtilitiesClient from "./UtilitiesClient";
+import ScreenerSearchClient from "./ScreenerSearchClient";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -11,7 +12,6 @@ export const dynamic = "force-dynamic";
 export default async function ScreenerPage() {
   const supabase = await supabaseServer();
 
-  // ✅ Route guard: require auth
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -20,7 +20,6 @@ export default async function ScreenerPage() {
     redirect("/auth?next=/screener");
   }
 
-  // Default portfolio (active journey)
   const { data: defaultPortfolio } = await supabase
     .from("portfolios")
     .select("id, name, account_currency, account_size, risk_per_trade, max_positions")
@@ -28,7 +27,6 @@ export default async function ScreenerPage() {
     .limit(1)
     .maybeSingle();
 
-  // Latest regime
   const { data: regimeRows } = await supabase
     .from("market_regime")
     .select("date, state, close, sma200")
@@ -38,7 +36,6 @@ export default async function ScreenerPage() {
 
   const regime = regimeRows?.[0] ?? null;
 
-  // Latest scan date for core_400 v1
   const { data: latestScan } = await supabase
     .from("daily_scans")
     .select("date")
@@ -49,7 +46,6 @@ export default async function ScreenerPage() {
 
   const latestScanDate = latestScan?.[0]?.date ?? null;
 
-  // Scan rows (compact fields; Why loaded on-demand from /api/why)
   let scanRows: any[] = [];
   if (latestScanDate) {
     const { data: rows } = await supabase
@@ -83,7 +79,9 @@ export default async function ScreenerPage() {
           </div>
         </div>
 
-        <div className="flex gap-3">
+        {/* ✅ Search bar + buttons */}
+        <div className="flex items-center gap-3">
+          <ScreenerSearchClient />
           <a href="/portfolios">
             <Button variant="secondary">Portfolios</Button>
           </a>

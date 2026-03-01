@@ -99,7 +99,6 @@ export default function ScreenerSearchClient() {
           <div className="space-y-3 text-sm text-slate-800">
             <div>
               <span className="font-semibold">{result.symbol}</span>
-              {result.scanDate ? <span className="text-slate-500"> • {result.scanDate}</span> : null}
             </div>
 
             {result.signal ? (
