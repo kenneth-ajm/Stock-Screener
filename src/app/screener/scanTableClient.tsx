@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 
@@ -489,73 +489,92 @@ export default function ScanTableClient({
         </div>
       ) : null}
 
-      {/* Compact table with FIXED actions spacing */}
+      {/* Compact table with fixed column sizing */}
       <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-        <div className="grid grid-cols-14 gap-2 border-b border-slate-200 bg-white px-4 py-3 text-xs font-semibold uppercase tracking-wide muted">
-          <div className="col-span-2">Symbol</div>
-          <div className="col-span-2">Signal</div>
-          <div className="col-span-2">Confidence</div>
-          <div className="col-span-2 text-right">Entry</div>
-          <div className="col-span-2 text-right">Stop</div>
-          <div className="col-span-4 text-right">Actions</div>
-        </div>
+        <table className="w-full table-fixed border-collapse">
+          <colgroup>
+            <col className="w-[12%]" />
+            <col className="w-[14%]" />
+            <col className="w-[10%]" />
+            <col className="w-[12%]" />
+            <col className="w-[12%]" />
+            <col className="w-[40%]" />
+          </colgroup>
+          <thead>
+            <tr className="border-b border-slate-200 bg-white text-xs font-semibold uppercase tracking-wide muted">
+              <th className="px-4 py-3 text-left">Symbol</th>
+              <th className="px-2 py-3 text-left">Signal</th>
+              <th className="px-2 py-3 text-right">Confidence</th>
+              <th className="px-2 py-3 text-right">Entry</th>
+              <th className="px-2 py-3 text-right">Stop</th>
+              <th className="px-4 py-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredRows.map((r, idx) => {
+              const isOpen = expanded === r.symbol;
 
-        {filteredRows.map((r, idx) => {
-          const isOpen = expanded === r.symbol;
-
-          return (
-            <div key={r.symbol} className="border-b border-slate-100">
-              <div
-                className={[
-                  "grid grid-cols-14 gap-2 px-4 py-3 items-center",
-                  idx % 2 === 0 ? "bg-white" : "bg-slate-50/40",
-                  "hover:bg-emerald-50/40 transition-colors",
-                ].join(" ")}
-              >
-                <div className="col-span-2 font-mono font-semibold">{r.symbol}</div>
-                <div className="col-span-2">
-                  <Badge variant={variant(r.signal)}>{r.signal}</Badge>
-                </div>
-                <div className="col-span-2">{r.confidence}</div>
-                <div className="col-span-2 text-right font-mono">{fmt(r.entry)}</div>
-                <div className="col-span-2 text-right font-mono">{fmt(r.stop)}</div>
-
-                {/* Actions — wider + no wrapping */}
-                <div className="col-span-4 flex justify-end gap-2 whitespace-nowrap">
-                  <Button
-                    variant="secondary"
-                    className="px-3 py-2 text-sm whitespace-nowrap"
-                    disabled={
-                      r.entry == null || r.stop == null || busyKey === `size-${r.symbol}`
-                    }
-                    onClick={() => calculatePlan(r)}
+              return (
+                <Fragment key={r.symbol}>
+                  <tr
+                    className={[
+                      "border-b border-slate-100 transition-colors hover:bg-emerald-50/40",
+                      idx % 2 === 0 ? "bg-white" : "bg-slate-50/40",
+                    ].join(" ")}
                   >
-                    {busyKey === `size-${r.symbol}` ? "…" : "Calc"}
-                  </Button>
+                    <td className="px-4 py-3 font-mono font-semibold whitespace-nowrap">
+                      {r.symbol}
+                    </td>
+                    <td className="px-2 py-3">
+                      <Badge variant={variant(r.signal)}>{r.signal}</Badge>
+                    </td>
+                    <td className="px-2 py-3 whitespace-nowrap font-mono text-right">
+                      {r.confidence}
+                    </td>
+                    <td className="px-2 py-3 whitespace-nowrap font-mono text-right">
+                      {fmt(r.entry)}
+                    </td>
+                    <td className="px-2 py-3 whitespace-nowrap font-mono text-right">
+                      {fmt(r.stop)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex justify-end gap-2 flex-nowrap whitespace-nowrap">
+                        <Button
+                          variant="secondary"
+                          className="px-3 py-2 text-sm whitespace-nowrap"
+                          disabled={
+                            r.entry == null || r.stop == null || busyKey === `size-${r.symbol}`
+                          }
+                          onClick={() => calculatePlan(r)}
+                        >
+                          {busyKey === `size-${r.symbol}` ? "…" : "Calc"}
+                        </Button>
 
-                  <Button
-                    variant="primary"
-                    className="px-4 py-2 text-sm whitespace-nowrap"
-                    disabled={r.entry == null || r.stop == null}
-                    onClick={() => handleOpen(r)}
-                  >
-                    Open
-                  </Button>
+                        <Button
+                          variant="primary"
+                          className="px-4 py-2 text-sm whitespace-nowrap"
+                          disabled={r.entry == null || r.stop == null}
+                          onClick={() => handleOpen(r)}
+                        >
+                          Open
+                        </Button>
 
-                  <Button
-                    variant="ghost"
-                    className="px-4 py-2 text-sm whitespace-nowrap"
-                    onClick={() => toggleExpanded(r.symbol)}
-                  >
-                    {isOpen ? "Hide" : "Details"}
-                  </Button>
-                </div>
-              </div>
+                        <Button
+                          variant="ghost"
+                          className="px-4 py-2 text-sm whitespace-nowrap"
+                          onClick={() => toggleExpanded(r.symbol)}
+                        >
+                          {isOpen ? "Hide" : "Details"}
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
 
-              {/* Accordion details */}
-              {isOpen ? (
-                <div className="px-4 pb-4 pt-2 bg-white">
-                  <div className="grid gap-4 lg:grid-cols-3">
+                  {/* Accordion details */}
+                  {isOpen ? (
+                    <tr>
+                      <td colSpan={6} className="bg-white px-4 pb-4 pt-2">
+                        <div className="grid gap-4 lg:grid-cols-3">
                     <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
                       <div className="text-sm font-semibold">Levels</div>
                       <div className="mt-2 text-sm muted space-y-1">
@@ -622,16 +641,22 @@ export default function ScanTableClient({
                         </div>
                       )}
                     </div>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-
-        {filteredRows.length === 0 ? (
-          <div className="px-4 py-8 muted text-sm">No rows match this filter.</div>
-        ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+            {filteredRows.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 muted text-sm">
+                  No rows match this filter.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
       </div>
     </div>
   );
