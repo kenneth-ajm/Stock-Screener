@@ -181,19 +181,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: `No Polygon results for ${symbolRaw}` }, { status: 404 });
     }
 
-    const upsertRows = results.map((r) => {
-      const d = new Date(Number(r.t));
-      return {
-        symbol: symbolRaw,
-        date: toISODate(d),
-        open: Number(r.o),
-        high: Number(r.h),
-        low: Number(r.l),
-        close: Number(r.c),
-        volume: Number(r.v),
-        source: "polygon",
-      };
-    });
+   const upsertRows = results.map((r) => {
+  const d = new Date(Number(r.t));
+  return {
+    symbol: symbolRaw,
+    date: toISODate(d),
+    open: Number(r.o),
+    high: Number(r.h),
+    low: Number(r.l),
+    close: Number(r.c),
+    volume: parseInt(String(r.v), 10), // force integer for bigint column
+    source: "polygon",
+  };
+});
 
     // Upsert into price_bars (assumes unique constraint on (symbol,date))
     const { error: upErr } = await supabase
