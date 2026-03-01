@@ -146,6 +146,16 @@ export default function ScanTableClient({
     });
   }, [rows, filter]);
 
+  const signalCounts = useMemo(() => {
+    return rows.reduce(
+      (acc, row) => {
+        acc[row.signal] += 1;
+        return acc;
+      },
+      { BUY: 0, WATCH: 0, AVOID: 0 } as Record<Signal, number>
+    );
+  }, [rows]);
+
   async function loadWhy(symbol: string) {
     setMsg(null);
     setBusyKey(`why-${symbol}`);
@@ -344,6 +354,13 @@ export default function ScanTableClient({
           <span className="font-semibold">Confidence</span> is a 0–100 score from trend
           alignment (SMA), RSI, volume confirmation, and extension penalties (regime may downgrade).
         </div>
+      </div>
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Showing" value={`${filteredRows.length} rows`} />
+        <StatCard label="Buy" value={String(signalCounts.BUY)} />
+        <StatCard label="Watch" value={String(signalCounts.WATCH)} />
+        <StatCard label="Avoid" value={String(signalCounts.AVOID)} />
       </div>
 
       {msg ? (
