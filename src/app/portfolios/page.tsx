@@ -8,13 +8,18 @@ export const dynamic = "force-dynamic";
 
 async function makeSupabaseServerClient() {
   const cookieStore = await cookies();
+
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
         getAll: () => cookieStore.getAll(),
-        setAll: (cookiesToSet) => cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options)),
+        setAll: (cookiesToSet) => {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieStore.set(name, value, options);
+          });
+        },
       },
     }
   );
@@ -22,8 +27,14 @@ async function makeSupabaseServerClient() {
 
 export default async function PortfoliosPage() {
   const supabase = await makeSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect("/auth?next=/portfolios");
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/auth?next=/portfolios");
+  }
 
   const { data: portfolios } = await supabase
     .from("portfolios")

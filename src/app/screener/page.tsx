@@ -84,8 +84,11 @@ export default async function ScreenerPage() {
         </div>
 
         <div className="flex gap-3">
-          <a href="/portfolio">
+          <a href="/portfolios">
             <Button variant="secondary">Portfolios</Button>
+          </a>
+          <a href="/strategy">
+            <Button variant="secondary">Strategy</Button>
           </a>
         </div>
       </div>
@@ -124,16 +127,25 @@ export default async function ScreenerPage() {
                     {Number(defaultPortfolio.account_size).toFixed(0)}
                   </span>
                 </div>
+
                 <div className="muted">
                   Risk/trade:{" "}
-                  <span className="font-semibold">{defaultPortfolio.risk_per_trade}</span>
+                  <span className="font-semibold">
+                    {(Number(defaultPortfolio.risk_per_trade) * 100).toFixed(1)}%
+                  </span>
                   {" • "}
                   Max positions:{" "}
                   <span className="font-semibold">{defaultPortfolio.max_positions}</span>
                 </div>
-                <a className="underline text-sm muted" href="/portfolio">
-                  Manage portfolios
-                </a>
+
+                <div className="flex flex-col gap-1 pt-1">
+                  <a className="underline text-sm muted" href="/portfolios">
+                    Manage portfolios
+                  </a>
+                  <a className="underline text-sm muted" href="/strategy">
+                    Strategy & logic
+                  </a>
+                </div>
               </div>
             ) : (
               <div className="text-sm muted">No default portfolio found.</div>
