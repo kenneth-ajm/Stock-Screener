@@ -53,8 +53,8 @@ function computeClosedPnL(p: PositionRow) {
   if (typeof entry !== "number" || typeof exit !== "number" || entry <= 0) return null;
 
   const qty = resolveQty(p);
-  const pnlUsd = (exit - entry) * qty;
   const pnlPct = (exit - entry) / entry;
+  const pnlUsd = (exit - entry) * qty;
   return { pnlUsd, pnlPct };
 }
 
@@ -92,6 +92,16 @@ function Modal({
   );
 }
 
+function Toast({ message }: { message: string }) {
+  return (
+    <div className="fixed bottom-5 right-5 z-50">
+      <div className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl">
+        {message}
+      </div>
+    </div>
+  );
+}
+
 export default function PositionsClient({
   openPositions,
   closedPositions,
@@ -108,6 +118,8 @@ export default function PositionsClient({
   const [exitPriceInput, setExitPriceInput] = useState("");
   const [modalError, setModalError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const [toast, setToast] = useState<string | null>(null);
 
   const closedWithPnL = useMemo(() => {
     return closedPositions.map((p) => ({ ...p, pnl: computeClosedPnL(p) }));
@@ -152,7 +164,11 @@ export default function PositionsClient({
         throw new Error(payload?.error || "Close failed.");
       }
 
-      window.location.reload();
+      // success toast + gentle refresh
+      closeModal();
+      setToast("Position closed ✅");
+      setTimeout(() => setToast(null), 1800);
+      setTimeout(() => window.location.reload(), 650);
     } catch (e: any) {
       setModalError(e?.message ?? "Close failed.");
     } finally {
@@ -164,6 +180,8 @@ export default function PositionsClient({
 
   return (
     <div className="space-y-4">
+      {toast ? <Toast message={toast} /> : null}
+
       <div className="flex items-center gap-2">
         <button
           className={clsx(
@@ -320,10 +338,6 @@ export default function PositionsClient({
                     </tbody>
                   </table>
                 </div>
-              </div>
-
-              <div className="text-xs text-slate-500">
-                Tip: P/L % is computed from entry and exit. $ P/L is available if you store a quantity field (shares/quantity).
               </div>
             </>
           ) : (
