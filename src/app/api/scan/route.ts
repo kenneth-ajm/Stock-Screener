@@ -1,14 +1,24 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+type Bar = {
+  date: string;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
 function sma(values: number[], period: number) {
   if (values.length < period) return null;
   const slice = values.slice(-period);
-  return slice.reduce((a, b) => a + b, 0) / period;
+  const sum = slice.reduce((a, b) => a + b, 0);
+  return sum / period;
 }
 
 function rsi(values: number[], period = 14) {
   if (values.length <= period) return null;
+
   let gains = 0;
   let losses = 0;
   for (let i = values.length - period; i < values.length; i++) {
@@ -16,8 +26,10 @@ function rsi(values: number[], period = 14) {
     if (change >= 0) gains += change;
     else losses += Math.abs(change);
   }
+
   const avgGain = gains / period;
   const avgLoss = losses / period;
+
   if (avgLoss === 0) return 100;
   const rs = avgGain / avgLoss;
   return 100 - 100 / (1 + rs);
@@ -25,6 +37,7 @@ function rsi(values: number[], period = 14) {
 
 function atr(high: number[], low: number[], close: number[], period = 14) {
   if (close.length <= period) return null;
+
   const trs: number[] = [];
   for (let i = 1; i < close.length; i++) {
     const tr = Math.max(
@@ -34,6 +47,7 @@ function atr(high: number[], low: number[], close: number[], period = 14) {
     );
     trs.push(tr);
   }
+
   if (trs.length < period) return null;
   const slice = trs.slice(-period);
   return slice.reduce((a, b) => a + b, 0) / period;
@@ -43,124 +57,283 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+type WhyLine = { ok: boolean; label: string; detail?: string };
+
+function summarizeWhy(lines: WhyLine[]) {
+  const okCount = lines.filter((l) => l.ok).length;
+  const bad = lines.filter((l) => !l.ok).map((l) => l.label);
+  const blockers = bad.slice(0, 2).join(", ");
+  if (!bad.length) return `Strong setup (${okCount}/${lines.length} checks passed).`;
+  return `Mixed setup (${okCount}/${lines.length} checks). Missing: ${blockers}.`;
+}
+
+export async function GET() {
+  return NextResponse.json({ ok: false, message: "Use POST." });
+}
+
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
 
-  const universe_slug = (body?.universe_slug ?? "core_400").toString();
+  const universe_slug = (body?.universe_slug ?? "liquid_2000").toString();
   const limit = typeof body?.limit === "number" ? Math.max(1, Math.min(600, body.limit)) : 300;
   const offset = typeof body?.offset === "number" ? Math.max(0, body.offset) : 0;
+
+  const BUY_CAP = 10;
+  const STRATEGY_VERSION = "v1";
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // scan date from SPY
+  // 1) Global scan date = latest SPY date
   const { data: spyLatest, error: spyErr } = await supabase
     .from("price_bars")
-    .select("date")
+    .select("date, close")
     .eq("symbol", "SPY")
     .order("date", { ascending: false })
     .limit(1);
 
-  if (spyErr || !spyLatest?.length) {
-    return NextResponse.json({ ok: false, error: spyErr?.message || "No SPY data" }, { status: 500 });
+  if (spyErr || !spyLatest || spyLatest.length === 0) {
+    return NextResponse.json(
+      { ok: false, error: spyErr?.message || "No SPY bars found" },
+      { status: 500 }
+    );
   }
 
-  const scanDate = spyLatest[0].date;
+  const scanDate = spyLatest[0].date as string;
 
-  // ✅ deterministic slice: ORDER BY symbol + range
-  const from = offset;
-  const to = offset + limit - 1;
+  // 2) Regime
+  const { data: regimeRows } = await supabase
+    .from("market_regime")
+    .select("date, state")
+    .eq("symbol", "SPY")
+    .order("date", { ascending: false })
+    .limit(1);
+
+  const regimeState: "FAVORABLE" | "CAUTION" | "DEFENSIVE" =
+    (regimeRows?.[0]?.state as any) ?? "CAUTION";
+
+  // 3) Universe symbols (liquid_2000 plus core_400 union)
+  const slugs = universe_slug === "liquid_2000" ? ["liquid_2000", "core_400"] : [universe_slug];
 
   const { data: members, error: memErr } = await supabase
     .from("universe_members")
     .select("symbol, universes!inner(slug)")
-    .eq("universes.slug", universe_slug)
+    .in("universes.slug", slugs)
     .eq("active", true)
-    .order("symbol", { ascending: true })
-    .range(from, to);
+    .order("symbol", { ascending: true });
 
   if (memErr) {
     return NextResponse.json({ ok: false, error: memErr.message }, { status: 500 });
   }
 
-  const symbols = (members ?? []).map((m: any) => String(m.symbol).toUpperCase()).filter(Boolean);
+  const allSymbols = Array.from(
+    new Set((members ?? []).map((m: any) => String(m.symbol).toUpperCase()).filter(Boolean))
+  );
+
+  if (allSymbols.length === 0) {
+    return NextResponse.json({ ok: false, error: `No symbols in ${slugs.join("+")}` });
+  }
+
+  const batch = allSymbols.slice(offset, offset + limit);
 
   const insertedRows: any[] = [];
-  const skipped: any[] = [];
+  const skipped: { symbol: string; reason: string }[] = [];
 
-  for (const symbol of symbols) {
+  for (const symbol of batch) {
     const { data: bars, error: barErr } = await supabase
       .from("price_bars")
-      .select("high,low,close,volume,date")
+      .select("date, high, low, close, volume")
       .eq("symbol", symbol)
       .lte("date", scanDate)
       .order("date", { ascending: true });
 
     if (barErr || !bars || bars.length < 220) {
-      skipped.push({ symbol, reason: barErr?.message || "Not enough history" });
+      skipped.push({
+        symbol,
+        reason: barErr?.message || "Not enough history (<220 bars) up to scanDate",
+      });
       continue;
     }
 
-    const closes = bars.map((b: any) => Number(b.close));
-    const highs = bars.map((b: any) => Number(b.high));
-    const lows = bars.map((b: any) => Number(b.low));
-    const vols = bars.map((b: any) => Number(b.volume));
+    const cleaned: Bar[] = bars.map((b: any) => ({
+      date: b.date,
+      high: Number(b.high),
+      low: Number(b.low),
+      close: Number(b.close),
+      volume: Number(b.volume),
+    }));
+
+    const closes = cleaned.map((b) => b.close);
+    const highs = cleaned.map((b) => b.high);
+    const lows = cleaned.map((b) => b.low);
+    const vols = cleaned.map((b) => b.volume);
 
     const latestClose = closes[closes.length - 1];
+
+    const sma20 = sma(closes, 20);
     const sma50 = sma(closes, 50);
     const sma200 = sma(closes, 200);
     const prevSma50 = sma(closes.slice(0, -1), 50);
+
     const rsi14 = rsi(closes, 14);
     const atr14 = atr(highs, lows, closes, 14);
+    const vol20 = sma(vols, 20);
+    const volSpike = vol20 ? vols[vols.length - 1] / vol20 : null;
 
-    if (!sma50 || !sma200 || rsi14 === null || !atr14) {
-      skipped.push({ symbol, reason: "Indicator null" });
+    if (!sma20 || !sma50 || !sma200 || rsi14 === null || !atr14 || !volSpike) {
+      skipped.push({ symbol, reason: "Indicator calc failed (null)" });
       continue;
     }
 
+    const above20 = latestClose > sma20;
+    const above50 = latestClose > sma50;
+    const above200 = latestClose > sma200;
+    const sma50Rising = prevSma50 ? sma50 > prevSma50 : false;
+
+    // --- strict scoring ---
+    const breakdown: Array<{ k: string; pts: number }> = [];
     let score = 0;
-    if (latestClose > sma50) score += 20;
-    if (latestClose > sma200) score += 25;
-    if (prevSma50 && sma50 > prevSma50) score += 10;
-    if (rsi14 >= 45 && rsi14 <= 70) score += 20;
+
+    if (above20) { score += 10; breakdown.push({ k: "Above SMA20", pts: 10 }); }
+    else breakdown.push({ k: "Above SMA20", pts: 0 });
+
+    if (above50) { score += 20; breakdown.push({ k: "Above SMA50", pts: 20 }); }
+    else breakdown.push({ k: "Above SMA50", pts: 0 });
+
+    if (above200) { score += 25; breakdown.push({ k: "Above SMA200", pts: 25 }); }
+    else breakdown.push({ k: "Above SMA200", pts: 0 });
+
+    // RSI scoring
+    let rsiPts = 0;
+    if (rsi14 >= 45 && rsi14 <= 65) rsiPts = 20;
+    else if (rsi14 >= 35 && rsi14 < 45) rsiPts = 10;
+    else if (rsi14 > 65 && rsi14 <= 75) rsiPts = 5;
+    score += rsiPts;
+    breakdown.push({ k: `RSI ${rsi14.toFixed(1)}`, pts: rsiPts });
+
+    // Volume confirmation (kept strict)
+    let volPts = 0;
+    if (volSpike >= 1.5) volPts = 15;
+    else if (volSpike >= 1.2) volPts = 8;
+    score += volPts;
+    breakdown.push({ k: `Volume spike ${volSpike.toFixed(2)}x`, pts: volPts });
+
+    // Extension penalty vs SMA20 using ATR
+    const distFrom20 = Math.abs(latestClose - sma20);
+    let penalty = 0;
+    if (distFrom20 > 2 * atr14) penalty = -10;
+    score += penalty;
+    breakdown.push({ k: "Extension vs SMA20", pts: penalty });
+
+    // Slight bonus for SMA50 rising (but also required for BUY)
+    if (sma50Rising) {
+      score += 5;
+      breakdown.push({ k: "SMA50 rising", pts: 5 });
+    } else breakdown.push({ k: "SMA50 rising", pts: 0 });
 
     score = clamp(score, 0, 100);
 
+    // --- strict signal logic ---
     let signal: "BUY" | "WATCH" | "AVOID" = "AVOID";
-    if (score >= 60) signal = "BUY";
-    else if (score >= 40) signal = "WATCH";
+
+    const baseBuy =
+      above50 &&
+      above200 &&
+      sma50Rising &&
+      rsi14 >= 45 &&
+      rsi14 <= 70 &&
+      volSpike >= 1.3;
+
+    // tighter thresholds to keep BUY rare
+    if (baseBuy && score >= 75) signal = "BUY";
+    else if (score >= 50) signal = "WATCH";
+
+    const downgraded = regimeState === "DEFENSIVE" && signal === "BUY";
+    if (downgraded) {
+      signal = "WATCH";
+      score = clamp(score - 10, 0, 100);
+    }
+
+    const entry = latestClose;
+    const stop = entry - 2 * atr14;
+    const R = entry - stop;
+    const tp1 = entry + 2 * R;
+    const tp2 = entry + 3 * R;
+
+    const whyLines: WhyLine[] = [
+      { ok: above200, label: "Above SMA200", detail: `close ${entry.toFixed(2)} vs ${sma200.toFixed(2)}` },
+      { ok: above50, label: "Above SMA50", detail: `close ${entry.toFixed(2)} vs ${sma50.toFixed(2)}` },
+      { ok: sma50Rising, label: "SMA50 rising", detail: prevSma50 ? `SMA50 ${sma50.toFixed(2)} vs prev ${prevSma50.toFixed(2)}` : "Not enough data" },
+      { ok: above20, label: "Above SMA20", detail: `close ${entry.toFixed(2)} vs ${sma20.toFixed(2)}` },
+      { ok: rsi14 >= 45 && rsi14 <= 70, label: "RSI healthy", detail: `RSI ${rsi14.toFixed(1)} (45–70)` },
+      { ok: volSpike >= 1.3, label: "Volume confirms", detail: `${volSpike.toFixed(2)}x (need ≥ 1.30x)` },
+      { ok: true, label: "Universe", detail: slugs.join("+") },
+      { ok: true, label: "Regime", detail: `SPY regime: ${regimeState}` },
+    ];
+
+    const reason_summary = summarizeWhy(whyLines);
+
+    const reason_json = {
+      regime: regimeState,
+      checks: whyLines,
+      score_breakdown: breakdown,
+      indicators: { sma20, sma50, sma200, rsi14, atr14, volSpike, prevSma50, sma50Rising },
+      levels: { entry, stop, tp1, tp2 },
+    };
 
     insertedRows.push({
       date: scanDate,
-      universe_slug,
+      universe_slug: "liquid_2000", // we standardize output to liquid_2000
       symbol,
-      strategy_version: "v1",
+      strategy_version: STRATEGY_VERSION,
       signal,
       confidence: Math.round(score),
-      entry: latestClose,
-      stop: latestClose - 2 * atr14,
+      entry,
+      stop,
+      tp1,
+      tp2,
+      sma20,
+      sma50,
+      sma200,
+      rsi14,
+      atr14,
+      vol_spike: volSpike,
+      reason_summary,
+      reason_json,
     });
   }
 
-  if (insertedRows.length) {
-    const { error: upErr } = await supabase.from("daily_scans").upsert(insertedRows, {
+  // --- BUY cap per batch: keep top 10 BUY by confidence, downgrade the rest ---
+  const buyRows = insertedRows.filter((r) => r.signal === "BUY").sort((a, b) => b.confidence - a.confidence);
+  if (buyRows.length > BUY_CAP) {
+    const keep = new Set(buyRows.slice(0, BUY_CAP).map((r) => r.symbol));
+    for (const r of insertedRows) {
+      if (r.signal === "BUY" && !keep.has(r.symbol)) r.signal = "WATCH";
+    }
+  }
+
+  if (insertedRows.length > 0) {
+    const { error: insErr } = await supabase.from("daily_scans").upsert(insertedRows, {
       onConflict: "date,universe_slug,symbol,strategy_version",
     });
-    if (upErr) {
-      return NextResponse.json({ ok: false, error: upErr.message }, { status: 500 });
+
+    if (insErr) {
+      return NextResponse.json({ ok: false, error: insErr.message }, { status: 500 });
     }
   }
 
   return NextResponse.json({
     ok: true,
-    universe_slug,
     scanDate,
-    batch_offset: offset,
-    batch_limit: limit,
-    scanned: symbols.length,
+    regime: regimeState,
+    universe_slug: "liquid_2000",
+    scanned: batch.length,
     inserted: insertedRows.length,
     skipped: skipped.length,
+    batch_offset: offset,
+    batch_limit: limit,
+    buy_cap: BUY_CAP,
   });
 }

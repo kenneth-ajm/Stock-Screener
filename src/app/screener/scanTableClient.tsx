@@ -35,6 +35,43 @@ function signalPill(signal: Row["signal"]) {
   return "bg-rose-50 text-rose-700 border-rose-200";
 }
 
+function clsx(...xs: Array<string | false | null | undefined>) {
+  return xs.filter(Boolean).join(" ");
+}
+
+function Modal({
+  open,
+  title,
+  children,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+          <div className="flex items-start justify-between gap-3">
+            <div className="text-base font-semibold text-slate-900">{title}</div>
+            <button
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 hover:bg-slate-50"
+              onClick={onClose}
+            >
+              Close
+            </button>
+          </div>
+          <div className="mt-4">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanDate: string }) {
   const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY+WATCH");
 
@@ -44,6 +81,12 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [auto, setAuto] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+
+  // action modal state
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalJson, setModalJson] = useState<any>(null);
+  const [modalBusy, setModalBusy] = useState(false);
 
   const counts = useMemo(() => {
     const r = rows ?? [];
@@ -56,7 +99,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     };
   }, [rows]);
 
-  // Auto-fallback: if BUY+WATCH has zero rows, show ALL instead so the page never looks empty
+  // Auto-fallback: if BUY+WATCH has zero rows, show ALL instead
   useEffect(() => {
     if (filter === "BUY+WATCH" && counts.buyWatch === 0 && counts.total > 0) {
       setFilter("ALL");
@@ -98,9 +141,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
       });
 
       const json = await res.json().catch(() => null);
-      if (!res.ok || !json?.ok) {
-        throw new Error(json?.error || "Quote fetch failed.");
-      }
+      if (!res.ok || !json?.ok) throw new Error(json?.error || "Quote fetch failed.");
 
       setQuotes((prev) => ({ ...prev, ...(json.quotes ?? {}) }));
       setLastUpdatedAt(Date.now());
@@ -111,25 +152,91 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     }
   }
 
-  // refresh quotes when filter changes
   useEffect(() => {
     refreshQuotes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
-  // auto refresh every 15s
   useEffect(() => {
     if (!auto) return;
-    const t = setInterval(() => {
-      refreshQuotes();
-    }, 15000);
+    const t = setInterval(() => refreshQuotes(), 15000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auto, symbolsToQuote.join("|")]);
 
+  function openModal(title: string, payload: any) {
+    setModalTitle(title);
+    setModalJson(payload);
+    setModalOpen(true);
+  }
+
+  async function doCalc(row: Row) {
+    setModalBusy(true);
+    try {
+      const res = await fetch("/api/position-size", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          symbol: row.symbol,
+          entry: row.entry,
+          stop: row.stop,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      openModal(`Calc position size: ${row.symbol}`, json ?? { ok: false, error: "No response" });
+    } catch (e: any) {
+      openModal(`Calc position size: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
+    } finally {
+      setModalBusy(false);
+    }
+  }
+
+  async function doOpen(row: Row) {
+    setModalBusy(true);
+    try {
+      const res = await fetch("/api/positions/add", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          symbol: row.symbol,
+          entry_price: row.entry,
+          stop_price: row.stop,
+          // you may also pass shares/quantity if your endpoint supports it
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      openModal(`Open position: ${row.symbol}`, json ?? { ok: false, error: "No response" });
+    } catch (e: any) {
+      openModal(`Open position: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
+    } finally {
+      setModalBusy(false);
+    }
+  }
+
+  async function doDetails(row: Row) {
+    setModalBusy(true);
+    try {
+      const res = await fetch("/api/why", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          symbol: row.symbol,
+          date: scanDate,
+          universe_slug: "liquid_2000",
+          strategy_version: "v1",
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      openModal(`Why: ${row.symbol}`, json ?? { ok: false, error: "No response" });
+    } catch (e: any) {
+      openModal(`Why: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
+    } finally {
+      setModalBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
-      {/* Filter pills */}
       <div className="flex flex-wrap gap-2">
         <button className={chipClass(filter === "BUY+WATCH")} onClick={() => setFilter("BUY+WATCH")}>
           BUY + WATCH
@@ -187,7 +294,6 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
               }`}
               onClick={() => setAuto((v) => !v)}
               disabled={quoteBusy}
-              title="Auto-refresh live prices every 15 seconds"
             >
               Auto
             </button>
@@ -214,6 +320,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                 <th className="p-3 text-right">ACTIONS</th>
               </tr>
             </thead>
+
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
@@ -246,18 +353,24 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                           {r.signal}
                         </span>
                       </td>
-                      <td className="p-3 text-slate-800">{r.confidence}</td>
+                      <td className="p-3 text-slate-800 font-semibold">{r.confidence}</td>
                       <td className="p-3 text-slate-800">{Number(r.entry).toFixed(2)}</td>
                       <td className="p-3 text-slate-800">{Number(r.stop).toFixed(2)}</td>
 
                       <td className="p-3 text-slate-800">{typeof live === "number" ? fmt2(live) : "—"}</td>
-                      <td className={`p-3 font-semibold ${dEntryClass}`}>{typeof dEntry === "number" ? fmtPct(dEntry) : "—"}</td>
+                      <td className={clsx("p-3 font-semibold", dEntryClass)}>{typeof dEntry === "number" ? fmtPct(dEntry) : "—"}</td>
 
                       <td className="p-3">
                         <div className="flex justify-end gap-2 whitespace-nowrap">
-                          <Button variant="secondary">Calc</Button>
-                          <Button>Open</Button>
-                          <Button variant="secondary">Details</Button>
+                          <Button variant="secondary" onClick={() => doCalc(r)} disabled={modalBusy}>
+                            Calc
+                          </Button>
+                          <Button onClick={() => doOpen(r)} disabled={modalBusy}>
+                            Open
+                          </Button>
+                          <Button variant="secondary" onClick={() => doDetails(r)} disabled={modalBusy}>
+                            Details
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -272,6 +385,12 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
           Tip: On mobile, swipe sideways to see all columns. Live data may be delayed depending on your Polygon plan.
         </div>
       </div>
+
+      <Modal open={modalOpen} title={modalTitle} onClose={() => setModalOpen(false)}>
+        <pre className="max-h-[420px] overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
+{JSON.stringify(modalJson, null, 2)}
+        </pre>
+      </Modal>
     </div>
   );
 }
