@@ -39,6 +39,16 @@ function clsx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
 }
 
+function Toast({ msg }: { msg: string }) {
+  return (
+    <div className="fixed bottom-5 right-5 z-[10001]">
+      <div className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl">
+        {msg}
+      </div>
+    </div>
+  );
+}
+
 function Modal({
   open,
   title,
@@ -51,11 +61,16 @@ function Modal({
   onClose: () => void;
 }) {
   if (!open) return null;
+
   return (
-    <div className="fixed inset-0 z-50">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+    <div className="fixed inset-0 z-[9999]">
+      <div
+        className="absolute inset-0 bg-black/40"
+        onClick={onClose}
+        aria-hidden="true"
+      />
       <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+        <div className="relative z-[10000] w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
           <div className="flex items-start justify-between gap-3">
             <div className="text-base font-semibold text-slate-900">{title}</div>
             <button
@@ -88,6 +103,13 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
   const [modalJson, setModalJson] = useState<any>(null);
   const [modalBusy, setModalBusy] = useState(false);
 
+  // toast fallback (so you always get feedback)
+  const [toast, setToast] = useState<string | null>(null);
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 1400);
+  }
+
   const counts = useMemo(() => {
     const r = rows ?? [];
     return {
@@ -99,7 +121,6 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     };
   }, [rows]);
 
-  // Auto-fallback: if BUY+WATCH has zero rows, show ALL instead
   useEffect(() => {
     if (filter === "BUY+WATCH" && counts.buyWatch === 0 && counts.total > 0) {
       setFilter("ALL");
@@ -172,6 +193,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
   async function doCalc(row: Row) {
     setModalBusy(true);
+    showToast(`Calc: ${row.symbol}`);
     try {
       const res = await fetch("/api/position-size", {
         method: "POST",
@@ -193,6 +215,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
   async function doOpen(row: Row) {
     setModalBusy(true);
+    showToast(`Open: ${row.symbol}`);
     try {
       const res = await fetch("/api/positions/add", {
         method: "POST",
@@ -201,7 +224,6 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
           symbol: row.symbol,
           entry_price: row.entry,
           stop_price: row.stop,
-          // you may also pass shares/quantity if your endpoint supports it
         }),
       });
       const json = await res.json().catch(() => null);
@@ -215,6 +237,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
   async function doDetails(row: Row) {
     setModalBusy(true);
+    showToast(`Details: ${row.symbol}`);
     try {
       const res = await fetch("/api/why", {
         method: "POST",
@@ -237,6 +260,8 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
   return (
     <div className="space-y-4">
+      {toast ? <Toast msg={toast} /> : null}
+
       <div className="flex flex-wrap gap-2">
         <button className={chipClass(filter === "BUY+WATCH")} onClick={() => setFilter("BUY+WATCH")}>
           BUY + WATCH
