@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 
 import PositionsClient from "./PositionsClient";
 import { computeClosedTradeSummary } from "@/lib/analytics/closedTradeSummary";
@@ -84,6 +85,15 @@ async function makeSupabaseServerClient() {
   });
 }
 
+function makeSupabaseAdminClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  if (!serviceKey) {
+    throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY in environment variables.");
+  }
+  return createClient(url, serviceKey, { auth: { persistSession: false } });
+}
+
 async function fetchAndUpsertDailyBars(symbolRaw: string) {
   const apiKey = process.env.POLYGON_API_KEY;
   if (!apiKey) return;
@@ -107,7 +117,7 @@ async function fetchAndUpsertDailyBars(symbolRaw: string) {
   const results = json?.results ?? [];
   if (!Array.isArray(results) || results.length === 0) return;
 
-  const supabase = await makeSupabaseServerClient();
+  const admin = makeSupabaseAdminClient();
 
   const rows = results.map((r: any) => ({
     symbol,
@@ -120,7 +130,7 @@ async function fetchAndUpsertDailyBars(symbolRaw: string) {
     source: "polygon",
   }));
 
-  await supabase.from("price_bars").upsert(rows, { onConflict: "symbol,date" });
+  await admin.from("price_bars").upsert(rows, { onConflict: "symbol,date" });
 }
 
 export default async function PortfolioPage() {
@@ -130,11 +140,8 @@ export default async function PortfolioPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) {
-    redirect("/auth?next=/portfolio");
-  }
+  if (!user) redirect("/auth?next=/portfolio");
 
-  // Active/default portfolio
   const { data: portfolio } = await supabase
     .from("portfolios")
     .select("*")
@@ -168,7 +175,6 @@ export default async function PortfolioPage() {
     );
   }
 
-  // Positions
   const { data: openPositions } = await supabase
     .from("portfolio_positions")
     .select("*")
@@ -188,14 +194,15 @@ export default async function PortfolioPage() {
   const open = openPositions ?? [];
   const closed = closedPositions ?? [];
 
-  // ✅ Auto-fetch latest prices for ALL open symbols
+  // Latest prices for ALL open symbols (with auto-fetch)
   const uniqueSymbols = [...new Set(open.map((p) => (p.symbol ?? "").toUpperCase()).filter(Boolean))];
   const latestPriceBySymbol: Record<string, number | null> = {};
+  const admin = makeSupabaseAdminClient();
 
   for (const symbol of uniqueSymbols) {
-    const { data: latestRow } = await supabase
+    const { data: latestRow } = await admin
       .from("price_bars")
-      .select("close")
+      .select("close,date")
       .eq("symbol", symbol)
       .order("date", { ascending: false })
       .limit(1)
@@ -204,9 +211,9 @@ export default async function PortfolioPage() {
     if (!latestRow) {
       await fetchAndUpsertDailyBars(symbol);
 
-      const { data: retryRow } = await supabase
+      const { data: retryRow } = await admin
         .from("price_bars")
-        .select("close")
+        .select("close,date")
         .eq("symbol", symbol)
         .order("date", { ascending: false })
         .limit(1)
@@ -218,7 +225,7 @@ export default async function PortfolioPage() {
     }
   }
 
-  // Closed trade summary cards (existing)
+  // Closed summary cards
   const closedSummary = computeClosedTradeSummary(
     closed.map((p) => ({
       symbol: p.symbol,
@@ -231,7 +238,7 @@ export default async function PortfolioPage() {
     }))
   );
 
-  // Realized stats (keep your proven working logic)
+  // Realized stats (simple)
   let realizedPnL = 0;
   let realizedWins = 0;
   let realizedLosses = 0;
@@ -248,7 +255,7 @@ export default async function PortfolioPage() {
   const realizedTrades = realizedWins + realizedLosses;
   const winRate = realizedTrades ? realizedWins / realizedTrades : 0;
 
-  // Exposure (capital + risk)
+  // Exposure
   let capitalDeployed = 0;
   let riskDeployed = 0;
 
@@ -261,7 +268,6 @@ export default async function PortfolioPage() {
       capitalDeployed += entry * qty;
     }
 
-    // Only compute risk when stop exists
     if (typeof entry === "number" && entry > 0 && typeof stop === "number" && stop > 0 && qty > 0) {
       riskDeployed += Math.max(0, (entry - stop) * qty);
     }
