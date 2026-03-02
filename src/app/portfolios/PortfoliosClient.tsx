@@ -3,32 +3,38 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+type PortfolioStats = {
+  deployed: number;
+  openCount: number;
+  realized: number;
+};
+
 type Portfolio = {
   id: string;
   name: string | null;
   account_currency: string | null;
   account_size: number | null;
-  risk_per_trade: number | null; // decimal e.g. 0.02
+  risk_per_trade: number | null;
   max_positions: number | null;
   is_default: boolean | null;
+  stats?: PortfolioStats;
 };
-
-function pct(v: number | null | undefined) {
-  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
-  return `${(v * 100).toFixed(1)}%`;
-}
 
 function money(v: number | null | undefined) {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
   return v.toFixed(2);
 }
 
+function moneySigned(v: number | null | undefined) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+  const sign = v > 0 ? "+" : "";
+  return `${sign}${v.toFixed(2)}`;
+}
+
 function Toast({ msg }: { msg: string }) {
   return (
     <div className="fixed bottom-5 right-5 z-50">
-      <div className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl">
-        {msg}
-      </div>
+      <div className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl">{msg}</div>
     </div>
   );
 }
@@ -68,6 +74,7 @@ function Modal({
 
 export default function PortfoliosClient({ initialPortfolios }: { initialPortfolios: Portfolio[] }) {
   const router = useRouter();
+
   const [portfolios, setPortfolios] = useState<Portfolio[]>(initialPortfolios);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -80,7 +87,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
   const [name, setName] = useState("Main");
   const [currency, setCurrency] = useState("USD");
   const [accountSize, setAccountSize] = useState("11000");
-  const [riskPct, setRiskPct] = useState("2.0"); // percent UI
+  const [riskPct, setRiskPct] = useState("2.0");
   const [maxPositions, setMaxPositions] = useState("5");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -120,8 +127,9 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
   }
 
   async function refresh() {
+    // If your project doesn’t actually have this endpoint, tell me and we’ll remove refresh() entirely.
     const res = await fetch("/api/portfolios/list");
-    const json = await res.json();
+    const json = await res.json().catch(() => null);
     if (json?.ok) setPortfolios(json.portfolios ?? []);
   }
 
@@ -144,7 +152,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
           max_positions: maxP,
         }),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok || !json?.ok) throw new Error(json?.error || "Create failed");
 
       await refresh();
@@ -178,7 +186,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
           max_positions: maxP,
         }),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok || !json?.ok) throw new Error(json?.error || "Update failed");
 
       await refresh();
@@ -191,7 +199,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
     }
   }
 
-  async function setDefault(portfolioId: string) {
+  async function setActive(portfolioId: string) {
     setBusy(true);
     try {
       const res = await fetch("/api/portfolios/set-default", {
@@ -199,26 +207,24 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ portfolio_id: portfolioId }),
       });
-      const json = await res.json();
-      if (!res.ok || !json?.ok) throw new Error(json?.error || "Set default failed");
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) throw new Error(json?.error || "Set active failed");
+
       await refresh();
-      showToast("Default updated ✅");
+      showToast("Active portfolio updated ✅");
     } catch (e: any) {
-      showToast(e?.message ?? "Set default failed");
+      showToast(e?.message ?? "Set active failed");
     } finally {
       setBusy(false);
     }
   }
 
   async function openPortfolio(p: Portfolio) {
-    // Make click feel instant even if network is slow
-    try {
-      if (!p.is_default) {
-        await setDefault(p.id);
-      }
-    } finally {
-      router.push("/portfolio");
+    if (busy) return;
+    if (!p.is_default) {
+      await setActive(p.id);
     }
+    router.push("/portfolio");
   }
 
   async function deletePortfolio(portfolioId: string) {
@@ -232,7 +238,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ portfolio_id: portfolioId }),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok || !json?.ok) throw new Error(json?.error || "Delete failed");
       await refresh();
       showToast("Portfolio deleted ✅");
@@ -247,11 +253,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
     <div className="space-y-4">
       {toast ? <Toast msg={toast} /> : null}
 
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-sm text-slate-600">
-          Default portfolio is used for sizing and opening positions from the Screener.
-          <span className="ml-2 text-slate-500">Tip: click a portfolio row to open it.</span>
-        </div>
+      <div className="flex items-center justify-end">
         <button
           className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
           onClick={openCreate}
@@ -266,99 +268,115 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
           <thead className="text-left text-xs text-slate-500">
             <tr className="border-b border-slate-200">
               <th className="p-3">Name</th>
-              <th className="p-3">Capital</th>
-              <th className="p-3">Risk/Trade</th>
-              <th className="p-3">Max positions</th>
-              <th className="p-3">Default</th>
+              <th className="p-3">Balance</th>
+              <th className="p-3">Deployed</th>
+              <th className="p-3">Open</th>
+              <th className="p-3">Realized P/L</th>
+              <th className="p-3">Active</th>
               <th className="p-3 text-right">Actions</th>
             </tr>
           </thead>
+
           <tbody>
             {portfolios.length === 0 ? (
               <tr>
-                <td className="p-3 text-slate-500" colSpan={6}>
+                <td className="p-3 text-slate-500" colSpan={7}>
                   No portfolios yet.
                 </td>
               </tr>
             ) : (
-              portfolios.map((p) => (
-                <tr
-                  key={p.id}
-                  className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
-                  onClick={() => {
-                    if (busy) return;
-                    openPortfolio(p);
-                  }}
-                  title="Open portfolio"
-                >
-                  <td className="p-3 font-semibold text-slate-900">{p.name ?? "—"}</td>
-                  <td className="p-3 text-slate-800">
-                    {p.account_currency ?? "USD"} {money(p.account_size)}
-                  </td>
-                  <td className="p-3 text-slate-800">{pct(p.risk_per_trade)}</td>
-                  <td className="p-3 text-slate-800">{p.max_positions ?? "—"}</td>
-                  <td className="p-3">
-                    {p.is_default ? (
-                      <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">
-                        Default
-                      </span>
-                    ) : (
-                      <button
-                        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-900 hover:bg-slate-50"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setDefault(p.id);
-                        }}
-                        disabled={busy}
-                      >
-                        Set default
-                      </button>
-                    )}
-                  </td>
-                  <td className="p-3 text-right">
-                    <div className="flex justify-end gap-2">
-                      <button
-                        className="rounded-lg bg-slate-900 px-2 py-1 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          openPortfolio(p);
-                        }}
-                        disabled={busy}
-                        title="Open portfolio dashboard"
-                      >
-                        Open
-                      </button>
+              portfolios.map((p) => {
+                const deployed = p.stats?.deployed ?? 0;
+                const openCount = p.stats?.openCount ?? 0;
+                const realized = p.stats?.realized ?? 0;
+                const plClass =
+                  realized > 0 ? "text-emerald-600" : realized < 0 ? "text-rose-600" : "text-slate-600";
 
-                      <button
-                        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-900 hover:bg-slate-50"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          openEdit(p);
-                        }}
-                        disabled={busy}
-                      >
-                        Edit
-                      </button>
+                return (
+                  <tr
+                    key={p.id}
+                    className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
+                    onClick={() => openPortfolio(p)}
+                  >
+                    <td className="p-3 font-semibold text-slate-900">{p.name ?? "—"}</td>
 
-                      <button
-                        className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          deletePortfolio(p.id);
-                        }}
-                        disabled={busy || p.id === defaultId}
-                        title={p.id === defaultId ? "Set another default before deleting" : "Delete"}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
+                    <td className="p-3 text-slate-800">
+                      {p.account_currency ?? "USD"} {money(p.account_size)}
+                    </td>
+
+                    <td className="p-3 text-slate-800">
+                      {p.account_currency ?? "USD"} {money(deployed)}
+                    </td>
+
+                    <td className="p-3 text-slate-800">{openCount}</td>
+
+                    <td className={`p-3 font-medium ${plClass}`}>
+                      {p.account_currency ?? "USD"} {moneySigned(realized)}
+                    </td>
+
+                    <td className="p-3">
+                      {p.is_default ? (
+                        <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">
+                          Active
+                        </span>
+                      ) : (
+                        <button
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-900 hover:bg-slate-50"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setActive(p.id);
+                          }}
+                          disabled={busy}
+                        >
+                          Set Active
+                        </button>
+                      )}
+                    </td>
+
+                    <td className="p-3 text-right">
+                      <div className="flex justify-end gap-2">
+                        <button
+                          className="rounded-lg bg-slate-900 px-2 py-1 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openPortfolio(p);
+                          }}
+                          disabled={busy}
+                        >
+                          Open
+                        </button>
+
+                        <button
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-900 hover:bg-slate-50"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openEdit(p);
+                          }}
+                          disabled={busy}
+                        >
+                          Edit
+                        </button>
+
+                        <button
+                          className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            deletePortfolio(p.id);
+                          }}
+                          disabled={busy || p.id === defaultId}
+                          title={p.id === defaultId ? "Set another Active portfolio before deleting" : "Delete"}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -392,7 +410,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs text-slate-500">Capital (account size)</label>
+              <label className="text-xs text-slate-500">Balance (account size)</label>
               <input
                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                 value={accountSize}

@@ -31,7 +31,6 @@ type PositionRow = {
   entry_price: number | null;
   exit_price: number | null;
 
-  // legacy/compat fields
   quantity: number | null;
   shares: number | null;
   position_size: number | null;
@@ -53,9 +52,7 @@ export default async function PortfoliosPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) {
-    redirect("/auth?next=/portfolios");
-  }
+  if (!user) redirect("/auth?next=/portfolios");
 
   const { data: portfolios } = await supabase
     .from("portfolios")
@@ -104,29 +101,29 @@ export default async function PortfoliosPage() {
         <div>
           <div className="text-2xl font-semibold tracking-tight">Portfolios</div>
           <div className="text-sm text-slate-600">
-            Click a row to open it. Your <span className="font-medium text-slate-900">Active</span> portfolio is what
-            the Screener uses.
+            Click a row to open it. Your <span className="font-medium text-slate-900">Active</span> portfolio is what the
+            Screener uses.
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           <Link
             href="/portfolio?manualAdd=1"
-            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 whitespace-nowrap"
+            className="select-none inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
           >
             + Add Existing Holding
           </Link>
 
           <Link
             href="/portfolio"
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
+            className="select-none inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
           >
             Open Dashboard
           </Link>
 
           <Link
             href="/screener"
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
+            className="select-none inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
           >
             <span aria-hidden="true">←</span>
             Back to Screener
