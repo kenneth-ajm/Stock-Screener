@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type Portfolio = {
   id: string;
@@ -66,6 +67,7 @@ function Modal({
 }
 
 export default function PortfoliosClient({ initialPortfolios }: { initialPortfolios: Portfolio[] }) {
+  const router = useRouter();
   const [portfolios, setPortfolios] = useState<Portfolio[]>(initialPortfolios);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -208,6 +210,17 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
     }
   }
 
+  async function openPortfolio(p: Portfolio) {
+    // Make click feel instant even if network is slow
+    try {
+      if (!p.is_default) {
+        await setDefault(p.id);
+      }
+    } finally {
+      router.push("/portfolio");
+    }
+  }
+
   async function deletePortfolio(portfolioId: string) {
     const ok = window.confirm("Delete this portfolio? This cannot be undone.");
     if (!ok) return;
@@ -237,6 +250,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm text-slate-600">
           Default portfolio is used for sizing and opening positions from the Screener.
+          <span className="ml-2 text-slate-500">Tip: click a portfolio row to open it.</span>
         </div>
         <button
           className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
@@ -268,7 +282,15 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
               </tr>
             ) : (
               portfolios.map((p) => (
-                <tr key={p.id} className="border-b border-slate-100">
+                <tr
+                  key={p.id}
+                  className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
+                  onClick={() => {
+                    if (busy) return;
+                    openPortfolio(p);
+                  }}
+                  title="Open portfolio"
+                >
                   <td className="p-3 font-semibold text-slate-900">{p.name ?? "—"}</td>
                   <td className="p-3 text-slate-800">
                     {p.account_currency ?? "USD"} {money(p.account_size)}
@@ -283,7 +305,11 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
                     ) : (
                       <button
                         className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-900 hover:bg-slate-50"
-                        onClick={() => setDefault(p.id)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setDefault(p.id);
+                        }}
                         disabled={busy}
                       >
                         Set default
@@ -293,15 +319,37 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
                   <td className="p-3 text-right">
                     <div className="flex justify-end gap-2">
                       <button
+                        className="rounded-lg bg-slate-900 px-2 py-1 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          openPortfolio(p);
+                        }}
+                        disabled={busy}
+                        title="Open portfolio dashboard"
+                      >
+                        Open
+                      </button>
+
+                      <button
                         className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-900 hover:bg-slate-50"
-                        onClick={() => openEdit(p)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          openEdit(p);
+                        }}
                         disabled={busy}
                       >
                         Edit
                       </button>
+
                       <button
                         className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                        onClick={() => deletePortfolio(p.id)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          deletePortfolio(p.id);
+                        }}
                         disabled={busy || p.id === defaultId}
                         title={p.id === defaultId ? "Set another default before deleting" : "Delete"}
                       >
