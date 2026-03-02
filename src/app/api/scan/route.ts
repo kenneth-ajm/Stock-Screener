@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-/* ---------- helpers ---------- */
-
 function sma(values: number[], period: number) {
   if (values.length < period) return null;
   const slice = values.slice(-period);
@@ -45,60 +43,63 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-/* ---------- main ---------- */
-
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
 
-  const universe_slug = body?.universe_slug ?? "core_400";
-  const limit = typeof body?.limit === "number" ? body.limit : 300;
-  const offset = typeof body?.offset === "number" ? body.offset : 0;
+  const universe_slug = (body?.universe_slug ?? "core_400").toString();
+  const limit = typeof body?.limit === "number" ? Math.max(1, Math.min(600, body.limit)) : 300;
+  const offset = typeof body?.offset === "number" ? Math.max(0, body.offset) : 0;
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // get scan date from SPY
-  const { data: spyLatest } = await supabase
+  // scan date from SPY
+  const { data: spyLatest, error: spyErr } = await supabase
     .from("price_bars")
     .select("date")
     .eq("symbol", "SPY")
     .order("date", { ascending: false })
     .limit(1);
 
-  if (!spyLatest?.length) {
-    return NextResponse.json({ ok: false, error: "No SPY data" });
+  if (spyErr || !spyLatest?.length) {
+    return NextResponse.json({ ok: false, error: spyErr?.message || "No SPY data" }, { status: 500 });
   }
 
   const scanDate = spyLatest[0].date;
 
-  // universe members
-  const { data: members } = await supabase
+  // ✅ deterministic slice: ORDER BY symbol + range
+  const from = offset;
+  const to = offset + limit - 1;
+
+  const { data: members, error: memErr } = await supabase
     .from("universe_members")
     .select("symbol, universes!inner(slug)")
     .eq("universes.slug", universe_slug)
-    .eq("active", true);
+    .eq("active", true)
+    .order("symbol", { ascending: true })
+    .range(from, to);
 
-  if (!members?.length) {
-    return NextResponse.json({ ok: false, error: "No universe members" });
+  if (memErr) {
+    return NextResponse.json({ ok: false, error: memErr.message }, { status: 500 });
   }
 
-  const symbols = members.map((m: any) => m.symbol).slice(offset, offset + limit);
+  const symbols = (members ?? []).map((m: any) => String(m.symbol).toUpperCase()).filter(Boolean);
 
   const insertedRows: any[] = [];
   const skipped: any[] = [];
 
   for (const symbol of symbols) {
-    const { data: bars } = await supabase
+    const { data: bars, error: barErr } = await supabase
       .from("price_bars")
       .select("high,low,close,volume,date")
       .eq("symbol", symbol)
       .lte("date", scanDate)
       .order("date", { ascending: true });
 
-    if (!bars || bars.length < 220) {
-      skipped.push({ symbol, reason: "Not enough history" });
+    if (barErr || !bars || bars.length < 220) {
+      skipped.push({ symbol, reason: barErr?.message || "Not enough history" });
       continue;
     }
 
@@ -114,7 +115,7 @@ export async function POST(req: Request) {
     const rsi14 = rsi(closes, 14);
     const atr14 = atr(highs, lows, closes, 14);
 
-    if (!sma50 || !sma200 || !rsi14 || !atr14) {
+    if (!sma50 || !sma200 || rsi14 === null || !atr14) {
       skipped.push({ symbol, reason: "Indicator null" });
       continue;
     }
@@ -137,16 +138,19 @@ export async function POST(req: Request) {
       symbol,
       strategy_version: "v1",
       signal,
-      confidence: score,
+      confidence: Math.round(score),
       entry: latestClose,
       stop: latestClose - 2 * atr14,
     });
   }
 
   if (insertedRows.length) {
-    await supabase.from("daily_scans").upsert(insertedRows, {
+    const { error: upErr } = await supabase.from("daily_scans").upsert(insertedRows, {
       onConflict: "date,universe_slug,symbol,strategy_version",
     });
+    if (upErr) {
+      return NextResponse.json({ ok: false, error: upErr.message }, { status: 500 });
+    }
   }
 
   return NextResponse.json({
