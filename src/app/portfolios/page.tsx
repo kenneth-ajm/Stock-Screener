@@ -25,6 +25,27 @@ async function makeSupabaseServerClient() {
   );
 }
 
+type PositionRow = {
+  portfolio_id: string;
+  status: "OPEN" | "CLOSED" | string;
+  entry_price: number | null;
+  exit_price: number | null;
+
+  // legacy/compat fields
+  quantity: number | null;
+  shares: number | null;
+  position_size: number | null;
+};
+
+function resolveQty(p: PositionRow): number {
+  const v =
+    (typeof p.shares === "number" ? p.shares : null) ??
+    (typeof p.quantity === "number" ? p.quantity : null) ??
+    (typeof p.position_size === "number" ? p.position_size : null) ??
+    0;
+  return Number.isFinite(v) ? v : 0;
+}
+
 export default async function PortfoliosPage() {
   const supabase = await makeSupabaseServerClient();
 
@@ -42,22 +63,65 @@ export default async function PortfoliosPage() {
     .eq("user_id", user.id)
     .order("created_at", { ascending: true });
 
+  const { data: positions } = await supabase
+    .from("portfolio_positions")
+    .select("portfolio_id,status,entry_price,exit_price,quantity,shares,position_size")
+    .eq("user_id", user.id);
+
+  const portfoliosWithStats =
+    portfolios?.map((p: any) => {
+      const related: PositionRow[] = (positions ?? []).filter((pos: any) => pos.portfolio_id === p.id);
+
+      const open = related.filter((r) => r.status === "OPEN");
+      const closed = related.filter((r) => r.status === "CLOSED");
+
+      const deployed = open.reduce((sum, r) => {
+        const qty = resolveQty(r);
+        const entry = typeof r.entry_price === "number" ? r.entry_price : 0;
+        return sum + entry * qty;
+      }, 0);
+
+      const realized = closed.reduce((sum, r) => {
+        const qty = resolveQty(r);
+        const entry = typeof r.entry_price === "number" ? r.entry_price : 0;
+        const exit = typeof r.exit_price === "number" ? r.exit_price : 0;
+        return sum + (exit - entry) * qty;
+      }, 0);
+
+      return {
+        ...p,
+        stats: {
+          deployed,
+          openCount: open.length,
+          realized,
+        },
+      };
+    }) ?? [];
+
   return (
     <div className="mx-auto max-w-6xl p-6 space-y-6 text-slate-900">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-2xl font-semibold tracking-tight">Portfolios</div>
           <div className="text-sm text-slate-600">
-            Create multiple investment journeys with different capital and risk settings.
+            Click a row to open it. Your <span className="font-medium text-slate-900">Active</span> portfolio is what
+            the Screener uses.
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           <Link
+            href="/portfolio?manualAdd=1"
+            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 whitespace-nowrap"
+          >
+            + Add Existing Holding
+          </Link>
+
+          <Link
             href="/portfolio"
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
           >
-            View Positions
+            Open Dashboard
           </Link>
 
           <Link
@@ -70,7 +134,7 @@ export default async function PortfoliosPage() {
         </div>
       </div>
 
-      <PortfoliosClient initialPortfolios={portfolios ?? []} />
+      <PortfoliosClient initialPortfolios={portfoliosWithStats} />
     </div>
   );
 }
