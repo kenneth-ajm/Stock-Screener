@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import PortfoliosClient from "./PortfoliosClient";
 
@@ -25,15 +26,22 @@ async function makeSupabaseServerClient() {
   );
 }
 
+function makeSupabaseAdminClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { persistSession: false } }
+  );
+}
+
 type PositionRow = {
   portfolio_id: string;
   status: "OPEN" | "CLOSED" | string;
   entry_price: number | null;
   exit_price: number | null;
-
-  quantity: number | null;
-  shares: number | null;
-  position_size: number | null;
+  quantity?: number | null;
+  shares?: number | null;
+  position_size?: number | null;
 };
 
 function resolveQty(p: PositionRow): number {
@@ -60,14 +68,23 @@ export default async function PortfoliosPage() {
     .eq("user_id", user.id)
     .order("created_at", { ascending: true });
 
-  const { data: positions } = await supabase
-    .from("portfolio_positions")
-    .select("portfolio_id,status,entry_price,exit_price,quantity,shares,position_size")
-    .eq("user_id", user.id);
+  const portfolioIds = (portfolios ?? []).map((p: any) => p.id).filter(Boolean);
+
+  let positions: PositionRow[] = [];
+  if (portfolioIds.length > 0) {
+    const admin = makeSupabaseAdminClient();
+
+    const { data: pos } = await admin
+      .from("portfolio_positions")
+      .select("portfolio_id,status,entry_price,exit_price,quantity,shares,position_size")
+      .in("portfolio_id", portfolioIds);
+
+    positions = (pos ?? []) as any;
+  }
 
   const portfoliosWithStats =
-    portfolios?.map((p: any) => {
-      const related: PositionRow[] = (positions ?? []).filter((pos: any) => pos.portfolio_id === p.id);
+    (portfolios ?? []).map((p: any) => {
+      const related = positions.filter((x) => x.portfolio_id === p.id);
 
       const open = related.filter((r) => r.status === "OPEN");
       const closed = related.filter((r) => r.status === "CLOSED");
@@ -131,7 +148,7 @@ export default async function PortfoliosPage() {
         </div>
       </div>
 
-      <PortfoliosClient initialPortfolios={portfoliosWithStats} />
+      <PortfoliosClient initialPortfolios={portfoliosWithStats as any} />
     </div>
   );
 }

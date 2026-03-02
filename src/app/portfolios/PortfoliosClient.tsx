@@ -34,7 +34,9 @@ function moneySigned(v: number | null | undefined) {
 function Toast({ msg }: { msg: string }) {
   return (
     <div className="fixed bottom-5 right-5 z-50">
-      <div className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl">{msg}</div>
+      <div className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl">
+        {msg}
+      </div>
     </div>
   );
 }
@@ -74,8 +76,8 @@ function Modal({
 
 export default function PortfoliosClient({ initialPortfolios }: { initialPortfolios: Portfolio[] }) {
   const router = useRouter();
+  const portfolios = initialPortfolios;
 
-  const [portfolios, setPortfolios] = useState<Portfolio[]>(initialPortfolios);
   const [toast, setToast] = useState<string | null>(null);
 
   const defaultId = useMemo(() => portfolios.find((p) => p.is_default)?.id ?? null, [portfolios]);
@@ -83,7 +85,6 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
   const [modalOpen, setModalOpen] = useState<"create" | "edit" | null>(null);
   const [editing, setEditing] = useState<Portfolio | null>(null);
 
-  // form state
   const [name, setName] = useState("Main");
   const [currency, setCurrency] = useState("USD");
   const [accountSize, setAccountSize] = useState("11000");
@@ -126,13 +127,6 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
     setError(null);
   }
 
-  async function refresh() {
-    // If your project doesn’t actually have this endpoint, tell me and we’ll remove refresh() entirely.
-    const res = await fetch("/api/portfolios/list");
-    const json = await res.json().catch(() => null);
-    if (json?.ok) setPortfolios(json.portfolios ?? []);
-  }
-
   async function createPortfolio() {
     setBusy(true);
     setError(null);
@@ -155,9 +149,9 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.ok) throw new Error(json?.error || "Create failed");
 
-      await refresh();
       showToast("Portfolio created ✅");
       closeModal();
+      router.refresh();
     } catch (e: any) {
       setError(e?.message ?? "Create failed");
     } finally {
@@ -189,9 +183,9 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.ok) throw new Error(json?.error || "Update failed");
 
-      await refresh();
       showToast("Portfolio updated ✅");
       closeModal();
+      router.refresh();
     } catch (e: any) {
       setError(e?.message ?? "Update failed");
     } finally {
@@ -199,7 +193,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
     }
   }
 
-  async function setActive(portfolioId: string) {
+  async function setActive(portfolioId: string, opts?: { silent?: boolean }) {
     setBusy(true);
     try {
       const res = await fetch("/api/portfolios/set-default", {
@@ -210,8 +204,10 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.ok) throw new Error(json?.error || "Set active failed");
 
-      await refresh();
-      showToast("Active portfolio updated ✅");
+      if (!opts?.silent) {
+        showToast("Active portfolio updated ✅");
+        router.refresh();
+      }
     } catch (e: any) {
       showToast(e?.message ?? "Set active failed");
     } finally {
@@ -222,7 +218,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
   async function openPortfolio(p: Portfolio) {
     if (busy) return;
     if (!p.is_default) {
-      await setActive(p.id);
+      await setActive(p.id, { silent: true });
     }
     router.push("/portfolio");
   }
@@ -240,8 +236,9 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
       });
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.ok) throw new Error(json?.error || "Delete failed");
-      await refresh();
+
       showToast("Portfolio deleted ✅");
+      router.refresh();
     } catch (e: any) {
       showToast(e?.message ?? "Delete failed");
     } finally {
