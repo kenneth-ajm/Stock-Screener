@@ -16,6 +16,12 @@ function fmt2(n: number | null | undefined) {
   return n.toFixed(2);
 }
 
+function fmtMoney(n: number | null | undefined) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  const sign = n > 0 ? "+" : "";
+  return `${sign}$${n.toFixed(2)}`;
+}
+
 function fmtPct(p: number | null | undefined) {
   if (typeof p !== "number" || !Number.isFinite(p)) return "—";
   const sign = p > 0 ? "+" : "";
@@ -25,7 +31,9 @@ function fmtPct(p: number | null | undefined) {
 function chipClass(active: boolean) {
   return [
     "rounded-full border px-3 py-1.5 text-xs font-semibold tracking-wide",
-    active ? "border-slate-300 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50",
+    active
+      ? "border-slate-300 bg-slate-900 text-white"
+      : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50",
   ].join(" ");
 }
 
@@ -52,37 +60,63 @@ function Toast({ msg }: { msg: string }) {
 function Modal({
   open,
   title,
+  subtitle,
   children,
   onClose,
 }: {
   open: boolean;
   title: string;
+  subtitle?: string;
   children: React.ReactNode;
   onClose: () => void;
 }) {
   if (!open) return null;
 
+  // lock scroll behind modal
+  // (simple approach)
+  if (typeof document !== "undefined") document.body.style.overflow = "hidden";
+
   return (
     <div className="fixed inset-0 z-[9999]">
       <div
         className="absolute inset-0 bg-black/40"
-        onClick={onClose}
+        onClick={() => {
+          if (typeof document !== "undefined") document.body.style.overflow = "";
+          onClose();
+        }}
         aria-hidden="true"
       />
-      <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="relative z-[10000] w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
-          <div className="flex items-start justify-between gap-3">
-            <div className="text-base font-semibold text-slate-900">{title}</div>
+      {/* pin near top so you don't "lose" it */}
+      <div className="absolute inset-0 flex items-start justify-center p-4 pt-10">
+        <div className="relative z-[10000] w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
+            <div>
+              <div className="text-base font-semibold text-slate-900">{title}</div>
+              {subtitle ? <div className="mt-1 text-xs text-slate-500">{subtitle}</div> : null}
+            </div>
             <button
               className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 hover:bg-slate-50"
-              onClick={onClose}
+              onClick={() => {
+                if (typeof document !== "undefined") document.body.style.overflow = "";
+                onClose();
+              }}
             >
               Close
             </button>
           </div>
-          <div className="mt-4">{children}</div>
+
+          <div className="p-4 max-h-[70vh] overflow-auto">{children}</div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function KV({ k, v }: { k: string; v: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <div className="text-xs font-medium text-slate-500">{k}</div>
+      <div className="text-sm font-semibold text-slate-900">{v}</div>
     </div>
   );
 }
@@ -90,20 +124,19 @@ function Modal({
 export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanDate: string }) {
   const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY+WATCH");
 
-  // live quotes state
   const [quotes, setQuotes] = useState<Record<string, number | null>>({});
   const [quoteBusy, setQuoteBusy] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [auto, setAuto] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
 
-  // action modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTitle, setModalTitle] = useState("");
+  const [modalSubtitle, setModalSubtitle] = useState<string | undefined>(undefined);
   const [modalJson, setModalJson] = useState<any>(null);
+  const [modalKind, setModalKind] = useState<"CALC" | "OPEN" | "WHY" | "GENERIC">("GENERIC");
   const [modalBusy, setModalBusy] = useState(false);
 
-  // toast fallback (so you always get feedback)
   const [toast, setToast] = useState<string | null>(null);
   function showToast(msg: string) {
     setToast(msg);
@@ -185,8 +218,10 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auto, symbolsToQuote.join("|")]);
 
-  function openModal(title: string, payload: any) {
+  function openModal(kind: typeof modalKind, title: string, payload: any, subtitle?: string) {
+    setModalKind(kind);
     setModalTitle(title);
+    setModalSubtitle(subtitle);
     setModalJson(payload);
     setModalOpen(true);
   }
@@ -205,9 +240,9 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         }),
       });
       const json = await res.json().catch(() => null);
-      openModal(`Calc position size: ${row.symbol}`, json ?? { ok: false, error: "No response" });
+      openModal("CALC", `Position sizing: ${row.symbol}`, json ?? { ok: false, error: "No response" }, "Uses your active portfolio risk settings.");
     } catch (e: any) {
-      openModal(`Calc position size: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
+      openModal("CALC", `Position sizing: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
     } finally {
       setModalBusy(false);
     }
@@ -227,9 +262,9 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         }),
       });
       const json = await res.json().catch(() => null);
-      openModal(`Open position: ${row.symbol}`, json ?? { ok: false, error: "No response" });
+      openModal("OPEN", `Open position: ${row.symbol}`, json ?? { ok: false, error: "No response" });
     } catch (e: any) {
-      openModal(`Open position: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
+      openModal("OPEN", `Open position: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
     } finally {
       setModalBusy(false);
     }
@@ -250,12 +285,120 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         }),
       });
       const json = await res.json().catch(() => null);
-      openModal(`Why: ${row.symbol}`, json ?? { ok: false, error: "No response" });
+      openModal("WHY", `Why: ${row.symbol}`, json ?? { ok: false, error: "No response" });
     } catch (e: any) {
-      openModal(`Why: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
+      openModal("WHY", `Why: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
     } finally {
       setModalBusy(false);
     }
+  }
+
+  function renderModalBody() {
+    const j = modalJson ?? {};
+    const ok = !!j?.ok;
+    const err = j?.error ?? j?.message ?? null;
+
+    if (!ok) {
+      return (
+        <div className="space-y-3">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+            <div className="font-semibold">Action failed</div>
+            <div className="mt-1">{String(err ?? "Unknown error")}</div>
+          </div>
+
+          <details className="rounded-xl border border-slate-200 bg-white p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-900">Raw response</summary>
+            <pre className="mt-2 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
+{JSON.stringify(j, null, 2)}
+            </pre>
+          </details>
+        </div>
+      );
+    }
+
+    if (modalKind === "CALC") {
+      // best-effort display (we don't assume exact keys)
+      const shares =
+        j?.shares ?? j?.qty ?? j?.quantity ?? j?.size ?? j?.position_size ?? null;
+
+      const riskUsd = j?.risk_usd ?? j?.riskUsd ?? j?.max_loss ?? null;
+      const entry = j?.entry ?? j?.entry_price ?? null;
+      const stop = j?.stop ?? j?.stop_price ?? null;
+
+      return (
+        <div className="space-y-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <KV k="Suggested shares" v={shares !== null ? String(shares) : "—"} />
+            <KV k="Max risk (USD)" v={riskUsd !== null ? fmtMoney(Number(riskUsd)) : "—"} />
+            <KV k="Entry" v={entry !== null ? fmt2(Number(entry)) : "—"} />
+            <KV k="Stop" v={stop !== null ? fmt2(Number(stop)) : "—"} />
+          </div>
+
+          <details className="rounded-xl border border-slate-200 bg-white p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-900">Raw response</summary>
+            <pre className="mt-2 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
+{JSON.stringify(j, null, 2)}
+            </pre>
+          </details>
+        </div>
+      );
+    }
+
+    if (modalKind === "WHY") {
+      const summary = j?.reason_summary ?? j?.summary ?? null;
+      const checks = j?.reason_json?.checks ?? j?.checks ?? null;
+
+      return (
+        <div className="space-y-3">
+          {summary ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+              <div className="text-xs text-slate-500">Summary</div>
+              <div className="mt-1 font-semibold">{String(summary)}</div>
+            </div>
+          ) : null}
+
+          {Array.isArray(checks) ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="text-sm font-semibold text-slate-900">Checks</div>
+              <div className="mt-2 space-y-2">
+                {checks.slice(0, 12).map((c: any, idx: number) => (
+                  <div key={idx} className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-sm font-medium text-slate-900">{c?.label ?? "Check"}</div>
+                    <div className={clsx("text-xs font-semibold", c?.ok ? "text-emerald-600" : "text-rose-600")}>
+                      {c?.ok ? "PASS" : "FAIL"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <details className="rounded-xl border border-slate-200 bg-white p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-900">Raw response</summary>
+            <pre className="mt-2 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
+{JSON.stringify(j, null, 2)}
+            </pre>
+          </details>
+        </div>
+      );
+    }
+
+    // OPEN + generic
+    return (
+      <div className="space-y-3">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+          <div className="font-semibold">Success</div>
+          <div className="mt-1">Action completed.</div>
+        </div>
+
+        <details className="rounded-xl border border-slate-200 bg-white p-3">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Raw response</summary>
+          <pre className="mt-2 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
+{JSON.stringify(j, null, 2)}
+          </pre>
+        </details>
+      </div>
+    );
   }
 
   return (
@@ -383,7 +526,9 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                       <td className="p-3 text-slate-800">{Number(r.stop).toFixed(2)}</td>
 
                       <td className="p-3 text-slate-800">{typeof live === "number" ? fmt2(live) : "—"}</td>
-                      <td className={clsx("p-3 font-semibold", dEntryClass)}>{typeof dEntry === "number" ? fmtPct(dEntry) : "—"}</td>
+                      <td className={clsx("p-3 font-semibold", dEntryClass)}>
+                        {typeof dEntry === "number" ? fmtPct(dEntry) : "—"}
+                      </td>
 
                       <td className="p-3">
                         <div className="flex justify-end gap-2 whitespace-nowrap">
@@ -411,10 +556,13 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         </div>
       </div>
 
-      <Modal open={modalOpen} title={modalTitle} onClose={() => setModalOpen(false)}>
-        <pre className="max-h-[420px] overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
-{JSON.stringify(modalJson, null, 2)}
-        </pre>
+      <Modal
+        open={modalOpen}
+        title={modalTitle}
+        subtitle={modalSubtitle}
+        onClose={() => setModalOpen(false)}
+      >
+        {renderModalBody()}
       </Modal>
     </div>
   );
