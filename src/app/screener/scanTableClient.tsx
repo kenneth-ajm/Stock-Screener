@@ -1,666 +1,254 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
-import { Badge } from "@/components/ui/Badge";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
-
-type Signal = "BUY" | "WATCH" | "AVOID";
 
 type Row = {
   symbol: string;
-  signal: Signal;
+  signal: "BUY" | "WATCH" | "AVOID";
   confidence: number;
-  entry: number | null;
-  stop: number | null;
-  tp1: number | null;
-  tp2: number | null;
-};
-
-type WhyData = {
-  symbol: string;
-  signal: Signal;
-  confidence: number;
-  reason_summary: string | null;
-  reason_json: any;
-};
-
-type Plan = {
-  symbol: string;
-  signal: Signal;
   entry: number;
   stop: number;
-  tp1: number | null;
-  tp2: number | null;
-  shares: number;
-  riskAmount: number;
-  positionValue: number;
-  currency: string;
 };
 
-type Ticket = {
-  symbol: string;
-  signal: Signal;
-  currency: string;
-  plannedEntry: number;
-  plannedStop: number;
-  plannedShares: number;
-  entryPrice: string;
-  stop: string;
-  shares: string;
-};
-
-type Filter = "BUY_WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL";
-
-function filterLabel(f: Filter) {
-  if (f === "BUY_WATCH") return "BUY + WATCH";
-  return f;
+function fmt2(n: number | null | undefined) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  return n.toFixed(2);
 }
 
-function variant(signal: Signal): "buy" | "watch" | "avoid" {
-  if (signal === "BUY") return "buy";
-  if (signal === "WATCH") return "watch";
-  return "avoid";
+function fmtPct(p: number | null | undefined) {
+  if (typeof p !== "number" || !Number.isFinite(p)) return "—";
+  const sign = p > 0 ? "+" : "";
+  return `${sign}${(p * 100).toFixed(1)}%`;
 }
 
-function fmt(n: number | null | undefined) {
-  if (n == null || !Number.isFinite(n)) return "-";
-  return Number(n).toFixed(2);
-}
+export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanDate: string }) {
+  const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY+WATCH");
 
-function money(value: number, currency = "USD") {
-  if (!Number.isFinite(value)) return "-";
-  return `${currency} ${value.toFixed(2)}`;
-}
+  // live quotes state
+  const [quotes, setQuotes] = useState<Record<string, number | null>>({});
+  const [quoteBusy, setQuoteBusy] = useState(false);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [auto, setAuto] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
 
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50/60 px-4 py-3">
-      <div className="text-xs uppercase tracking-wide muted">{label}</div>
-      <div className="mt-1 text-base font-semibold">{value}</div>
-    </div>
-  );
-}
-
-function CheckLine({
-  ok,
-  label,
-  detail,
-}: {
-  ok: boolean;
-  label: string;
-  detail?: string;
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <div
-        className={[
-          "mt-0.5 h-5 w-5 rounded-full flex items-center justify-center text-xs font-bold",
-          ok ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800",
-        ].join(" ")}
-      >
-        {ok ? "✓" : "×"}
-      </div>
-      <div>
-        <div className="text-sm font-medium">{label}</div>
-        {detail ? <div className="text-sm muted">{detail}</div> : null}
-      </div>
-    </div>
-  );
-}
-
-export default function ScanTableClient({
-  rows,
-  scanDate,
-}: {
-  rows: Row[];
-  scanDate: string;
-}) {
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
-
-  const [filter, setFilter] = useState<Filter>("BUY_WATCH");
-  const [expanded, setExpanded] = useState<string | null>(null);
-
-  const [plan, setPlan] = useState<Plan | null>(null);
-  const [ticket, setTicket] = useState<Ticket | null>(null);
-
-  const [why, setWhy] = useState<WhyData | null>(null);
-
-  const filteredRows = useMemo(() => {
-    const base =
-      filter === "BUY"
-        ? rows.filter((r) => r.signal === "BUY")
-        : filter === "WATCH"
-        ? rows.filter((r) => r.signal === "WATCH")
-        : filter === "AVOID"
-        ? rows.filter((r) => r.signal === "AVOID")
-        : filter === "BUY_WATCH"
-        ? rows.filter((r) => r.signal === "BUY" || r.signal === "WATCH")
-        : rows;
-
-    // BUY pinned to top, then confidence desc
-    return [...base].sort((a, b) => {
-      if (a.signal === "BUY" && b.signal !== "BUY") return -1;
-      if (b.signal === "BUY" && a.signal !== "BUY") return 1;
-      return (b.confidence ?? 0) - (a.confidence ?? 0);
-    });
+  const filtered = useMemo(() => {
+    const r = rows ?? [];
+    if (filter === "ALL") return r;
+    if (filter === "BUY+WATCH") return r.filter((x) => x.signal === "BUY" || x.signal === "WATCH");
+    return r.filter((x) => x.signal === filter);
   }, [rows, filter]);
 
-  const signalCounts = useMemo(() => {
-    return rows.reduce(
-      (acc, row) => {
-        acc[row.signal] += 1;
-        return acc;
-      },
-      { BUY: 0, WATCH: 0, AVOID: 0 } as Record<Signal, number>
-    );
-  }, [rows]);
+  const counts = useMemo(() => {
+    const r = rows ?? [];
+    return {
+      total: r.length,
+      buy: r.filter((x) => x.signal === "BUY").length,
+      watch: r.filter((x) => x.signal === "WATCH").length,
+      avoid: r.filter((x) => x.signal === "AVOID").length,
+      showing: filtered.length,
+    };
+  }, [rows, filtered]);
 
-  async function loadWhy(symbol: string) {
-    setMsg(null);
-    setBusyKey(`why-${symbol}`);
+  const symbolsToQuote = useMemo(() => {
+    const syms = filtered.map((r) => (r.symbol ?? "").trim().toUpperCase()).filter(Boolean);
+    return Array.from(new Set(syms)).slice(0, 50);
+  }, [filtered]);
+
+  async function refreshQuotes() {
+    if (symbolsToQuote.length === 0) return;
     try {
-      const res = await fetch(
-        `/api/why?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(
-          scanDate
-        )}`
-      );
-      const json = await res.json().catch(() => null);
+      setQuoteBusy(true);
+      setQuoteError(null);
 
-      if (!res.ok || !json?.ok) {
-        setMsg(`${symbol}: ${json?.error || `Failed (${res.status})`}`);
-        return;
-      }
-
-      setWhy(json.row as WhyData);
-    } catch {
-      setMsg(`${symbol}: Failed to fetch explanation`);
-    } finally {
-      setBusyKey(null);
-    }
-  }
-
-  async function calculatePlan(row: Row): Promise<Plan | null> {
-    if (row.entry == null || row.stop == null) {
-      setMsg(`${row.symbol}: Missing entry or stop.`);
-      return null;
-    }
-
-    setMsg(null);
-    setBusyKey(`size-${row.symbol}`);
-
-    try {
-      const res = await fetch("/api/position-size", {
+      const res = await fetch("/api/quotes", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entry: row.entry, stop: row.stop }),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ symbols: symbolsToQuote }),
       });
 
       const json = await res.json().catch(() => null);
-
       if (!res.ok || !json?.ok) {
-        setMsg(`${row.symbol}: ${json?.error || `Failed (${res.status})`}`);
-        return null;
+        throw new Error(json?.error || "Quote fetch failed.");
       }
 
-      const nextPlan: Plan = {
-        symbol: row.symbol,
-        signal: row.signal,
-        entry: row.entry,
-        stop: row.stop,
-        tp1: row.tp1 ?? null,
-        tp2: row.tp2 ?? null,
-        shares: Number(json.shares),
-        riskAmount: Number(json.risk_amount),
-        positionValue: Number(json.position_value),
-        currency: String(json.account_currency ?? "USD"),
-      };
-
-      setPlan(nextPlan);
-      return nextPlan;
-    } catch {
-      setMsg(`${row.symbol}: Failed to fetch sizing.`);
-      return null;
+      setQuotes((prev) => ({ ...prev, ...(json.quotes ?? {}) }));
+      setLastUpdatedAt(Date.now());
+    } catch (e: any) {
+      setQuoteError(e?.message ?? "Quote fetch failed.");
     } finally {
-      setBusyKey(null);
+      setQuoteBusy(false);
     }
   }
 
-  function openTicketFromPlan(nextPlan: Plan) {
-    setTicket({
-      symbol: nextPlan.symbol,
-      signal: nextPlan.signal,
-      currency: nextPlan.currency,
-      plannedEntry: nextPlan.entry,
-      plannedStop: nextPlan.stop,
-      plannedShares: nextPlan.shares,
-      entryPrice: nextPlan.entry.toFixed(2),
-      stop: nextPlan.stop.toFixed(2),
-      shares: String(nextPlan.shares),
-    });
-    setMsg(null);
-  }
+  // Refresh quotes when filter changes (and on first render)
+  useEffect(() => {
+    refreshQuotes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter]);
 
-  async function handleOpen(row: Row) {
-    const existingPlan =
-      plan?.symbol === row.symbol ? plan : await calculatePlan(row);
-    if (!existingPlan) return;
-    openTicketFromPlan(existingPlan);
-  }
-
-  async function saveTicket() {
-    if (!ticket) return;
-
-    const entryPrice = Number(ticket.entryPrice);
-    const stop = Number(ticket.stop);
-    const shares = Number(ticket.shares);
-
-    if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
-      setMsg(`${ticket.symbol}: Enter a valid entry price.`);
-      return;
-    }
-    if (!Number.isFinite(stop) || stop <= 0) {
-      setMsg(`${ticket.symbol}: Enter a valid stop.`);
-      return;
-    }
-    if (entryPrice <= stop) {
-      setMsg(`${ticket.symbol}: Entry must be above stop.`);
-      return;
-    }
-    if (!Number.isFinite(shares) || shares <= 0) {
-      setMsg(`${ticket.symbol}: Enter a valid share quantity.`);
-      return;
-    }
-
-    setMsg(null);
-    setBusyKey(`save-${ticket.symbol}`);
-
-    try {
-      const res = await fetch("/api/positions/add", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbol: ticket.symbol,
-          entry_price: entryPrice,
-          stop,
-          shares,
-        }),
-      });
-
-      const json = await res.json().catch(() => null);
-
-      if (!res.ok || !json?.ok) {
-        setMsg(`${ticket.symbol}: ${json?.error || `Failed (${res.status})`}`);
-        return;
-      }
-
-      setMsg(`${ticket.symbol}: Position saved to portfolio ✅`);
-      setTicket(null);
-    } catch {
-      setMsg(`${ticket.symbol}: Failed to save position.`);
-    } finally {
-      setBusyKey(null);
-    }
-  }
-
-  function toggleExpanded(symbol: string) {
-    setExpanded((prev) => (prev === symbol ? null : symbol));
-    setWhy(null); // clear previous Why, user can load again for the expanded row
-  }
-
-  const actualEntry = ticket ? Number(ticket.entryPrice) : NaN;
-  const actualStop = ticket ? Number(ticket.stop) : NaN;
-  const actualShares = ticket ? Number(ticket.shares) : NaN;
-
-  const actualPositionValue =
-    Number.isFinite(actualEntry) && Number.isFinite(actualShares)
-      ? actualEntry * actualShares
-      : NaN;
-
-  const actualRisk =
-    Number.isFinite(actualEntry) &&
-    Number.isFinite(actualStop) &&
-    Number.isFinite(actualShares)
-      ? Math.max((actualEntry - actualStop) * actualShares, 0)
-      : NaN;
+  // Auto refresh every 15s
+  useEffect(() => {
+    if (!auto) return;
+    const t = setInterval(() => {
+      refreshQuotes();
+    }, 15000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auto, symbolsToQuote.join("|")]);
 
   return (
-    <div>
-      {/* Filters + confidence explainer */}
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-2">
-          {(["BUY_WATCH", "BUY", "WATCH", "AVOID", "ALL"] as Filter[]).map((f) => (
+    <div className="space-y-4">
+      {/* Chips wrap on mobile */}
+      <div className="flex flex-wrap gap-2">
+        <button className={`chip ${filter === "BUY+WATCH" ? "chip-active" : ""}`} onClick={() => setFilter("BUY+WATCH")}>
+          BUY + WATCH
+        </button>
+        <button className={`chip ${filter === "BUY" ? "chip-active" : ""}`} onClick={() => setFilter("BUY")}>
+          BUY
+        </button>
+        <button className={`chip ${filter === "WATCH" ? "chip-active" : ""}`} onClick={() => setFilter("WATCH")}>
+          WATCH
+        </button>
+        <button className={`chip ${filter === "AVOID" ? "chip-active" : ""}`} onClick={() => setFilter("AVOID")}>
+          AVOID
+        </button>
+        <button className={`chip ${filter === "ALL" ? "chip-active" : ""}`} onClick={() => setFilter("ALL")}>
+          ALL
+        </button>
+      </div>
+
+      <div className="text-sm muted">
+        Confidence is a 0–100 score from trend alignment (SMA), RSI, volume confirmation, and extension penalties (regime may downgrade).
+      </div>
+
+      {/* Summary cards stack nicely */}
+      <div className="grid gap-3 sm:grid-cols-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-xs text-slate-500">SHOWING</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{counts.showing}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-xs text-slate-500">BUY</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{counts.buy}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-xs text-slate-500">WATCH</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{counts.watch}</div>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-xs text-slate-500">AVOID</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{counts.avoid}</div>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        {/* Live controls */}
+        <div className="flex flex-col gap-2 border-b border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs text-slate-500">
+            Live prices overlay (signals remain daily).{" "}
+            <span className="text-slate-400">Scan date: {scanDate}</span>
+            {lastUpdatedAt ? (
+              <span className="ml-2 text-slate-400">Updated: {new Date(lastUpdatedAt).toLocaleTimeString()}</span>
+            ) : null}
+          </div>
+
+          <div className="flex items-center gap-2">
             <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={[
-                "rounded-full px-3 py-1 text-sm border shadow-sm",
-                filter === f
-                  ? "bg-slate-900 text-white border-slate-900"
-                  : "bg-white border-slate-200 hover:bg-slate-50",
-              ].join(" ")}
+              className={`rounded-xl border px-3 py-1.5 text-xs font-medium ${
+                auto ? "border-slate-300 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50"
+              }`}
+              onClick={() => setAuto((v) => !v)}
+              disabled={quoteBusy}
+              title="Auto-refresh live prices every 15 seconds"
             >
-              {filterLabel(f)}
+              Auto
             </button>
-          ))}
-        </div>
 
-        <div className="text-sm muted">
-          <span className="font-semibold">Confidence</span> is a 0–100 score from
-          trend alignment (SMA), RSI, volume confirmation, and extension
-          penalties (regime may downgrade).
-        </div>
-      </div>
-
-      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Showing" value={`${filteredRows.length} rows`} />
-        <StatCard label="Buy" value={String(signalCounts.BUY)} />
-        <StatCard label="Watch" value={String(signalCounts.WATCH)} />
-        <StatCard label="Avoid" value={String(signalCounts.AVOID)} />
-      </div>
-
-      {msg ? (
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm">
-          {msg}
-        </div>
-      ) : null}
-
-      {/* Recommended plan */}
-      {plan ? (
-        <div className="mb-4 rounded-3xl border border-slate-200 bg-white px-5 py-5 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="text-sm muted">Recommended trade plan</div>
-              <div className="mt-1 flex items-center gap-3">
-                <div className="text-2xl font-semibold">{plan.symbol}</div>
-                <Badge variant={variant(plan.signal)}>{plan.signal}</Badge>
-              </div>
-              <div className="mt-2 text-sm muted">
-                Suggested size based on your portfolio risk rules.
-              </div>
-            </div>
-
-            <div className="flex gap-2">
-              <Button variant="primary" onClick={() => openTicketFromPlan(plan)}>
-                Open position
-              </Button>
-              <Button variant="secondary" onClick={() => setPlan(null)}>
-                Dismiss
-              </Button>
-            </div>
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-            <StatCard label="Entry" value={plan.entry.toFixed(2)} />
-            <StatCard label="Stop" value={plan.stop.toFixed(2)} />
-            <StatCard label="TP1" value={plan.tp1 == null ? "-" : plan.tp1.toFixed(2)} />
-            <StatCard label="TP2" value={plan.tp2 == null ? "-" : plan.tp2.toFixed(2)} />
-            <StatCard label="Shares" value={String(plan.shares)} />
-            <StatCard label="Capital" value={money(plan.positionValue, plan.currency)} />
-          </div>
-
-          <div className="mt-3 text-sm muted">
-            Planned risk:{" "}
-            <span className="font-semibold">
-              {money(plan.riskAmount, plan.currency)}
-            </span>
+            <Button variant="secondary" onClick={refreshQuotes} disabled={quoteBusy || symbolsToQuote.length === 0}>
+              {quoteBusy ? "Refreshing..." : "Refresh prices"}
+            </Button>
           </div>
         </div>
-      ) : null}
 
-      {/* Trade ticket */}
-      {ticket ? (
-        <div className="mb-4 rounded-3xl border border-slate-200 bg-white px-5 py-5 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="text-sm muted">Open position ticket</div>
-              <div className="mt-1 flex items-center gap-3">
-                <div className="text-2xl font-semibold">{ticket.symbol}</div>
-                <Badge variant={variant(ticket.signal)}>{ticket.signal}</Badge>
-              </div>
-              <div className="mt-2 text-sm muted">
-                Edit these fields to reflect your actual buy.
-              </div>
-            </div>
+        {quoteError ? (
+          <div className="px-3 py-2 text-xs text-rose-600 border-b border-slate-200">{quoteError}</div>
+        ) : null}
 
-            <div className="flex gap-2">
-              <Button
-                variant="primary"
-                disabled={busyKey === `save-${ticket.symbol}`}
-                onClick={saveTicket}
-              >
-                {busyKey === `save-${ticket.symbol}` ? "Saving..." : "Save to portfolio"}
-              </Button>
-              <Button variant="secondary" onClick={() => setTicket(null)}>
-                Cancel
-              </Button>
-            </div>
-          </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-[900px] w-full text-sm">
+            <thead className="text-left text-xs text-slate-500">
+              <tr className="border-b border-slate-200">
+                <th className="p-3">SYMBOL</th>
+                <th className="p-3">SIGNAL</th>
+                <th className="p-3">CONF</th>
+                <th className="p-3">ENTRY</th>
+                <th className="p-3">STOP</th>
+                <th className="p-3">LIVE</th>
+                <th className="p-3">Δ vs ENTRY</th>
+                <th className="p-3">Δ vs CLOSE</th>
+                <th className="p-3 text-right">ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr>
+                  <td className="p-3 text-slate-500" colSpan={9}>
+                    No rows for this filter.
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((r) => {
+                  const sym = r.symbol.trim().toUpperCase();
+                  const live = quotes?.[sym] ?? null;
 
-          <div className="mt-4 grid gap-4 md:grid-cols-3">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Actual entry price</label>
-              <input
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm ring-1 ring-black/5 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                value={ticket.entryPrice}
-                onChange={(e) =>
-                  setTicket((prev) =>
-                    prev ? { ...prev, entryPrice: e.target.value } : prev
-                  )
-                }
-                inputMode="decimal"
-              />
-            </div>
+                  const entry = Number(r.entry);
+                  const close = Number(r.entry); // we don’t have scan close here; use ENTRY as baseline unless you add it to Row
+                  // (If you want true scan close, we’ll add a `close` field to Row from daily_scans later.)
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Actual stop</label>
-              <input
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm ring-1 ring-black/5 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                value={ticket.stop}
-                onChange={(e) =>
-                  setTicket((prev) => (prev ? { ...prev, stop: e.target.value } : prev))
-                }
-                inputMode="decimal"
-              />
-            </div>
+                  const dEntry = typeof live === "number" && Number.isFinite(live) ? (live - entry) / entry : null;
+                  const dClose = typeof live === "number" && Number.isFinite(live) ? (live - close) / close : null;
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Actual shares</label>
-              <input
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm ring-1 ring-black/5 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                value={ticket.shares}
-                onChange={(e) =>
-                  setTicket((prev) => (prev ? { ...prev, shares: e.target.value } : prev))
-                }
-                inputMode="numeric"
-              />
-            </div>
-          </div>
+                  const dEntryClass =
+                    typeof dEntry === "number" ? (dEntry > 0 ? "text-emerald-600" : dEntry < 0 ? "text-rose-600" : "text-slate-600") : "text-slate-500";
+                  const dCloseClass =
+                    typeof dClose === "number" ? (dClose > 0 ? "text-emerald-600" : dClose < 0 ? "text-rose-600" : "text-slate-600") : "text-slate-500";
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <StatCard label="Recommended entry" value={ticket.plannedEntry.toFixed(2)} />
-            <StatCard label="Recommended stop" value={ticket.plannedStop.toFixed(2)} />
-            <StatCard label="Recommended shares" value={String(ticket.plannedShares)} />
-            <StatCard label="Actual capital" value={money(actualPositionValue, ticket.currency)} />
-            <StatCard label="Actual risk" value={money(actualRisk, ticket.currency)} />
-          </div>
-        </div>
-      ) : null}
+                  return (
+                    <tr key={r.symbol} className="border-b border-slate-100">
+                      <td className="p-3 font-semibold text-slate-900">{r.symbol}</td>
+                      <td className="p-3">
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700">
+                          {r.signal}
+                        </span>
+                      </td>
+                      <td className="p-3 text-slate-800">{r.confidence}</td>
+                      <td className="p-3 text-slate-800">{Number(r.entry).toFixed(2)}</td>
+                      <td className="p-3 text-slate-800">{Number(r.stop).toFixed(2)}</td>
 
-      {/* Screener table (fixed columns, no overlap) */}
-      <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-        <table className="w-full table-fixed border-collapse">
-          <colgroup>
-            <col className="w-[12%]" />
-            <col className="w-[14%]" />
-            <col className="w-[10%]" />
-            <col className="w-[12%]" />
-            <col className="w-[12%]" />
-            <col className="w-[40%]" />
-          </colgroup>
-          <thead>
-            <tr className="border-b border-slate-200 bg-white text-xs font-semibold uppercase tracking-wide muted">
-              <th className="px-4 py-3 text-left">Symbol</th>
-              <th className="px-2 py-3 text-left">Signal</th>
-              <th className="px-2 py-3 text-right">Confidence</th>
-              <th className="px-2 py-3 text-right">Entry</th>
-              <th className="px-2 py-3 text-right">Stop</th>
-              <th className="px-4 py-3 text-right">Actions</th>
-            </tr>
-          </thead>
+                      <td className="p-3 text-slate-800">{typeof live === "number" ? fmt2(live) : "—"}</td>
+                      <td className={`p-3 font-medium ${dEntryClass}`}>{typeof dEntry === "number" ? fmtPct(dEntry) : "—"}</td>
+                      <td className={`p-3 font-medium ${dCloseClass}`}>{typeof dClose === "number" ? fmtPct(dClose) : "—"}</td>
 
-          <tbody>
-            {filteredRows.map((r, idx) => {
-              const isOpen = expanded === r.symbol;
-
-              return (
-                <Fragment key={r.symbol}>
-                  <tr
-                    className={[
-                      "border-b border-slate-100 transition-colors hover:bg-emerald-50/40",
-                      idx % 2 === 0 ? "bg-white" : "bg-slate-50/40",
-                    ].join(" ")}
-                  >
-                    <td className="px-4 py-3 font-mono font-semibold whitespace-nowrap">
-                      {r.symbol}
-                    </td>
-                    <td className="px-2 py-3 whitespace-nowrap">
-                      <Badge variant={variant(r.signal)}>{r.signal}</Badge>
-                    </td>
-                    <td className="px-2 py-3 whitespace-nowrap font-mono text-right">
-                      {r.confidence}
-                    </td>
-                    <td className="px-2 py-3 whitespace-nowrap font-mono text-right">
-                      {fmt(r.entry)}
-                    </td>
-                    <td className="px-2 py-3 whitespace-nowrap font-mono text-right">
-                      {fmt(r.stop)}
-                    </td>
-
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex justify-end gap-2 flex-nowrap whitespace-nowrap">
-                        <Button
-                          variant="secondary"
-                          className="px-3 py-2 text-sm whitespace-nowrap"
-                          disabled={
-                            r.entry == null ||
-                            r.stop == null ||
-                            busyKey === `size-${r.symbol}`
-                          }
-                          onClick={() => calculatePlan(r)}
-                        >
-                          {busyKey === `size-${r.symbol}` ? "…" : "Calc"}
-                        </Button>
-
-                        <Button
-                          variant="primary"
-                          className="px-4 py-2 text-sm whitespace-nowrap"
-                          disabled={r.entry == null || r.stop == null}
-                          onClick={() => handleOpen(r)}
-                        >
-                          Open
-                        </Button>
-
-                        <Button
-                          variant="ghost"
-                          className="px-4 py-2 text-sm whitespace-nowrap"
-                          onClick={() => toggleExpanded(r.symbol)}
-                        >
-                          {isOpen ? "Hide" : "Details"}
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-
-                  {/* Accordion details */}
-                  {isOpen ? (
-                    <tr className="border-b border-slate-100 bg-white">
-                      <td colSpan={6} className="px-4 pb-4 pt-2">
-                        <div className="grid gap-4 lg:grid-cols-3">
-                          <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
-                            <div className="text-sm font-semibold">Levels</div>
-                            <div className="mt-2 text-sm muted space-y-1">
-                              <div>
-                                TP1:{" "}
-                                <span className="font-mono font-semibold text-slate-900">
-                                  {fmt(r.tp1)}
-                                </span>
-                              </div>
-                              <div>
-                                TP2:{" "}
-                                <span className="font-mono font-semibold text-slate-900">
-                                  {fmt(r.tp2)}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4 lg:col-span-2">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="text-sm font-semibold">Why this signal</div>
-                              <Button
-                                variant="secondary"
-                                className="whitespace-nowrap"
-                                disabled={busyKey === `why-${r.symbol}`}
-                                onClick={() => loadWhy(r.symbol)}
-                              >
-                                {busyKey === `why-${r.symbol}` ? "Loading..." : "Load Why"}
-                              </Button>
-                            </div>
-
-                            {why && why.symbol === r.symbol ? (
-                              <div className="mt-3">
-                                <div className="text-sm">{why.reason_summary ?? "—"}</div>
-
-                                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                                  {(why.reason_json?.checks ?? []).map((c: any, i: number) => (
-                                    <CheckLine
-                                      key={i}
-                                      ok={Boolean(c.ok)}
-                                      label={String(c.label ?? "")}
-                                      detail={c.detail ? String(c.detail) : undefined}
-                                    />
-                                  ))}
-                                </div>
-
-                                <div className="mt-4 border-t border-slate-200 pt-4">
-                                  <div className="text-sm font-semibold">Score breakdown</div>
-                                  <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                                    {(why.reason_json?.score_breakdown ?? []).map((b: any, i: number) => (
-                                      <div
-                                        key={i}
-                                        className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
-                                      >
-                                        <div className="text-sm font-medium">{String(b.k)}</div>
-                                        <div className="text-sm muted">Points: {String(b.pts)}</div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="mt-3 text-sm muted">
-                                Click “Load Why” to fetch the explanation for {r.symbol}.
-                              </div>
-                            )}
-                          </div>
+                      <td className="p-3">
+                        <div className="flex justify-end gap-2 whitespace-nowrap">
+                          <Button variant="secondary">Calc</Button>
+                          <Button>Open</Button>
+                          <Button variant="secondary">Details</Button>
                         </div>
                       </td>
                     </tr>
-                  ) : null}
-                </Fragment>
-              );
-            })}
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
 
-            {filteredRows.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-8 muted text-sm">
-                  No rows match this filter.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+        <div className="p-3 text-xs text-slate-500">
+          Tip: On mobile, swipe sideways to see all columns. Live data may be delayed depending on your Polygon plan.
+        </div>
       </div>
     </div>
   );
