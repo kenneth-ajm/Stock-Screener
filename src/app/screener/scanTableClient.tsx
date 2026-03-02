@@ -117,15 +117,15 @@ async function fetchJsonOrText(res: Response) {
 export default function ScanTableClient({
   rows,
   scanDate,
-  accountSize,
-  riskPerTrade,
-  capitalDeployed,
+  accountSize = null,
+  riskPerTrade = null,
+  capitalDeployed = 0,
 }: {
   rows: Row[];
   scanDate: string;
-  accountSize: number | null;
-  riskPerTrade: number | null;
-  capitalDeployed: number;
+  accountSize?: number | null;
+  riskPerTrade?: number | null;
+  capitalDeployed?: number;
 }) {
   const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY+WATCH");
 
