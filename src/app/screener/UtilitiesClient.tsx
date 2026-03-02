@@ -1,96 +1,234 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { Button } from "@/components/ui/Button";
 
-type JobKey = "prices" | "regime" | "scan" | null;
+type Json = any;
 
-async function post(endpoint: string) {
-  const res = await fetch(endpoint, { method: "POST" });
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(t || `Request failed: ${endpoint}`);
+const DEFAULT_UNIVERSE = "liquid_2000";
+const DEFAULT_STRATEGY_VERSION = "v1";
+
+function pretty(obj: any) {
+  try {
+    return JSON.stringify(obj, null, 2);
+  } catch {
+    return String(obj);
   }
 }
 
-function ActionButton({
-  label,
-  description,
-  primary,
-  loading,
-  onClick,
-}: {
-  label: string;
-  description: string;
-  primary?: boolean;
-  loading?: boolean;
-  onClick: () => Promise<void>;
-}) {
-  return (
-    <div className="space-y-2">
-      <button
-        onClick={onClick}
-        disabled={!!loading}
-        className={[
-          "w-full rounded-full px-6 py-3 text-sm font-medium transition whitespace-nowrap",
-          primary
-            ? "bg-slate-900 text-white hover:bg-slate-800"
-            : "bg-white text-slate-900 border border-slate-200 hover:bg-slate-50",
-          loading ? "opacity-60" : "",
-        ].join(" ")}
-      >
-        {loading ? "Working…" : label}
-      </button>
-      <div className="text-xs text-slate-500 leading-snug">{description}</div>
-    </div>
-  );
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 export default function UtilitiesClient() {
-  const [loading, setLoading] = useState<JobKey>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [log, setLog] = useState<string>("");
 
-  async function run(key: Exclude<JobKey, null>, endpoint: string) {
+  // ingest controls
+  const [ingestBatchSize, setIngestBatchSize] = useState<number>(100);
+
+  // scan batch controls
+  const [scanLimit, setScanLimit] = useState<number>(300);
+  const [scanOffset, setScanOffset] = useState<number>(0);
+
+  const scanOffsets = useMemo(() => {
+    // for 2000: 0..1800 step 300
+    return [0, 300, 600, 900, 1200, 1500, 1800];
+  }, []);
+
+  function append(title: string, payload: any) {
+    const block = `\n\n### ${title}\n${pretty(payload)}`;
+    setLog((prev) => (prev ? prev + block : block));
+  }
+
+  async function callJson(title: string, url: string, init?: RequestInit) {
     try {
-      setLoading(key);
-      await post(endpoint);
-      alert("Done ✅");
+      setBusy(title);
+      const res = await fetch(url, init);
+      const json = await res.json().catch(() => null);
+      append(`${title} (${res.status})`, json ?? { ok: false, error: "No JSON response" });
+      return { res, json };
     } catch (e: any) {
-      alert(e?.message ?? "Something went wrong.");
+      append(`${title} (error)`, { ok: false, error: e?.message ?? "Unknown error" });
+      return { res: null as any, json: null as any };
     } finally {
-      setLoading(null);
+      setBusy(null);
+    }
+  }
+
+  // --- actions ---
+
+  async function buildLiquid2000() {
+    // “No price cap” version: set a very high max_price so it behaves like uncapped
+    await callJson(
+      "Build Liquid 2000 universe",
+      "/api/universe/build-liquid-2000",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          min_price: 5,
+          max_price: 999999,
+          limit: 2000,
+        }),
+      }
+    );
+  }
+
+  async function ingestLiquid2000() {
+    await callJson(
+      `Ingest Liquid 2000 history (batch_size=${ingestBatchSize})`,
+      "/api/universe/ingest-liquid-2000",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ batch_size: ingestBatchSize }),
+      }
+    );
+  }
+
+  async function runScanBatch(offset: number, limit: number) {
+    await callJson(
+      `Scan ${DEFAULT_UNIVERSE} batch (offset=${offset}, limit=${limit})`,
+      "/api/scan",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          universe_slug: DEFAULT_UNIVERSE,
+          strategy_version: DEFAULT_STRATEGY_VERSION,
+          offset,
+          limit,
+        }),
+      }
+    );
+  }
+
+  async function runScanAllBatches() {
+    // sequential batches so we don’t blow up Vercel
+    setBusy("Scan ALL batches");
+    append("Scan ALL batches (start)", { universe_slug: DEFAULT_UNIVERSE, offsets: scanOffsets, limit: scanLimit });
+
+    try {
+      for (const off of scanOffsets) {
+        const res = await fetch("/api/scan", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            universe_slug: DEFAULT_UNIVERSE,
+            strategy_version: DEFAULT_STRATEGY_VERSION,
+            offset: off,
+            limit: scanLimit,
+          }),
+        });
+        const json = await res.json().catch(() => null);
+        append(`Scan batch offset=${off} (${res.status})`, json);
+
+        // tiny pause to reduce burst load
+        await sleep(300);
+      }
+
+      append("Scan ALL batches (done)", { ok: true });
+    } catch (e: any) {
+      append("Scan ALL batches (error)", { ok: false, error: e?.message ?? "Unknown error" });
+    } finally {
+      setBusy(null);
     }
   }
 
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-      <div className="space-y-1">
-        <div className="text-xl font-semibold text-slate-900">Daily Desk Run (EOD)</div>
-        <div className="text-sm text-slate-500">
-          Run these in order to refresh today’s screener results.
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+        <div className="text-sm font-semibold text-slate-900">Universe: Liquid 2000</div>
+        <div className="text-sm text-slate-600">
+          These utilities help you (1) build the universe, (2) ingest daily history, then (3) scan in safe batches.
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={buildLiquid2000} disabled={!!busy}>
+            {busy === "Build Liquid 2000 universe" ? "Building..." : "Build / Refresh Liquid 2000"}
+          </Button>
         </div>
       </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-3">
-        <ActionButton
-          label="Step 1: Fetch Today’s Prices"
-          description="Pulls latest daily bars for SPY + your stock universe from Polygon."
-          loading={loading === "prices"}
-          onClick={() => run("prices", "/api/ingest-polygon")}
-        />
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+        <div className="text-sm font-semibold text-slate-900">Ingest history</div>
+        <div className="text-sm text-slate-600">
+          Fills <span className="font-mono">price_bars</span> so symbols become scan-ready (≥220 bars).
+        </div>
 
-        <ActionButton
-          label="Step 2: Update Market Regime (SPY)"
-          description="Sets FAVORABLE vs DEFENSIVE using SPY close vs SMA200."
-          loading={loading === "regime"}
-          onClick={() => run("regime", "/api/regime")}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-xs text-slate-500">Batch size</label>
+          <input
+            className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+            value={ingestBatchSize}
+            onChange={(e) => setIngestBatchSize(Number(e.target.value) || 100)}
+            inputMode="numeric"
+            disabled={!!busy}
+          />
+          <Button onClick={ingestLiquid2000} disabled={!!busy}>
+            {busy?.startsWith("Ingest Liquid 2000 history") ? "Ingesting..." : "Ingest next batch"}
+          </Button>
+        </div>
+      </div>
 
-        <ActionButton
-          label="Step 3: Generate Today’s Screener"
-          description="Runs the scan and updates BUY / WATCH / AVOID results (daily_scans)."
-          loading={loading === "scan"}
-          primary
-          onClick={() => run("scan", "/api/scan")}
-        />
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+        <div className="text-sm font-semibold text-slate-900">Run scan</div>
+        <div className="text-sm text-slate-600">
+          Runs the daily scan on <span className="font-mono">{DEFAULT_UNIVERSE}</span>. Use batches to avoid timeouts.
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-xs text-slate-500">Limit</label>
+          <input
+            className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+            value={scanLimit}
+            onChange={(e) => setScanLimit(Number(e.target.value) || 300)}
+            inputMode="numeric"
+            disabled={!!busy}
+          />
+          <label className="text-xs text-slate-500">Offset</label>
+          <input
+            className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+            value={scanOffset}
+            onChange={(e) => setScanOffset(Number(e.target.value) || 0)}
+            inputMode="numeric"
+            disabled={!!busy}
+          />
+
+          <Button
+            variant="secondary"
+            onClick={() => runScanBatch(scanOffset, scanLimit)}
+            disabled={!!busy}
+          >
+            Run scan batch
+          </Button>
+
+          <Button onClick={runScanAllBatches} disabled={!!busy}>
+            {busy === "Scan ALL batches" ? "Scanning..." : "Run scan (all batches)"}
+          </Button>
+        </div>
+
+        <div className="text-xs text-slate-500">
+          Suggested: keep ingesting until 800–1200 symbols are scan-ready, then run scan (all batches).
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-semibold text-slate-900">Logs</div>
+          <button
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+            onClick={() => setLog("")}
+            disabled={!!busy}
+          >
+            Clear
+          </button>
+        </div>
+
+        <pre className="mt-3 max-h-[420px] overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
+{log || "No logs yet."}
+        </pre>
       </div>
     </div>
   );
