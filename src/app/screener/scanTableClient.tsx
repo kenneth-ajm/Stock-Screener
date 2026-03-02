@@ -32,13 +32,6 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
   const [auto, setAuto] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
 
-  const filtered = useMemo(() => {
-    const r = rows ?? [];
-    if (filter === "ALL") return r;
-    if (filter === "BUY+WATCH") return r.filter((x) => x.signal === "BUY" || x.signal === "WATCH");
-    return r.filter((x) => x.signal === filter);
-  }, [rows, filter]);
-
   const counts = useMemo(() => {
     const r = rows ?? [];
     return {
@@ -46,7 +39,31 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
       buy: r.filter((x) => x.signal === "BUY").length,
       watch: r.filter((x) => x.signal === "WATCH").length,
       avoid: r.filter((x) => x.signal === "AVOID").length,
+      buyWatch: r.filter((x) => x.signal === "BUY" || x.signal === "WATCH").length,
+    };
+  }, [rows]);
+
+  // Auto-fallback: if BUY+WATCH has zero rows, show ALL instead so the page never looks empty
+  useEffect(() => {
+    if (filter === "BUY+WATCH" && counts.buyWatch === 0 && counts.total > 0) {
+      setFilter("ALL");
+    }
+  }, [filter, counts.buyWatch, counts.total]);
+
+  const filtered = useMemo(() => {
+    const r = rows ?? [];
+    if (filter === "ALL") return r;
+    if (filter === "BUY+WATCH") return r.filter((x) => x.signal === "BUY" || x.signal === "WATCH");
+    return r.filter((x) => x.signal === filter);
+  }, [rows, filter]);
+
+  const countsShown = useMemo(() => {
+    const r = rows ?? [];
+    return {
       showing: filtered.length,
+      buy: r.filter((x) => x.signal === "BUY").length,
+      watch: r.filter((x) => x.signal === "WATCH").length,
+      avoid: r.filter((x) => x.signal === "AVOID").length,
     };
   }, [rows, filtered]);
 
@@ -81,13 +98,11 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     }
   }
 
-  // Refresh quotes when filter changes (and on first render)
   useEffect(() => {
     refreshQuotes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
-  // Auto refresh every 15s
   useEffect(() => {
     if (!auto) return;
     const t = setInterval(() => {
@@ -99,7 +114,6 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
   return (
     <div className="space-y-4">
-      {/* Chips wrap on mobile */}
       <div className="flex flex-wrap gap-2">
         <button className={`chip ${filter === "BUY+WATCH" ? "chip-active" : ""}`} onClick={() => setFilter("BUY+WATCH")}>
           BUY + WATCH
@@ -122,29 +136,26 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         Confidence is a 0–100 score from trend alignment (SMA), RSI, volume confirmation, and extension penalties (regime may downgrade).
       </div>
 
-      {/* Summary cards stack nicely */}
       <div className="grid gap-3 sm:grid-cols-4">
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">SHOWING</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{counts.showing}</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{countsShown.showing}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">BUY</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{counts.buy}</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{countsShown.buy}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">WATCH</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{counts.watch}</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{countsShown.watch}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">AVOID</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{counts.avoid}</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{countsShown.avoid}</div>
         </div>
       </div>
 
-      {/* Table */}
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        {/* Live controls */}
         <div className="flex flex-col gap-2 border-b border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-xs text-slate-500">
             Live prices overlay (signals remain daily).{" "}
@@ -172,9 +183,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
           </div>
         </div>
 
-        {quoteError ? (
-          <div className="px-3 py-2 text-xs text-rose-600 border-b border-slate-200">{quoteError}</div>
-        ) : null}
+        {quoteError ? <div className="px-3 py-2 text-xs text-rose-600 border-b border-slate-200">{quoteError}</div> : null}
 
         <div className="overflow-x-auto">
           <table className="min-w-[900px] w-full text-sm">
@@ -187,14 +196,13 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                 <th className="p-3">STOP</th>
                 <th className="p-3">LIVE</th>
                 <th className="p-3">Δ vs ENTRY</th>
-                <th className="p-3">Δ vs CLOSE</th>
                 <th className="p-3 text-right">ACTIONS</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td className="p-3 text-slate-500" colSpan={9}>
+                  <td className="p-3 text-slate-500" colSpan={8}>
                     No rows for this filter.
                   </td>
                 </tr>
@@ -204,16 +212,16 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                   const live = quotes?.[sym] ?? null;
 
                   const entry = Number(r.entry);
-                  const close = Number(r.entry); // we don’t have scan close here; use ENTRY as baseline unless you add it to Row
-                  // (If you want true scan close, we’ll add a `close` field to Row from daily_scans later.)
-
                   const dEntry = typeof live === "number" && Number.isFinite(live) ? (live - entry) / entry : null;
-                  const dClose = typeof live === "number" && Number.isFinite(live) ? (live - close) / close : null;
 
                   const dEntryClass =
-                    typeof dEntry === "number" ? (dEntry > 0 ? "text-emerald-600" : dEntry < 0 ? "text-rose-600" : "text-slate-600") : "text-slate-500";
-                  const dCloseClass =
-                    typeof dClose === "number" ? (dClose > 0 ? "text-emerald-600" : dClose < 0 ? "text-rose-600" : "text-slate-600") : "text-slate-500";
+                    typeof dEntry === "number"
+                      ? dEntry > 0
+                        ? "text-emerald-600"
+                        : dEntry < 0
+                          ? "text-rose-600"
+                          : "text-slate-600"
+                      : "text-slate-500";
 
                   return (
                     <tr key={r.symbol} className="border-b border-slate-100">
@@ -229,7 +237,6 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
                       <td className="p-3 text-slate-800">{typeof live === "number" ? fmt2(live) : "—"}</td>
                       <td className={`p-3 font-medium ${dEntryClass}`}>{typeof dEntry === "number" ? fmtPct(dEntry) : "—"}</td>
-                      <td className={`p-3 font-medium ${dCloseClass}`}>{typeof dClose === "number" ? fmtPct(dClose) : "—"}</td>
 
                       <td className="p-3">
                         <div className="flex justify-end gap-2 whitespace-nowrap">
