@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import ClosedTradeSummaryCards from "./ClosedTradeSummaryCards";
 import { ClosedTradeSummary, formatPct } from "@/lib/analytics/closedTradeSummary";
 
@@ -111,6 +112,9 @@ export default function PositionsClient({
   closedPositions: PositionRow[];
   closedSummary: ClosedTradeSummary;
 }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [tab, setTab] = useState<"OPEN" | "CLOSED">("OPEN");
 
   // toast
@@ -192,6 +196,7 @@ export default function PositionsClient({
   }
 
   function openManual() {
+    setTab("OPEN");
     setMSymbol("");
     setMEntry("");
     setMStop("");
@@ -213,9 +218,12 @@ export default function PositionsClient({
     const qty = Number(mQty);
 
     if (!symbol) return setManualError("Symbol is required (e.g. AAPL).");
-    if (!Number.isFinite(entry) || entry <= 0) return setManualError("Entry price must be a positive number.");
-    if (mStop.trim() && (!Number.isFinite(stop) || stop <= 0)) return setManualError("Stop must be blank or a positive number.");
-    if (mQty.trim() && (!Number.isFinite(qty) || qty <= 0)) return setManualError("Quantity must be blank or a positive number.");
+    if (!Number.isFinite(entry) || entry <= 0)
+      return setManualError("Entry price must be a positive number.");
+    if (mStop.trim() && (!Number.isFinite(stop) || stop <= 0))
+      return setManualError("Stop must be blank or a positive number.");
+    if (mQty.trim() && (!Number.isFinite(qty) || qty <= 0))
+      return setManualError("Quantity must be blank or a positive number.");
 
     try {
       setManualBusy(true);
@@ -246,6 +254,23 @@ export default function PositionsClient({
       setManualBusy(false);
     }
   }
+
+  // Auto-open manual add modal if /portfolio?manualAdd=1
+  const didAutoOpenRef = useRef(false);
+  useEffect(() => {
+    if (didAutoOpenRef.current) return;
+
+    const v = searchParams?.get("manualAdd");
+    const shouldOpen = v === "1" || v === "true" || v === "yes";
+
+    if (shouldOpen) {
+      didAutoOpenRef.current = true;
+      openManual();
+
+      // Clean URL so refresh doesn't re-open modal
+      router.replace("/portfolio", { scroll: false });
+    }
+  }, [searchParams, router]); // openManual is stable enough here
 
   return (
     <div className="space-y-4">
