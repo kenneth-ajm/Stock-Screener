@@ -43,11 +43,28 @@ function formatMoney(x: number | null | undefined) {
   return `$${x.toFixed(2)}`;
 }
 
+function resolveQty(p: {
+  shares?: number | null;
+  quantity?: number | null;
+  position_size?: number | null;
+}) {
+  const v =
+    (typeof p.shares === "number" ? p.shares : null) ??
+    (typeof p.quantity === "number" ? p.quantity : null) ??
+    (typeof p.position_size === "number" ? p.position_size : null) ??
+    0;
+  return Number.isFinite(v) ? v : 0;
+}
+
 async function makeSupabaseServerClient() {
   const cookieStore = await cookies();
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !anonKey) {
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY.");
+  }
 
   return createServerClient(url, anonKey, {
     cookies: {
@@ -55,34 +72,44 @@ async function makeSupabaseServerClient() {
         return cookieStore.getAll();
       },
       setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value, options }) => {
-          cookieStore.set(name, value, options);
-        });
+        try {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieStore.set(name, value, options);
+          });
+        } catch {
+          // ok
+        }
       },
     },
   });
 }
 
-async function fetchAndUpsertDailyBars(symbol: string) {
+async function fetchAndUpsertDailyBars(symbolRaw: string) {
   const apiKey = process.env.POLYGON_API_KEY;
   if (!apiKey) return;
 
+  const symbol = symbolRaw.trim().toUpperCase();
+  if (!symbol) return;
+
   const to = new Date().toISOString().slice(0, 10);
   const fromDate = new Date();
-  fromDate.setFullYear(fromDate.getFullYear() - 1);
+  fromDate.setFullYear(fromDate.getFullYear() - 2);
   const from = fromDate.toISOString().slice(0, 10);
 
-  const url = `https://api.polygon.io/v2/aggs/ticker/${symbol}/range/1/day/${from}/${to}?adjusted=false&sort=asc&apiKey=${apiKey}`;
+  const url = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(
+    symbol
+  )}/range/1/day/${from}/${to}?adjusted=false&sort=asc&limit=50000&apiKey=${apiKey}`;
 
-  const res = await fetch(url);
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) return;
 
-  const json = await res.json();
-  if (!json?.results?.length) return;
+  const json = await res.json().catch(() => null);
+  const results = json?.results ?? [];
+  if (!Array.isArray(results) || results.length === 0) return;
 
   const supabase = await makeSupabaseServerClient();
 
-  const rows = json.results.map((r: any) => ({
+  const rows = results.map((r: any) => ({
     symbol,
     date: new Date(r.t).toISOString().slice(0, 10),
     open: r.o,
@@ -93,9 +120,7 @@ async function fetchAndUpsertDailyBars(symbol: string) {
     source: "polygon",
   }));
 
-  await supabase.from("price_bars").upsert(rows, {
-    onConflict: "symbol,date",
-  });
+  await supabase.from("price_bars").upsert(rows, { onConflict: "symbol,date" });
 }
 
 export default async function PortfolioPage() {
@@ -105,8 +130,11 @@ export default async function PortfolioPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) redirect("/auth?next=/portfolio");
+  if (!user) {
+    redirect("/auth?next=/portfolio");
+  }
 
+  // Active/default portfolio
   const { data: portfolio } = await supabase
     .from("portfolios")
     .select("*")
@@ -116,12 +144,31 @@ export default async function PortfolioPage() {
 
   if (!portfolio) {
     return (
-      <div className="mx-auto max-w-6xl p-6">
-        No default portfolio found.
+      <div className="mx-auto max-w-6xl p-6 space-y-3 text-slate-900">
+        <div className="text-2xl font-semibold tracking-tight">Portfolio</div>
+        <div className="text-sm text-slate-600">
+          No active portfolio found. Create one in Portfolios.
+        </div>
+        <div className="flex gap-2">
+          <Link
+            href="/portfolios"
+            className="inline-flex items-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+          >
+            Go to Portfolios
+          </Link>
+          <Link
+            href="/screener"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50"
+          >
+            <span aria-hidden="true">←</span>
+            Back to Screener
+          </Link>
+        </div>
       </div>
     );
   }
 
+  // Positions
   const { data: openPositions } = await supabase
     .from("portfolio_positions")
     .select("*")
@@ -141,9 +188,8 @@ export default async function PortfolioPage() {
   const open = openPositions ?? [];
   const closed = closedPositions ?? [];
 
-  // 🔵 AUTO-FETCH LATEST PRICES
-  const uniqueSymbols = [...new Set(open.map((p) => p.symbol))];
-
+  // ✅ Auto-fetch latest prices for ALL open symbols
+  const uniqueSymbols = [...new Set(open.map((p) => (p.symbol ?? "").toUpperCase()).filter(Boolean))];
   const latestPriceBySymbol: Record<string, number | null> = {};
 
   for (const symbol of uniqueSymbols) {
@@ -172,6 +218,7 @@ export default async function PortfolioPage() {
     }
   }
 
+  // Closed trade summary cards (existing)
   const closedSummary = computeClosedTradeSummary(
     closed.map((p) => ({
       symbol: p.symbol,
@@ -184,8 +231,106 @@ export default async function PortfolioPage() {
     }))
   );
 
+  // Realized stats (keep your proven working logic)
+  let realizedPnL = 0;
+  let realizedWins = 0;
+  let realizedLosses = 0;
+
+  for (const p of closed) {
+    if (typeof p.entry_price !== "number" || typeof p.exit_price !== "number") continue;
+    const qty = resolveQty(p);
+    const pnl = (p.exit_price - p.entry_price) * qty;
+    realizedPnL += pnl;
+    if (pnl > 0) realizedWins += 1;
+    if (pnl < 0) realizedLosses += 1;
+  }
+
+  const realizedTrades = realizedWins + realizedLosses;
+  const winRate = realizedTrades ? realizedWins / realizedTrades : 0;
+
+  // Exposure (capital + risk)
+  let capitalDeployed = 0;
+  let riskDeployed = 0;
+
+  for (const p of open) {
+    const entry = p.entry_price;
+    const stop = p.stop_price;
+    const qty = resolveQty(p);
+
+    if (typeof entry === "number" && entry > 0 && qty > 0) {
+      capitalDeployed += entry * qty;
+    }
+
+    // Only compute risk when stop exists
+    if (typeof entry === "number" && entry > 0 && typeof stop === "number" && stop > 0 && qty > 0) {
+      riskDeployed += Math.max(0, (entry - stop) * qty);
+    }
+  }
+
+  const acctSize = portfolio.account_size ?? null;
+  const pctDeployed = typeof acctSize === "number" && acctSize > 0 ? capitalDeployed / acctSize : null;
+
   return (
     <div className="mx-auto max-w-6xl p-6 space-y-6 text-slate-900">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-2xl font-semibold tracking-tight">Portfolio</div>
+          <div className="text-sm text-slate-600">
+            Active journey{portfolio.name ? `: ${portfolio.name}` : ""}
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <Link
+            href="/portfolios"
+            className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50"
+          >
+            Manage Portfolios
+          </Link>
+          <Link
+            href="/screener"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
+          >
+            <span aria-hidden="true">←</span>
+            Back to Screener
+          </Link>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-xs text-slate-500">Open exposure</div>
+          <div className="mt-1 text-sm text-slate-800">
+            Capital deployed: <span className="font-semibold">{formatMoney(capitalDeployed)}</span>
+          </div>
+          <div className="mt-1 text-sm text-slate-800">
+            Risk deployed: <span className="font-semibold">{formatMoney(riskDeployed)}</span>
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            {pctDeployed !== null ? `${(pctDeployed * 100).toFixed(1)}% of account size` : "—"}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-xs text-slate-500">Realized performance</div>
+          <div className="mt-1 text-sm text-slate-800">
+            Realized P/L: <span className="font-semibold">{formatMoney(realizedPnL)}</span>
+          </div>
+          <div className="mt-1 text-sm text-slate-800">
+            Win rate: <span className="font-semibold">{(winRate * 100).toFixed(0)}%</span>
+          </div>
+          <div className="mt-1 text-xs text-slate-500">{realizedTrades} closed trades</div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-xs text-slate-500">Account</div>
+          <div className="mt-1 text-sm text-slate-800">
+            Size: <span className="font-semibold">{formatMoney(acctSize)}</span>
+          </div>
+          <div className="mt-1 text-xs text-slate-500">Currency: {portfolio.account_currency ?? "—"}</div>
+        </div>
+      </div>
+
       <PositionsClient
         openPositions={open as any}
         closedPositions={closed as any}
