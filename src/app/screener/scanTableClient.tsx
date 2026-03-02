@@ -127,13 +127,15 @@ export default function ScanTableClient({
   riskPerTrade?: number | null;
   capitalDeployed?: number;
 }) {
-  const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY+WATCH");
-
+  const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY"); // default tighter
   const [quotes, setQuotes] = useState<Record<string, number | null>>({});
   const [quoteBusy, setQuoteBusy] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [auto, setAuto] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+
+  // cache suggested shares from Calc so Open can work (shares is required by your API)
+  const [sharesBySymbol, setSharesBySymbol] = useState<Record<string, number>>({});
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTitle, setModalTitle] = useState("");
@@ -158,11 +160,11 @@ export default function ScanTableClient({
     };
   }, [rows]);
 
+  // If BUY has 0 rows, fallback to BUY+WATCH; if still 0, fallback to ALL
   useEffect(() => {
-    if (filter === "BUY+WATCH" && counts.buyWatch === 0 && counts.total > 0) {
-      setFilter("ALL");
-    }
-  }, [filter, counts.buyWatch, counts.total]);
+    if (filter === "BUY" && counts.buy === 0 && counts.buyWatch > 0) setFilter("BUY+WATCH");
+    if ((filter === "BUY" || filter === "BUY+WATCH") && counts.buyWatch === 0 && counts.total > 0) setFilter("ALL");
+  }, [filter, counts.buy, counts.buyWatch, counts.total]);
 
   const filtered = useMemo(() => {
     const r = rows ?? [];
@@ -233,7 +235,6 @@ export default function ScanTableClient({
     setModalBusy(true);
     showToast(`Calc: ${row.symbol}`);
 
-    // Compute risk USD + remaining cash on client (authoritative enough for UI)
     const maxRiskUsd =
       typeof accountSize === "number" && typeof riskPerTrade === "number"
         ? accountSize * riskPerTrade
@@ -250,23 +251,34 @@ export default function ScanTableClient({
       remainingCash && row.entry > 0 ? Math.floor(remainingCash / row.entry) : null;
 
     const suggested =
-      riskShares !== null && cashShares !== null ? Math.min(riskShares, cashShares) : riskShares ?? cashShares;
+      riskShares !== null && cashShares !== null
+        ? Math.min(riskShares, cashShares)
+        : riskShares ?? cashShares;
 
-    openModal(`Position sizing: ${row.symbol}`, {
-      ok: true,
-      symbol: row.symbol,
-      entry: row.entry,
-      stop: row.stop,
-      tp1: row.tp1 ?? null,
-      tp2: row.tp2 ?? null,
-      maxRiskUsd,
-      remainingCash,
-      riskShares,
-      cashShares,
-      suggestedShares: suggested,
-      note:
-        "Suggested shares are capped by BOTH risk-per-trade and remaining cash. (No broker orders placed.)",
-    });
+    // cache for Open
+    if (typeof suggested === "number" && suggested > 0) {
+      setSharesBySymbol((prev) => ({ ...prev, [row.symbol.toUpperCase()]: suggested }));
+    }
+
+    openModal(
+      `Position sizing: ${row.symbol}`,
+      {
+        ok: true,
+        symbol: row.symbol,
+        entry: row.entry,
+        stop: row.stop,
+        tp1: row.tp1 ?? null,
+        tp2: row.tp2 ?? null,
+        maxRiskUsd,
+        remainingCash,
+        riskShares,
+        cashShares,
+        suggestedShares: suggested,
+        note:
+          "Suggested shares are capped by BOTH risk-per-trade and remaining cash. (No broker orders placed.)",
+      },
+      "Uses your active portfolio risk settings."
+    );
 
     setModalBusy(false);
   }
@@ -274,40 +286,36 @@ export default function ScanTableClient({
   async function doOpen(row: Row) {
     setModalBusy(true);
     showToast(`Open: ${row.symbol}`);
+
+    const sym = row.symbol.toUpperCase();
+    const shares = sharesBySymbol[sym] ?? null;
+
+    if (!shares || shares <= 0) {
+      openModal(
+        `Open position: ${row.symbol}`,
+        { ok: false, error: "Run Calc first so we know how many shares to open." }
+      );
+      setModalBusy(false);
+      return;
+    }
+
     try {
-      // Try payload shape A
-      let res = await fetch("/api/positions/add", {
+      // ✅ Match your API exactly: { symbol, entry_price, stop, shares }
+      const res = await fetch("/api/positions/add", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          symbol: row.symbol,
+          symbol: sym,
           entry_price: row.entry,
-          stop_price: row.stop,
+          stop: row.stop,
+          shares,
         }),
       });
 
-      let parsed = await fetchJsonOrText(res);
-      let json: any = parsed.json ?? (parsed.text ? { ok: false, error: parsed.text } : null);
+      const parsed = await fetchJsonOrText(res);
+      const json = parsed.json ?? { ok: false, error: parsed.text || `HTTP ${res.status}` };
 
-      // If stop invalid, try alternate naming (common mismatch)
-      if (!res.ok || json?.ok === false) {
-        const err = (json?.error ?? "").toString().toLowerCase();
-        if (err.includes("stop")) {
-          res = await fetch("/api/positions/add", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              symbol: row.symbol,
-              entry: row.entry,
-              stop: row.stop,
-            }),
-          });
-          parsed = await fetchJsonOrText(res);
-          json = parsed.json ?? (parsed.text ? { ok: false, error: parsed.text } : null);
-        }
-      }
-
-      openModal(`Open position: ${row.symbol}`, json ?? { ok: false, error: `HTTP ${res.status}` });
+      openModal(`Open position: ${row.symbol}`, json);
     } catch (e: any) {
       openModal(`Open position: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
     } finally {
@@ -319,16 +327,15 @@ export default function ScanTableClient({
     setModalBusy(true);
     showToast(`Details: ${row.symbol}`);
     try {
-      const res = await fetch("/api/why", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          symbol: row.symbol,
-          date: scanDate,
-          universe_slug: "liquid_2000",
-          strategy_version: "v1",
-        }),
+      // ✅ Match your API: GET /api/why?symbol=&date=&universe=&version=
+      const params = new URLSearchParams({
+        symbol: row.symbol.toUpperCase(),
+        date: scanDate,
+        universe: "liquid_2000",
+        version: "v1",
       });
+
+      const res = await fetch(`/api/why?${params.toString()}`, { method: "GET" });
 
       const parsed = await fetchJsonOrText(res);
       const json =
@@ -371,7 +378,48 @@ export default function ScanTableClient({
       );
     }
 
-    // Calc modal nice layout
+    // Why route returns { ok: true, row: {...} }
+    if (j?.row) {
+      const row = j.row;
+      const summary = row?.reason_summary ?? null;
+      const checks = row?.reason_json?.checks ?? null;
+
+      return (
+        <div className="space-y-3">
+          {summary ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+              <div className="text-xs text-slate-500">Summary</div>
+              <div className="mt-1 font-semibold">{String(summary)}</div>
+            </div>
+          ) : null}
+
+          {Array.isArray(checks) ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="text-sm font-semibold text-slate-900">Checks</div>
+              <div className="mt-2 space-y-2">
+                {checks.slice(0, 12).map((c: any, idx: number) => (
+                  <div key={idx} className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-sm font-medium text-slate-900">{c?.label ?? "Check"}</div>
+                    <div className={clsx("text-xs font-semibold", c?.ok ? "text-emerald-600" : "text-rose-600")}>
+                      {c?.ok ? "PASS" : "FAIL"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <details className="rounded-xl border border-slate-200 bg-white p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-900">Raw response</summary>
+            <pre className="mt-2 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
+{JSON.stringify(j, null, 2)}
+            </pre>
+          </details>
+        </div>
+      );
+    }
+
+    // Calc modal
     if (j?.suggestedShares !== undefined) {
       return (
         <div className="space-y-3">
@@ -387,46 +435,18 @@ export default function ScanTableClient({
             <KV k="TP2" v={j.tp2 ? fmt2(Number(j.tp2)) : "—"} />
           </div>
 
-          <div className="text-xs text-slate-500">
-            {String(j.note ?? "")}
-          </div>
+          <div className="text-xs text-slate-500">{String(j.note ?? "")}</div>
         </div>
       );
     }
 
-    // Details (why) summary
-    const summary = j?.reason_summary ?? null;
-    const checks = j?.reason_json?.checks ?? j?.checks ?? null;
-
+    // Open success (your route returns { ok:true, id })
     return (
       <div className="space-y-3">
-        {summary ? (
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
-            <div className="text-xs text-slate-500">Summary</div>
-            <div className="mt-1 font-semibold">{String(summary)}</div>
-          </div>
-        ) : null}
-
-        {Array.isArray(checks) ? (
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <div className="text-sm font-semibold text-slate-900">Checks</div>
-            <div className="mt-2 space-y-2">
-              {checks.slice(0, 12).map((c: any, idx: number) => (
-                <div key={idx} className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
-                  <div className="text-sm font-medium text-slate-900">{c?.label ?? "Check"}</div>
-                  <div className={clsx("text-xs font-semibold", c?.ok ? "text-emerald-600" : "text-rose-600")}>
-                    {c?.ok ? "PASS" : "FAIL"}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
-            <div className="font-semibold">Success</div>
-            <div className="mt-1">Action completed.</div>
-          </div>
-        )}
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+          <div className="font-semibold">Success</div>
+          <div className="mt-1">Position created.</div>
+        </div>
 
         <details className="rounded-xl border border-slate-200 bg-white p-3">
           <summary className="cursor-pointer text-sm font-semibold text-slate-900">Raw response</summary>
@@ -532,6 +552,8 @@ export default function ScanTableClient({
                       ? dEntry > 0 ? "text-emerald-600" : dEntry < 0 ? "text-rose-600" : "text-slate-600"
                       : "text-slate-500";
 
+                  const cachedShares = sharesBySymbol[sym];
+
                   return (
                     <tr key={r.symbol} className="border-b border-slate-100">
                       <td className="p-3 font-semibold text-slate-900">{r.symbol}</td>
@@ -552,7 +574,9 @@ export default function ScanTableClient({
                       <td className="p-3">
                         <div className="flex justify-end gap-2 whitespace-nowrap">
                           <Button variant="secondary" onClick={() => doCalc(r)} disabled={modalBusy}>Calc</Button>
-                          <Button onClick={() => doOpen(r)} disabled={modalBusy}>Open</Button>
+                          <Button onClick={() => doOpen(r)} disabled={modalBusy}>
+                            Open{cachedShares ? ` (${cachedShares})` : ""}
+                          </Button>
                           <Button variant="secondary" onClick={() => doDetails(r)} disabled={modalBusy}>Details</Button>
                         </div>
                       </td>
