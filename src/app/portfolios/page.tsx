@@ -32,14 +32,12 @@ type PositionRow = {
   exit_price: number | null;
   quantity?: number | null;
   shares?: number | null;
-  position_size?: number | null;
 };
 
 function resolveQty(p: PositionRow): number {
   const v =
     (typeof p.shares === "number" ? p.shares : null) ??
     (typeof p.quantity === "number" ? p.quantity : null) ??
-    (typeof p.position_size === "number" ? p.position_size : null) ??
     0;
   return Number.isFinite(v) ? v : 0;
 }
@@ -53,28 +51,20 @@ export default async function PortfoliosPage() {
 
   if (!user) redirect("/auth?next=/portfolios");
 
-  const { data: portfolios, error: portfoliosError } = await supabase
+  const { data: portfolios } = await supabase
     .from("portfolios")
     .select("*")
     .eq("user_id", user.id)
     .order("created_at", { ascending: true });
 
-  if (portfoliosError) {
-    throw new Error(portfoliosError.message);
-  }
-
   const portfolioIds = (portfolios ?? []).map((p: any) => p.id).filter(Boolean);
 
   let positions: PositionRow[] = [];
   if (portfolioIds.length > 0) {
-    const { data: pos, error: posError } = await supabase
+    const { data: pos } = await supabase
       .from("portfolio_positions")
-      .select("portfolio_id,status,entry_price,exit_price,quantity,shares,position_size")
+      .select("portfolio_id,status,entry_price,exit_price,quantity,shares")
       .in("portfolio_id", portfolioIds);
-
-    if (posError) {
-      throw new Error(posError.message);
-    }
 
     positions = (pos ?? []) as any;
   }
