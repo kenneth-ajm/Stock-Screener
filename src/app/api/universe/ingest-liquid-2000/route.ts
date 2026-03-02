@@ -15,102 +15,80 @@ async function fetchAggs(symbol: string, apiKey: string, from: string, to: strin
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) return null;
   const json = await res.json().catch(() => null);
-  const results = Array.isArray(json?.results) ? json.results : [];
-  return results;
+  return Array.isArray(json?.results) ? json.results : [];
 }
 
 export async function POST(req: Request) {
   const apiKey = process.env.POLYGON_API_KEY;
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!apiKey) return NextResponse.json({ ok: false, error: "Missing POLYGON_API_KEY" }, { status: 500 });
-  if (!supabaseUrl || !serviceKey)
-    return NextResponse.json({ ok: false, error: "Missing Supabase env vars" }, { status: 500 });
-
-  const supabase = createClient(supabaseUrl, serviceKey);
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
 
   const body = await req.json().catch(() => ({}));
-  const batchSize = typeof body?.batch_size === "number" ? Math.max(5, Math.min(75, body.batch_size)) : 25;
+  const batchSize = typeof body?.batch_size === "number" ? body.batch_size : 50;
 
-  // 2 years of daily bars (enough for SMA200 + buffer)
   const to = isoDate(new Date());
   const fromDate = new Date();
   fromDate.setFullYear(fromDate.getFullYear() - 2);
   const from = isoDate(fromDate);
 
-  // Find universe id
-  const { data: uni } = await supabase.from("universes").select("id, slug").eq("slug", "liquid_2000").maybeSingle();
+  // get universe id
+  const { data: uni } = await supabase
+    .from("universes")
+    .select("id")
+    .eq("slug", "liquid_2000")
+    .maybeSingle();
+
   if (!uni?.id) {
-    return NextResponse.json({ ok: false, error: "Universe liquid_2000 not found. Run build-liquid-2000 first." }, { status: 400 });
+    return NextResponse.json({ ok: false, error: "liquid_2000 not found" });
   }
 
-  // Get active members
-  const { data: members, error: memErr } = await supabase
-    .from("universe_members")
-    .select("symbol")
-    .eq("universe_id", uni.id)
-    .eq("active", true);
+  // find symbols with <220 bars
+  const { data: symbols } = await supabase
+    .rpc("symbols_needing_history", { universe_slug_input: "liquid_2000", min_bars: 220 });
 
-  if (memErr) return NextResponse.json({ ok: false, error: memErr.message }, { status: 500 });
+  if (!symbols || symbols.length === 0) {
+    return NextResponse.json({
+      ok: true,
+      message: "All symbols already have sufficient history.",
+    });
+  }
 
-  const symbols = (members ?? []).map((m: any) => String(m.symbol).toUpperCase()).filter(Boolean);
-  if (!symbols.length) return NextResponse.json({ ok: false, error: "No active members in liquid_2000" }, { status: 400 });
+  const targets = symbols.slice(0, batchSize).map((s: any) => s.symbol);
 
-  // Determine which symbols are missing enough history (count < 220)
-  // NOTE: Supabase doesn't support GROUP BY well via postgrest in a single call without RPC.
-  // We'll do a cheap heuristic: sample candidates by checking latest bar exists; if not, ingest.
-  // Also allow forcing ingest for a provided list.
-  const forceSymbols = Array.isArray(body?.symbols) ? body.symbols.map((s: any) => String(s).toUpperCase()) : [];
+  const ingested: any[] = [];
+  const failed: any[] = [];
 
-  let candidates = forceSymbols.length ? forceSymbols : symbols;
-
-  // Only take first N candidates and ingest them; repeated runs will gradually fill the DB.
-  candidates = Array.from(new Set(candidates)).slice(0, batchSize);
-
-  const ingested: { symbol: string; bars: number }[] = [];
-  const failed: { symbol: string; reason: string }[] = [];
-
-  for (const symbol of candidates) {
-    try {
-      const results = await fetchAggs(symbol, apiKey, from, to);
-      if (!results || results.length === 0) {
-        failed.push({ symbol, reason: "No results from Polygon aggs" });
-        continue;
-      }
-
-      const rows = results.map((r: any) => ({
-        symbol,
-        date: new Date(r.t).toISOString().slice(0, 10),
-        open: r.o,
-        high: r.h,
-        low: r.l,
-        close: r.c,
-        volume: Math.round(r.v),
-        source: "polygon",
-      }));
-
-      const { error: upErr } = await supabase.from("price_bars").upsert(rows, { onConflict: "symbol,date" });
-      if (upErr) {
-        failed.push({ symbol, reason: upErr.message });
-        continue;
-      }
-
-      ingested.push({ symbol, bars: rows.length });
-    } catch (e: any) {
-      failed.push({ symbol, reason: e?.message ?? "Unknown error" });
+  for (const symbol of targets) {
+    const results = await fetchAggs(symbol, apiKey!, from, to);
+    if (!results || results.length === 0) {
+      failed.push(symbol);
+      continue;
     }
+
+    const rows = results.map((r: any) => ({
+      symbol,
+      date: new Date(r.t).toISOString().slice(0, 10),
+      open: r.o,
+      high: r.h,
+      low: r.l,
+      close: r.c,
+      volume: Math.round(r.v),
+      source: "polygon",
+    }));
+
+    await supabase.from("price_bars").upsert(rows, {
+      onConflict: "symbol,date",
+    });
+
+    ingested.push(symbol);
   }
 
   return NextResponse.json({
     ok: true,
-    universe_slug: "liquid_2000",
-    batch_size: batchSize,
-    from,
-    to,
-    attempted: candidates.length,
-    ingested,
-    failed,
-    note: "Run this endpoint repeatedly until most symbols have >=220 bars in price_bars, then run /api/scan with universe_slug=liquid_2000.",
+    ingested_count: ingested.length,
+    remaining_to_fill: symbols.length - ingested.length,
+    next_batch_size: batchSize,
   });
 }
