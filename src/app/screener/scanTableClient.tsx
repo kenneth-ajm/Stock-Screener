@@ -9,19 +9,19 @@ type Row = {
   confidence: number;
   entry: number;
   stop: number;
+  tp1?: number | null;
+  tp2?: number | null;
 };
 
 function fmt2(n: number | null | undefined) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "—";
   return n.toFixed(2);
 }
-
 function fmtMoney(n: number | null | undefined) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "—";
   const sign = n > 0 ? "+" : "";
   return `${sign}$${n.toFixed(2)}`;
 }
-
 function fmtPct(p: number | null | undefined) {
   if (typeof p !== "number" || !Number.isFinite(p)) return "—";
   const sign = p > 0 ? "+" : "";
@@ -71,22 +71,9 @@ function Modal({
   onClose: () => void;
 }) {
   if (!open) return null;
-
-  // lock scroll behind modal
-  // (simple approach)
-  if (typeof document !== "undefined") document.body.style.overflow = "hidden";
-
   return (
     <div className="fixed inset-0 z-[9999]">
-      <div
-        className="absolute inset-0 bg-black/40"
-        onClick={() => {
-          if (typeof document !== "undefined") document.body.style.overflow = "";
-          onClose();
-        }}
-        aria-hidden="true"
-      />
-      {/* pin near top so you don't "lose" it */}
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
       <div className="absolute inset-0 flex items-start justify-center p-4 pt-10">
         <div className="relative z-[10000] w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
           <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
@@ -96,15 +83,11 @@ function Modal({
             </div>
             <button
               className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 hover:bg-slate-50"
-              onClick={() => {
-                if (typeof document !== "undefined") document.body.style.overflow = "";
-                onClose();
-              }}
+              onClick={onClose}
             >
               Close
             </button>
           </div>
-
           <div className="p-4 max-h-[70vh] overflow-auto">{children}</div>
         </div>
       </div>
@@ -121,7 +104,29 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
   );
 }
 
-export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanDate: string }) {
+async function fetchJsonOrText(res: Response) {
+  const ct = res.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    const json = await res.json().catch(() => null);
+    return { json, text: null };
+  }
+  const text = await res.text().catch(() => "");
+  return { json: null, text };
+}
+
+export default function ScanTableClient({
+  rows,
+  scanDate,
+  accountSize,
+  riskPerTrade,
+  capitalDeployed,
+}: {
+  rows: Row[];
+  scanDate: string;
+  accountSize: number | null;
+  riskPerTrade: number | null;
+  capitalDeployed: number;
+}) {
   const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY+WATCH");
 
   const [quotes, setQuotes] = useState<Record<string, number | null>>({});
@@ -134,7 +139,6 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
   const [modalTitle, setModalTitle] = useState("");
   const [modalSubtitle, setModalSubtitle] = useState<string | undefined>(undefined);
   const [modalJson, setModalJson] = useState<any>(null);
-  const [modalKind, setModalKind] = useState<"CALC" | "OPEN" | "WHY" | "GENERIC">("GENERIC");
   const [modalBusy, setModalBusy] = useState(false);
 
   const [toast, setToast] = useState<string | null>(null);
@@ -218,8 +222,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auto, symbolsToQuote.join("|")]);
 
-  function openModal(kind: typeof modalKind, title: string, payload: any, subtitle?: string) {
-    setModalKind(kind);
+  function openModal(title: string, payload: any, subtitle?: string) {
     setModalTitle(title);
     setModalSubtitle(subtitle);
     setModalJson(payload);
@@ -229,30 +232,51 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
   async function doCalc(row: Row) {
     setModalBusy(true);
     showToast(`Calc: ${row.symbol}`);
-    try {
-      const res = await fetch("/api/position-size", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          symbol: row.symbol,
-          entry: row.entry,
-          stop: row.stop,
-        }),
-      });
-      const json = await res.json().catch(() => null);
-      openModal("CALC", `Position sizing: ${row.symbol}`, json ?? { ok: false, error: "No response" }, "Uses your active portfolio risk settings.");
-    } catch (e: any) {
-      openModal("CALC", `Position sizing: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
-    } finally {
-      setModalBusy(false);
-    }
+
+    // Compute risk USD + remaining cash on client (authoritative enough for UI)
+    const maxRiskUsd =
+      typeof accountSize === "number" && typeof riskPerTrade === "number"
+        ? accountSize * riskPerTrade
+        : null;
+
+    const remainingCash =
+      typeof accountSize === "number" ? Math.max(0, accountSize - (capitalDeployed ?? 0)) : null;
+
+    const rPerShare = row.entry - row.stop;
+    const riskShares =
+      maxRiskUsd && rPerShare > 0 ? Math.floor(maxRiskUsd / rPerShare) : null;
+
+    const cashShares =
+      remainingCash && row.entry > 0 ? Math.floor(remainingCash / row.entry) : null;
+
+    const suggested =
+      riskShares !== null && cashShares !== null ? Math.min(riskShares, cashShares) : riskShares ?? cashShares;
+
+    openModal(`Position sizing: ${row.symbol}`, {
+      ok: true,
+      symbol: row.symbol,
+      entry: row.entry,
+      stop: row.stop,
+      tp1: row.tp1 ?? null,
+      tp2: row.tp2 ?? null,
+      maxRiskUsd,
+      remainingCash,
+      riskShares,
+      cashShares,
+      suggestedShares: suggested,
+      note:
+        "Suggested shares are capped by BOTH risk-per-trade and remaining cash. (No broker orders placed.)",
+    });
+
+    setModalBusy(false);
   }
 
   async function doOpen(row: Row) {
     setModalBusy(true);
     showToast(`Open: ${row.symbol}`);
     try {
-      const res = await fetch("/api/positions/add", {
+      // Try payload shape A
+      let res = await fetch("/api/positions/add", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -261,10 +285,31 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
           stop_price: row.stop,
         }),
       });
-      const json = await res.json().catch(() => null);
-      openModal("OPEN", `Open position: ${row.symbol}`, json ?? { ok: false, error: "No response" });
+
+      let parsed = await fetchJsonOrText(res);
+      let json: any = parsed.json ?? (parsed.text ? { ok: false, error: parsed.text } : null);
+
+      // If stop invalid, try alternate naming (common mismatch)
+      if (!res.ok || json?.ok === false) {
+        const err = (json?.error ?? "").toString().toLowerCase();
+        if (err.includes("stop")) {
+          res = await fetch("/api/positions/add", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              symbol: row.symbol,
+              entry: row.entry,
+              stop: row.stop,
+            }),
+          });
+          parsed = await fetchJsonOrText(res);
+          json = parsed.json ?? (parsed.text ? { ok: false, error: parsed.text } : null);
+        }
+      }
+
+      openModal(`Open position: ${row.symbol}`, json ?? { ok: false, error: `HTTP ${res.status}` });
     } catch (e: any) {
-      openModal("OPEN", `Open position: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
+      openModal(`Open position: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
     } finally {
       setModalBusy(false);
     }
@@ -284,10 +329,19 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
           strategy_version: "v1",
         }),
       });
-      const json = await res.json().catch(() => null);
-      openModal("WHY", `Why: ${row.symbol}`, json ?? { ok: false, error: "No response" });
+
+      const parsed = await fetchJsonOrText(res);
+      const json =
+        parsed.json ??
+        {
+          ok: false,
+          error: `Non-JSON response (HTTP ${res.status})`,
+          raw: parsed.text?.slice(0, 1000) ?? "",
+        };
+
+      openModal(`Why: ${row.symbol}`, json);
     } catch (e: any) {
-      openModal("WHY", `Why: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
+      openModal(`Why: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
     } finally {
       setModalBusy(false);
     }
@@ -296,100 +350,83 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
   function renderModalBody() {
     const j = modalJson ?? {};
     const ok = !!j?.ok;
-    const err = j?.error ?? j?.message ?? null;
 
     if (!ok) {
       return (
         <div className="space-y-3">
           <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
             <div className="font-semibold">Action failed</div>
-            <div className="mt-1">{String(err ?? "Unknown error")}</div>
+            <div className="mt-1">{String(j?.error ?? "Unknown error")}</div>
           </div>
 
-          <details className="rounded-xl border border-slate-200 bg-white p-3">
-            <summary className="cursor-pointer text-sm font-semibold text-slate-900">Raw response</summary>
-            <pre className="mt-2 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
-{JSON.stringify(j, null, 2)}
-            </pre>
-          </details>
+          {j?.raw ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="text-xs font-semibold text-slate-900">Raw response</div>
+              <pre className="mt-2 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
+{String(j.raw)}
+              </pre>
+            </div>
+          ) : null}
         </div>
       );
     }
 
-    if (modalKind === "CALC") {
-      // best-effort display (we don't assume exact keys)
-      const shares =
-        j?.shares ?? j?.qty ?? j?.quantity ?? j?.size ?? j?.position_size ?? null;
-
-      const riskUsd = j?.risk_usd ?? j?.riskUsd ?? j?.max_loss ?? null;
-      const entry = j?.entry ?? j?.entry_price ?? null;
-      const stop = j?.stop ?? j?.stop_price ?? null;
-
+    // Calc modal nice layout
+    if (j?.suggestedShares !== undefined) {
       return (
         <div className="space-y-3">
           <div className="grid gap-2 sm:grid-cols-2">
-            <KV k="Suggested shares" v={shares !== null ? String(shares) : "—"} />
-            <KV k="Max risk (USD)" v={riskUsd !== null ? fmtMoney(Number(riskUsd)) : "—"} />
-            <KV k="Entry" v={entry !== null ? fmt2(Number(entry)) : "—"} />
-            <KV k="Stop" v={stop !== null ? fmt2(Number(stop)) : "—"} />
+            <KV k="Suggested shares (final)" v={String(j.suggestedShares ?? "—")} />
+            <KV k="Max risk (USD)" v={j.maxRiskUsd !== null ? fmtMoney(Number(j.maxRiskUsd)) : "—"} />
+            <KV k="Remaining cash" v={j.remainingCash !== null ? fmtMoney(Number(j.remainingCash)) : "—"} />
+            <KV k="Risk-based shares" v={j.riskShares !== null ? String(j.riskShares) : "—"} />
+            <KV k="Cash-capped shares" v={j.cashShares !== null ? String(j.cashShares) : "—"} />
+            <KV k="Entry" v={fmt2(Number(j.entry))} />
+            <KV k="Stop" v={fmt2(Number(j.stop))} />
+            <KV k="TP1" v={j.tp1 ? fmt2(Number(j.tp1)) : "—"} />
+            <KV k="TP2" v={j.tp2 ? fmt2(Number(j.tp2)) : "—"} />
           </div>
 
-          <details className="rounded-xl border border-slate-200 bg-white p-3">
-            <summary className="cursor-pointer text-sm font-semibold text-slate-900">Raw response</summary>
-            <pre className="mt-2 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
-{JSON.stringify(j, null, 2)}
-            </pre>
-          </details>
+          <div className="text-xs text-slate-500">
+            {String(j.note ?? "")}
+          </div>
         </div>
       );
     }
 
-    if (modalKind === "WHY") {
-      const summary = j?.reason_summary ?? j?.summary ?? null;
-      const checks = j?.reason_json?.checks ?? j?.checks ?? null;
+    // Details (why) summary
+    const summary = j?.reason_summary ?? null;
+    const checks = j?.reason_json?.checks ?? j?.checks ?? null;
 
-      return (
-        <div className="space-y-3">
-          {summary ? (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
-              <div className="text-xs text-slate-500">Summary</div>
-              <div className="mt-1 font-semibold">{String(summary)}</div>
-            </div>
-          ) : null}
-
-          {Array.isArray(checks) ? (
-            <div className="rounded-xl border border-slate-200 bg-white p-3">
-              <div className="text-sm font-semibold text-slate-900">Checks</div>
-              <div className="mt-2 space-y-2">
-                {checks.slice(0, 12).map((c: any, idx: number) => (
-                  <div key={idx} className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <div className="text-sm font-medium text-slate-900">{c?.label ?? "Check"}</div>
-                    <div className={clsx("text-xs font-semibold", c?.ok ? "text-emerald-600" : "text-rose-600")}>
-                      {c?.ok ? "PASS" : "FAIL"}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          <details className="rounded-xl border border-slate-200 bg-white p-3">
-            <summary className="cursor-pointer text-sm font-semibold text-slate-900">Raw response</summary>
-            <pre className="mt-2 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">
-{JSON.stringify(j, null, 2)}
-            </pre>
-          </details>
-        </div>
-      );
-    }
-
-    // OPEN + generic
     return (
       <div className="space-y-3">
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
-          <div className="font-semibold">Success</div>
-          <div className="mt-1">Action completed.</div>
-        </div>
+        {summary ? (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+            <div className="text-xs text-slate-500">Summary</div>
+            <div className="mt-1 font-semibold">{String(summary)}</div>
+          </div>
+        ) : null}
+
+        {Array.isArray(checks) ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <div className="text-sm font-semibold text-slate-900">Checks</div>
+            <div className="mt-2 space-y-2">
+              {checks.slice(0, 12).map((c: any, idx: number) => (
+                <div key={idx} className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                  <div className="text-sm font-medium text-slate-900">{c?.label ?? "Check"}</div>
+                  <div className={clsx("text-xs font-semibold", c?.ok ? "text-emerald-600" : "text-rose-600")}>
+                    {c?.ok ? "PASS" : "FAIL"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+            <div className="font-semibold">Success</div>
+            <div className="mt-1">Action completed.</div>
+          </div>
+        )}
 
         <details className="rounded-xl border border-slate-200 bg-white p-3">
           <summary className="cursor-pointer text-sm font-semibold text-slate-900">Raw response</summary>
@@ -406,21 +443,11 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
       {toast ? <Toast msg={toast} /> : null}
 
       <div className="flex flex-wrap gap-2">
-        <button className={chipClass(filter === "BUY+WATCH")} onClick={() => setFilter("BUY+WATCH")}>
-          BUY + WATCH
-        </button>
-        <button className={chipClass(filter === "BUY")} onClick={() => setFilter("BUY")}>
-          BUY
-        </button>
-        <button className={chipClass(filter === "WATCH")} onClick={() => setFilter("WATCH")}>
-          WATCH
-        </button>
-        <button className={chipClass(filter === "AVOID")} onClick={() => setFilter("AVOID")}>
-          AVOID
-        </button>
-        <button className={chipClass(filter === "ALL")} onClick={() => setFilter("ALL")}>
-          ALL
-        </button>
+        <button className={chipClass(filter === "BUY+WATCH")} onClick={() => setFilter("BUY+WATCH")}>BUY + WATCH</button>
+        <button className={chipClass(filter === "BUY")} onClick={() => setFilter("BUY")}>BUY</button>
+        <button className={chipClass(filter === "WATCH")} onClick={() => setFilter("WATCH")}>WATCH</button>
+        <button className={chipClass(filter === "AVOID")} onClick={() => setFilter("AVOID")}>AVOID</button>
+        <button className={chipClass(filter === "ALL")} onClick={() => setFilter("ALL")}>ALL</button>
       </div>
 
       <div className="text-sm muted">
@@ -450,9 +477,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         <div className="flex flex-col gap-2 border-b border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-xs text-slate-500">
             Live prices overlay (signals remain daily). <span className="text-slate-400">Scan date: {scanDate}</span>
-            {lastUpdatedAt ? (
-              <span className="ml-2 text-slate-400">Updated: {new Date(lastUpdatedAt).toLocaleTimeString()}</span>
-            ) : null}
+            {lastUpdatedAt ? <span className="ml-2 text-slate-400">Updated: {new Date(lastUpdatedAt).toLocaleTimeString()}</span> : null}
           </div>
 
           <div className="flex items-center gap-2">
@@ -475,7 +500,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         {quoteError ? <div className="px-3 py-2 text-xs text-rose-600 border-b border-slate-200">{quoteError}</div> : null}
 
         <div className="overflow-x-auto">
-          <table className="min-w-[980px] w-full text-sm">
+          <table className="min-w-[1100px] w-full text-sm">
             <thead className="text-left text-xs text-slate-500">
               <tr className="border-b border-slate-200">
                 <th className="p-3">SYMBOL</th>
@@ -483,6 +508,8 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                 <th className="p-3">CONF</th>
                 <th className="p-3">ENTRY</th>
                 <th className="p-3">STOP</th>
+                <th className="p-3">TP1</th>
+                <th className="p-3">TP2</th>
                 <th className="p-3">LIVE</th>
                 <th className="p-3">Δ vs ENTRY</th>
                 <th className="p-3 text-right">ACTIONS</th>
@@ -491,11 +518,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
             <tbody>
               {filtered.length === 0 ? (
-                <tr>
-                  <td className="p-3 text-slate-500" colSpan={8}>
-                    No rows for this filter.
-                  </td>
-                </tr>
+                <tr><td className="p-3 text-slate-500" colSpan={10}>No rows for this filter.</td></tr>
               ) : (
                 filtered.map((r) => {
                   const sym = r.symbol.trim().toUpperCase();
@@ -506,11 +529,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
                   const dEntryClass =
                     typeof dEntry === "number"
-                      ? dEntry > 0
-                        ? "text-emerald-600"
-                        : dEntry < 0
-                          ? "text-rose-600"
-                          : "text-slate-600"
+                      ? dEntry > 0 ? "text-emerald-600" : dEntry < 0 ? "text-rose-600" : "text-slate-600"
                       : "text-slate-500";
 
                   return (
@@ -524,23 +543,17 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                       <td className="p-3 text-slate-800 font-semibold">{r.confidence}</td>
                       <td className="p-3 text-slate-800">{Number(r.entry).toFixed(2)}</td>
                       <td className="p-3 text-slate-800">{Number(r.stop).toFixed(2)}</td>
+                      <td className="p-3 text-slate-800">{r.tp1 ? Number(r.tp1).toFixed(2) : "—"}</td>
+                      <td className="p-3 text-slate-800">{r.tp2 ? Number(r.tp2).toFixed(2) : "—"}</td>
 
                       <td className="p-3 text-slate-800">{typeof live === "number" ? fmt2(live) : "—"}</td>
-                      <td className={clsx("p-3 font-semibold", dEntryClass)}>
-                        {typeof dEntry === "number" ? fmtPct(dEntry) : "—"}
-                      </td>
+                      <td className={clsx("p-3 font-semibold", dEntryClass)}>{typeof dEntry === "number" ? fmtPct(dEntry) : "—"}</td>
 
                       <td className="p-3">
                         <div className="flex justify-end gap-2 whitespace-nowrap">
-                          <Button variant="secondary" onClick={() => doCalc(r)} disabled={modalBusy}>
-                            Calc
-                          </Button>
-                          <Button onClick={() => doOpen(r)} disabled={modalBusy}>
-                            Open
-                          </Button>
-                          <Button variant="secondary" onClick={() => doDetails(r)} disabled={modalBusy}>
-                            Details
-                          </Button>
+                          <Button variant="secondary" onClick={() => doCalc(r)} disabled={modalBusy}>Calc</Button>
+                          <Button onClick={() => doOpen(r)} disabled={modalBusy}>Open</Button>
+                          <Button variant="secondary" onClick={() => doDetails(r)} disabled={modalBusy}>Details</Button>
                         </div>
                       </td>
                     </tr>
@@ -556,12 +569,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         </div>
       </div>
 
-      <Modal
-        open={modalOpen}
-        title={modalTitle}
-        subtitle={modalSubtitle}
-        onClose={() => setModalOpen(false)}
-      >
+      <Modal open={modalOpen} title={modalTitle} subtitle={modalSubtitle} onClose={() => setModalOpen(false)}>
         {renderModalBody()}
       </Modal>
     </div>
