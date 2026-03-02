@@ -52,13 +52,22 @@ export default async function PortfoliosPage() {
           </div>
         </div>
 
-        <Link
-          href="/screener"
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
-        >
-          <span aria-hidden="true">←</span>
-          Back to Screener
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/portfolio"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
+          >
+            View Positions
+          </Link>
+
+          <Link
+            href="/screener"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
+          >
+            <span aria-hidden="true">←</span>
+            Back to Screener
+          </Link>
+        </div>
       </div>
 
       <PortfoliosClient initialPortfolios={portfolios ?? []} />
