@@ -9,6 +9,9 @@ import { Button } from "@/components/ui/Button";
 
 export const dynamic = "force-dynamic";
 
+const DEFAULT_UNIVERSE = "liquid_2000";
+const DEFAULT_STRATEGY_VERSION = "v1";
+
 export default async function ScreenerPage() {
   const supabase = await supabaseServer();
 
@@ -16,9 +19,7 @@ export default async function ScreenerPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) {
-    redirect("/auth?next=/screener");
-  }
+  if (!user) redirect("/auth?next=/screener");
 
   const { data: defaultPortfolio } = await supabase
     .from("portfolios")
@@ -36,11 +37,12 @@ export default async function ScreenerPage() {
 
   const regime = regimeRows?.[0] ?? null;
 
+  // Latest scan date for LIQUID 2000
   const { data: latestScan } = await supabase
     .from("daily_scans")
     .select("date")
-    .eq("universe_slug", "core_400")
-    .eq("strategy_version", "v1")
+    .eq("universe_slug", DEFAULT_UNIVERSE)
+    .eq("strategy_version", DEFAULT_STRATEGY_VERSION)
     .order("date", { ascending: false })
     .limit(1);
 
@@ -51,11 +53,11 @@ export default async function ScreenerPage() {
     const { data: rows } = await supabase
       .from("daily_scans")
       .select("symbol, signal, confidence, entry, stop, tp1, tp2")
-      .eq("universe_slug", "core_400")
-      .eq("strategy_version", "v1")
+      .eq("universe_slug", DEFAULT_UNIVERSE)
+      .eq("strategy_version", DEFAULT_STRATEGY_VERSION)
       .eq("date", latestScanDate)
       .order("confidence", { ascending: false })
-      .limit(80);
+      .limit(200);
 
     scanRows = rows ?? [];
   }
@@ -70,17 +72,16 @@ export default async function ScreenerPage() {
     );
 
   return (
-    <div className="container-page space-y-6">
-      <div className="flex items-start justify-between gap-6">
+    <div className="container-page px-4 sm:px-6 lg:px-8 space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Screener</h1>
           <div className="mt-2 text-sm muted">
-            Logged in as <span className="font-semibold">{user.email}</span>
+            Logged in as <span className="font-semibold break-all">{user.email}</span>
           </div>
         </div>
 
-        {/* ✅ Search bar + buttons */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 justify-start sm:justify-end">
           <ScreenerSearchClient />
           <a href="/portfolios">
             <Button variant="secondary">Portfolios</Button>
@@ -97,7 +98,7 @@ export default async function ScreenerPage() {
             title="Latest scan"
             subtitle={
               latestScanDate
-                ? `Scan date: ${latestScanDate} • Universe: core_400`
+                ? `Scan date: ${latestScanDate} • Universe: Liquid 2000 (Top Liquidity)`
                 : "Run a scan to populate results"
             }
             right={regime ? regimeBadge : <Badge variant="neutral">No regime</Badge>}
@@ -105,7 +106,11 @@ export default async function ScreenerPage() {
           <CardContent>
             {!latestScanDate ? (
               <div className="text-sm muted">
-                No scan results yet. Use Utilities below to ingest and scan.
+                No Liquid 2000 scan results yet. Use Utilities below:
+                <br />
+                1) Ingest history (until you have good coverage)
+                <br />
+                2) Run scan (all batches)
               </div>
             ) : (
               <ScanTableClient rows={scanRows} scanDate={latestScanDate} />
@@ -119,6 +124,7 @@ export default async function ScreenerPage() {
             {defaultPortfolio ? (
               <div className="space-y-2 text-sm">
                 <div className="text-base font-semibold">{defaultPortfolio.name}</div>
+
                 <div className="muted">
                   <span className="font-mono">
                     {defaultPortfolio.account_currency}{" "}
@@ -144,36 +150,36 @@ export default async function ScreenerPage() {
                     Strategy & logic
                   </a>
                 </div>
+
+                <div className="mt-5 border-t border-slate-200 pt-4 space-y-2">
+                  <div className="text-sm font-semibold">Market regime (SPY)</div>
+                  {regime ? (
+                    <div className="text-sm">
+                      <div className="muted">
+                        Date: <span className="font-mono">{regime.date}</span>
+                      </div>
+                      <div className="mt-1">
+                        State: <span className="font-semibold">{regime.state}</span>
+                      </div>
+                      <div className="mt-1 muted font-mono">
+                        Close {Number(regime.close).toFixed(2)} • SMA200{" "}
+                        {Number(regime.sma200).toFixed(2)}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm muted">No regime computed yet.</div>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="text-sm muted">No default portfolio found.</div>
             )}
-
-            <div className="mt-5 border-t border-slate-200 pt-4 space-y-2">
-              <div className="text-sm font-semibold">Market regime (SPY)</div>
-              {regime ? (
-                <div className="text-sm">
-                  <div className="muted">
-                    Date: <span className="font-mono">{regime.date}</span>
-                  </div>
-                  <div className="mt-1">
-                    State: <span className="font-semibold">{regime.state}</span>
-                  </div>
-                  <div className="mt-1 muted font-mono">
-                    Close {Number(regime.close).toFixed(2)} • SMA200{" "}
-                    {Number(regime.sma200).toFixed(2)}
-                  </div>
-                </div>
-              ) : (
-                <div className="text-sm muted">No regime computed yet.</div>
-              )}
-            </div>
           </CardContent>
         </Card>
       </div>
 
       <Card>
-        <CardHeader title="Utilities" subtitle="Run server jobs without leaving the page" />
+        <CardHeader title="Utilities" subtitle="Build universe, ingest history, and scan in safe batches" />
         <CardContent>
           <UtilitiesClient />
         </CardContent>
