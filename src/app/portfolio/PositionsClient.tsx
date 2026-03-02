@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useMemo, useState } from "react";
 import ClosedTradeSummaryCards from "./ClosedTradeSummaryCards";
 import { ClosedTradeSummary, formatPct } from "@/lib/analytics/closedTradeSummary";
 
@@ -23,6 +22,18 @@ type PositionRow = {
   created_at?: string | null;
 };
 
+type GroupedOpenRow = {
+  symbol: string;
+  qty: number;
+  avgEntry: number | null;
+  stop: number | null; // placeholder; we’ll keep blank for now
+  openedAt: string | null; // earliest created_at across lots
+  last: number | null;
+  unrealUsd: number | null;
+  unrealPct: number | null;
+  lotIds: string[];
+};
+
 function clsx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
 }
@@ -30,6 +41,22 @@ function clsx(...xs: Array<string | false | null | undefined>) {
 function formatMoney(x: number | null | undefined) {
   if (typeof x !== "number" || !Number.isFinite(x)) return "—";
   return `$${x.toFixed(2)}`;
+}
+
+function formatMoneySigned(x: number | null | undefined) {
+  if (typeof x !== "number" || !Number.isFinite(x)) return "—";
+  const sign = x > 0 ? "+" : "";
+  return `${sign}$${x.toFixed(2)}`;
+}
+
+function formatNum(x: number | null | undefined) {
+  if (typeof x !== "number" || !Number.isFinite(x)) return "—";
+  return x.toFixed(2);
+}
+
+function formatInt(x: number | null | undefined) {
+  if (typeof x !== "number" || !Number.isFinite(x)) return "—";
+  return `${Math.round(x)}`;
 }
 
 function formatDate(x: string | null | undefined) {
@@ -107,15 +134,17 @@ export default function PositionsClient({
   openPositions,
   closedPositions,
   closedSummary,
+  latestPriceBySymbol,
 }: {
   openPositions: PositionRow[];
   closedPositions: PositionRow[];
   closedSummary: ClosedTradeSummary;
+  latestPriceBySymbol: Record<string, number | null>;
 }) {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-
   const [tab, setTab] = useState<"OPEN" | "CLOSED">("OPEN");
+
+  // Open table mode: grouped vs lots
+  const [openMode, setOpenMode] = useState<"GROUPED" | "LOTS">("GROUPED");
 
   // toast
   const [toast, setToast] = useState<string | null>(null);
@@ -124,7 +153,7 @@ export default function PositionsClient({
     setTimeout(() => setToast(null), 1800);
   }
 
-  // Close modal state
+  // Close modal state (still closes a single lot for now)
   const [closeModalOpen, setCloseModalOpen] = useState(false);
   const [activePosition, setActivePosition] = useState<PositionRow | null>(null);
   const [exitPriceInput, setExitPriceInput] = useState("");
@@ -196,7 +225,6 @@ export default function PositionsClient({
   }
 
   function openManual() {
-    setTab("OPEN");
     setMSymbol("");
     setMEntry("");
     setMStop("");
@@ -218,8 +246,7 @@ export default function PositionsClient({
     const qty = Number(mQty);
 
     if (!symbol) return setManualError("Symbol is required (e.g. AAPL).");
-    if (!Number.isFinite(entry) || entry <= 0)
-      return setManualError("Entry price must be a positive number.");
+    if (!Number.isFinite(entry) || entry <= 0) return setManualError("Entry price must be a positive number.");
     if (mStop.trim() && (!Number.isFinite(stop) || stop <= 0))
       return setManualError("Stop must be blank or a positive number.");
     if (mQty.trim() && (!Number.isFinite(qty) || qty <= 0))
@@ -255,22 +282,73 @@ export default function PositionsClient({
     }
   }
 
-  // Auto-open manual add modal if /portfolio?manualAdd=1
-  const didAutoOpenRef = useRef(false);
-  useEffect(() => {
-    if (didAutoOpenRef.current) return;
+  // Build grouped open rows
+  const groupedOpen: GroupedOpenRow[] = useMemo(() => {
+    const map = new Map<string, { lots: PositionRow[] }>();
 
-    const v = searchParams?.get("manualAdd");
-    const shouldOpen = v === "1" || v === "true" || v === "yes";
-
-    if (shouldOpen) {
-      didAutoOpenRef.current = true;
-      openManual();
-
-      // Clean URL so refresh doesn't re-open modal
-      router.replace("/portfolio", { scroll: false });
+    for (const p of openPositions) {
+      const sym = (p.symbol ?? "").toUpperCase();
+      if (!sym) continue;
+      const cur = map.get(sym) ?? { lots: [] };
+      cur.lots.push(p);
+      map.set(sym, cur);
     }
-  }, [searchParams, router]); // openManual is stable enough here
+
+    const rows: GroupedOpenRow[] = [];
+
+    for (const [symbol, { lots }] of map.entries()) {
+      let totalQty = 0;
+      let costSum = 0;
+
+      let earliest: string | null = null;
+
+      for (const l of lots) {
+        const q = resolveQty(l);
+        const entry = l.entry_price ?? null;
+        if (typeof entry === "number" && entry > 0 && q > 0) {
+          totalQty += q;
+          costSum += entry * q;
+        }
+
+        const dt = l.created_at ?? null;
+        if (dt && (!earliest || new Date(dt).getTime() < new Date(earliest).getTime())) {
+          earliest = dt;
+        }
+      }
+
+      const avgEntry = totalQty > 0 ? costSum / totalQty : null;
+      const last = latestPriceBySymbol?.[symbol] ?? null;
+
+      let unrealUsd: number | null = null;
+      let unrealPct: number | null = null;
+
+      if (typeof avgEntry === "number" && avgEntry > 0 && typeof last === "number" && Number.isFinite(last)) {
+        unrealUsd = (last - avgEntry) * totalQty;
+        unrealPct = (last - avgEntry) / avgEntry;
+      }
+
+      rows.push({
+        symbol,
+        qty: totalQty,
+        avgEntry,
+        stop: null,
+        openedAt: earliest,
+        last: typeof last === "number" ? last : null,
+        unrealUsd,
+        unrealPct,
+        lotIds: lots.map((x) => x.id),
+      });
+    }
+
+    // Sort: biggest unrealized $ magnitude first
+    rows.sort((a, b) => {
+      const av = a.unrealUsd ?? 0;
+      const bv = b.unrealUsd ?? 0;
+      return Math.abs(bv) - Math.abs(av);
+    });
+
+    return rows;
+  }, [openPositions, latestPriceBySymbol]);
 
   return (
     <div className="space-y-4">
@@ -305,8 +383,32 @@ export default function PositionsClient({
       {/* OPEN */}
       {tab === "OPEN" ? (
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between gap-3 p-3 border-b border-slate-200">
-            <div className="text-sm font-semibold text-slate-900">Open positions</div>
+          <div className="flex flex-col gap-2 p-3 border-b border-slate-200 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-2">
+              <div className="text-sm font-semibold text-slate-900">Open positions</div>
+
+              <div className="ml-2 flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
+                <button
+                  className={clsx(
+                    "rounded-lg px-2 py-1 text-xs font-medium",
+                    openMode === "GROUPED" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
+                  )}
+                  onClick={() => setOpenMode("GROUPED")}
+                >
+                  Grouped
+                </button>
+                <button
+                  className={clsx(
+                    "rounded-lg px-2 py-1 text-xs font-medium",
+                    openMode === "LOTS" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
+                  )}
+                  onClick={() => setOpenMode("LOTS")}
+                >
+                  Lots
+                </button>
+              </div>
+            </div>
+
             <button
               className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
               onClick={openManual}
@@ -316,45 +418,134 @@ export default function PositionsClient({
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="text-left text-xs text-slate-500">
-                <tr className="border-b border-slate-200">
-                  <th className="p-3">Symbol</th>
-                  <th className="p-3">Entry</th>
-                  <th className="p-3">Stop</th>
-                  <th className="p-3">Qty</th>
-                  <th className="p-3">Opened</th>
-                  <th className="p-3 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {openPositions.length === 0 ? (
-                  <tr>
-                    <td className="p-3 text-slate-500" colSpan={6}>
-                      No open positions.
-                    </td>
+            {openMode === "GROUPED" ? (
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs text-slate-500">
+                  <tr className="border-b border-slate-200">
+                    <th className="p-3">Symbol</th>
+                    <th className="p-3">Avg cost</th>
+                    <th className="p-3">Last</th>
+                    <th className="p-3">Qty</th>
+                    <th className="p-3">Unrealized $</th>
+                    <th className="p-3">Unrealized %</th>
+                    <th className="p-3">Opened</th>
+                    <th className="p-3 text-right">Action</th>
                   </tr>
-                ) : (
-                  openPositions.map((p) => (
-                    <tr key={p.id} className="border-b border-slate-100">
-                      <td className="p-3 font-semibold text-slate-900">{p.symbol}</td>
-                      <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
-                      <td className="p-3 text-slate-800">{formatMoney(p.stop_price ?? null)}</td>
-                      <td className="p-3 text-slate-800">{resolveQty(p) || "—"}</td>
-                      <td className="p-3 text-slate-800">{formatDate(p.created_at ?? null)}</td>
-                      <td className="p-3 text-right">
-                        <button
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50"
-                          onClick={() => openCloseModal(p)}
-                        >
-                          Close
-                        </button>
+                </thead>
+                <tbody>
+                  {groupedOpen.length === 0 ? (
+                    <tr>
+                      <td className="p-3 text-slate-500" colSpan={8}>
+                        No open positions.
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : (
+                    groupedOpen.map((g) => {
+                      const pnl = g.unrealUsd ?? null;
+                      const pnlClass =
+                        typeof pnl === "number"
+                          ? pnl > 0
+                            ? "text-emerald-600"
+                            : pnl < 0
+                              ? "text-rose-600"
+                              : "text-slate-600"
+                          : "text-slate-500";
+
+                      return (
+                        <tr key={g.symbol} className="border-b border-slate-100">
+                          <td className="p-3 font-semibold text-slate-900">{g.symbol}</td>
+                          <td className="p-3 text-slate-800">{formatMoney(g.avgEntry)}</td>
+                          <td className="p-3 text-slate-800">{formatMoney(g.last)}</td>
+                          <td className="p-3 text-slate-800">{formatInt(g.qty)}</td>
+                          <td className={clsx("p-3 font-semibold", pnlClass)}>{formatMoneySigned(g.unrealUsd)}</td>
+                          <td className={clsx("p-3 font-semibold", pnlClass)}>
+                            {typeof g.unrealPct === "number" ? formatPct(g.unrealPct) : "—"}
+                          </td>
+                          <td className="p-3 text-slate-800">{formatDate(g.openedAt)}</td>
+                          <td className="p-3 text-right text-xs text-slate-500">
+                            {g.lotIds.length} lot{g.lotIds.length === 1 ? "" : "s"}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs text-slate-500">
+                  <tr className="border-b border-slate-200">
+                    <th className="p-3">Symbol</th>
+                    <th className="p-3">Entry</th>
+                    <th className="p-3">Last</th>
+                    <th className="p-3">Qty</th>
+                    <th className="p-3">Unrealized $</th>
+                    <th className="p-3">Unrealized %</th>
+                    <th className="p-3">Opened</th>
+                    <th className="p-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {openPositions.length === 0 ? (
+                    <tr>
+                      <td className="p-3 text-slate-500" colSpan={8}>
+                        No open positions.
+                      </td>
+                    </tr>
+                  ) : (
+                    openPositions.map((p) => {
+                      const qty = resolveQty(p);
+                      const last = latestPriceBySymbol?.[(p.symbol ?? "").toUpperCase()] ?? null;
+
+                      let unrealUsd: number | null = null;
+                      let unrealPct: number | null = null;
+
+                      if (
+                        typeof p.entry_price === "number" &&
+                        p.entry_price > 0 &&
+                        typeof last === "number" &&
+                        Number.isFinite(last) &&
+                        qty > 0
+                      ) {
+                        unrealUsd = (last - p.entry_price) * qty;
+                        unrealPct = (last - p.entry_price) / p.entry_price;
+                      }
+
+                      const pnlClass =
+                        typeof unrealUsd === "number"
+                          ? unrealUsd > 0
+                            ? "text-emerald-600"
+                            : unrealUsd < 0
+                              ? "text-rose-600"
+                              : "text-slate-600"
+                          : "text-slate-500";
+
+                      return (
+                        <tr key={p.id} className="border-b border-slate-100">
+                          <td className="p-3 font-semibold text-slate-900">{p.symbol}</td>
+                          <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
+                          <td className="p-3 text-slate-800">{formatMoney(last)}</td>
+                          <td className="p-3 text-slate-800">{qty || "—"}</td>
+                          <td className={clsx("p-3 font-semibold", pnlClass)}>{formatMoneySigned(unrealUsd)}</td>
+                          <td className={clsx("p-3 font-semibold", pnlClass)}>
+                            {typeof unrealPct === "number" ? formatPct(unrealPct) : "—"}
+                          </td>
+                          <td className="p-3 text-slate-800">{formatDate(p.created_at ?? null)}</td>
+                          <td className="p-3 text-right">
+                            <button
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50"
+                              onClick={() => openCloseModal(p)}
+                            >
+                              Close
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
 
           {/* Close modal */}
