@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import PortfoliosClient from "./PortfoliosClient";
 
@@ -23,14 +22,6 @@ async function makeSupabaseServerClient() {
         },
       },
     }
-  );
-}
-
-function makeSupabaseAdminClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false } }
   );
 }
 
@@ -62,22 +53,28 @@ export default async function PortfoliosPage() {
 
   if (!user) redirect("/auth?next=/portfolios");
 
-  const { data: portfolios } = await supabase
+  const { data: portfolios, error: portfoliosError } = await supabase
     .from("portfolios")
     .select("*")
     .eq("user_id", user.id)
     .order("created_at", { ascending: true });
 
+  if (portfoliosError) {
+    throw new Error(portfoliosError.message);
+  }
+
   const portfolioIds = (portfolios ?? []).map((p: any) => p.id).filter(Boolean);
 
   let positions: PositionRow[] = [];
   if (portfolioIds.length > 0) {
-    const admin = makeSupabaseAdminClient();
-
-    const { data: pos } = await admin
+    const { data: pos, error: posError } = await supabase
       .from("portfolio_positions")
       .select("portfolio_id,status,entry_price,exit_price,quantity,shares,position_size")
       .in("portfolio_id", portfolioIds);
+
+    if (posError) {
+      throw new Error(posError.message);
+    }
 
     positions = (pos ?? []) as any;
   }
