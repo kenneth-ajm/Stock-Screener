@@ -22,6 +22,19 @@ function fmtPct(p: number | null | undefined) {
   return `${sign}${(p * 100).toFixed(1)}%`;
 }
 
+function chipClass(active: boolean) {
+  return [
+    "rounded-full border px-3 py-1.5 text-xs font-semibold tracking-wide",
+    active ? "border-slate-300 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50",
+  ].join(" ");
+}
+
+function signalPill(signal: Row["signal"]) {
+  if (signal === "BUY") return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  if (signal === "WATCH") return "bg-amber-50 text-amber-700 border-amber-200";
+  return "bg-rose-50 text-rose-700 border-rose-200";
+}
+
 export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanDate: string }) {
   const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY+WATCH");
 
@@ -98,11 +111,13 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     }
   }
 
+  // refresh quotes when filter changes
   useEffect(() => {
     refreshQuotes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
+  // auto refresh every 15s
   useEffect(() => {
     if (!auto) return;
     const t = setInterval(() => {
@@ -114,20 +129,21 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
   return (
     <div className="space-y-4">
+      {/* Filter pills */}
       <div className="flex flex-wrap gap-2">
-        <button className={`chip ${filter === "BUY+WATCH" ? "chip-active" : ""}`} onClick={() => setFilter("BUY+WATCH")}>
+        <button className={chipClass(filter === "BUY+WATCH")} onClick={() => setFilter("BUY+WATCH")}>
           BUY + WATCH
         </button>
-        <button className={`chip ${filter === "BUY" ? "chip-active" : ""}`} onClick={() => setFilter("BUY")}>
+        <button className={chipClass(filter === "BUY")} onClick={() => setFilter("BUY")}>
           BUY
         </button>
-        <button className={`chip ${filter === "WATCH" ? "chip-active" : ""}`} onClick={() => setFilter("WATCH")}>
+        <button className={chipClass(filter === "WATCH")} onClick={() => setFilter("WATCH")}>
           WATCH
         </button>
-        <button className={`chip ${filter === "AVOID" ? "chip-active" : ""}`} onClick={() => setFilter("AVOID")}>
+        <button className={chipClass(filter === "AVOID")} onClick={() => setFilter("AVOID")}>
           AVOID
         </button>
-        <button className={`chip ${filter === "ALL" ? "chip-active" : ""}`} onClick={() => setFilter("ALL")}>
+        <button className={chipClass(filter === "ALL")} onClick={() => setFilter("ALL")}>
           ALL
         </button>
       </div>
@@ -158,8 +174,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
         <div className="flex flex-col gap-2 border-b border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-xs text-slate-500">
-            Live prices overlay (signals remain daily).{" "}
-            <span className="text-slate-400">Scan date: {scanDate}</span>
+            Live prices overlay (signals remain daily). <span className="text-slate-400">Scan date: {scanDate}</span>
             {lastUpdatedAt ? (
               <span className="ml-2 text-slate-400">Updated: {new Date(lastUpdatedAt).toLocaleTimeString()}</span>
             ) : null}
@@ -186,7 +201,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         {quoteError ? <div className="px-3 py-2 text-xs text-rose-600 border-b border-slate-200">{quoteError}</div> : null}
 
         <div className="overflow-x-auto">
-          <table className="min-w-[900px] w-full text-sm">
+          <table className="min-w-[980px] w-full text-sm">
             <thead className="text-left text-xs text-slate-500">
               <tr className="border-b border-slate-200">
                 <th className="p-3">SYMBOL</th>
@@ -227,7 +242,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                     <tr key={r.symbol} className="border-b border-slate-100">
                       <td className="p-3 font-semibold text-slate-900">{r.symbol}</td>
                       <td className="p-3">
-                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700">
+                        <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${signalPill(r.signal)}`}>
                           {r.signal}
                         </span>
                       </td>
@@ -236,7 +251,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                       <td className="p-3 text-slate-800">{Number(r.stop).toFixed(2)}</td>
 
                       <td className="p-3 text-slate-800">{typeof live === "number" ? fmt2(live) : "—"}</td>
-                      <td className={`p-3 font-medium ${dEntryClass}`}>{typeof dEntry === "number" ? fmtPct(dEntry) : "—"}</td>
+                      <td className={`p-3 font-semibold ${dEntryClass}`}>{typeof dEntry === "number" ? fmtPct(dEntry) : "—"}</td>
 
                       <td className="p-3">
                         <div className="flex justify-end gap-2 whitespace-nowrap">
