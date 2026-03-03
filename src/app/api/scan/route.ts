@@ -1,20 +1,49 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-type Bar = { date: string; high: number; low: number; close: number; volume: number };
+const DEFAULT_UNIVERSE = "liquid_2000";
+const DEFAULT_VERSION = "v1";
+
+const BUY_CAP = 5;
+const WATCH_CAP = 10;
+
+type ScanBody = {
+  universe_slug?: string;
+  version?: string;
+  offset?: number;
+  limit?: number;
+  scan_date?: string; // YYYY-MM-DD (optional override)
+};
+
+type Bar = {
+  date: string; // YYYY-MM-DD
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
+function isoDate(d = new Date()) {
+  return d.toISOString().slice(0, 10);
+}
 
 function sma(values: number[], period: number) {
   if (values.length < period) return null;
-  const slice = values.slice(-period);
-  return slice.reduce((a, b) => a + b, 0) / period;
+  let sum = 0;
+  for (let i = values.length - period; i < values.length; i++) sum += values[i];
+  return sum / period;
 }
-function rsi(values: number[], period = 14) {
-  if (values.length <= period) return null;
-  let gains = 0, losses = 0;
-  for (let i = values.length - period; i < values.length; i++) {
-    const change = values[i] - values[i - 1];
-    if (change >= 0) gains += change;
-    else losses += Math.abs(change);
+
+// Wilder RSI (simplified, good enough for daily swing)
+function rsi(closes: number[], period = 14) {
+  if (closes.length < period + 1) return null;
+  let gains = 0;
+  let losses = 0;
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) gains += diff;
+    else losses += -diff;
   }
   const avgGain = gains / period;
   const avgLoss = losses / period;
@@ -22,298 +51,386 @@ function rsi(values: number[], period = 14) {
   const rs = avgGain / avgLoss;
   return 100 - 100 / (1 + rs);
 }
-function atr(high: number[], low: number[], close: number[], period = 14) {
-  if (close.length <= period) return null;
+
+function trueRange(curr: Bar, prev: Bar) {
+  const hl = curr.high - curr.low;
+  const hc = Math.abs(curr.high - prev.close);
+  const lc = Math.abs(curr.low - prev.close);
+  return Math.max(hl, hc, lc);
+}
+
+// ATR (simple average TR over N; stable enough for this use)
+function atr(bars: Bar[], period = 14) {
+  if (bars.length < period + 1) return null;
   const trs: number[] = [];
-  for (let i = 1; i < close.length; i++) {
-    const tr = Math.max(
-      high[i] - low[i],
-      Math.abs(high[i] - close[i - 1]),
-      Math.abs(low[i] - close[i - 1])
-    );
-    trs.push(tr);
+  for (let i = bars.length - period; i < bars.length; i++) {
+    trs.push(trueRange(bars[i], bars[i - 1]));
   }
-  if (trs.length < period) return null;
-  return trs.slice(-period).reduce((a, b) => a + b, 0) / period;
-}
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
+  const sum = trs.reduce((a, b) => a + b, 0);
+  return sum / period;
 }
 
-type WhyLine = { ok: boolean; label: string; detail?: string };
-function summarizeWhy(lines: WhyLine[]) {
-  const okCount = lines.filter((l) => l.ok).length;
-  const bad = lines.filter((l) => !l.ok).map((l) => l.label);
-  const blockers = bad.slice(0, 2).join(", ");
-  if (!bad.length) return `Strong setup (${okCount}/${lines.length} checks passed).`;
-  return `Mixed setup (${okCount}/${lines.length} checks). Missing: ${blockers}.`;
+function avgVolume(bars: Bar[], period = 20) {
+  if (bars.length < period) return null;
+  const slice = bars.slice(bars.length - period);
+  const sum = slice.reduce((a, b) => a + (b.volume ?? 0), 0);
+  return sum / period;
 }
 
-async function finalizeCaps(supabase: any, scanDate: string) {
-  // Global caps per day
-  const BUY_CAP = 5;
-  const WATCH_CAP = 10;
-
-  const { data: rows, error } = await supabase
-    .from("daily_scans")
-    .select("symbol, signal, confidence")
-    .eq("date", scanDate)
-    .eq("universe_slug", "liquid_2000")
-    .eq("strategy_version", "v1");
-
-  if (error) return { ok: false, error: error.message };
-
-  const buy = (rows ?? []).filter((r: any) => r.signal === "BUY").sort((a: any, b: any) => (b.confidence ?? 0) - (a.confidence ?? 0));
-  const watch = (rows ?? []).filter((r: any) => r.signal === "WATCH").sort((a: any, b: any) => (b.confidence ?? 0) - (a.confidence ?? 0));
-
-  const keepBuy = new Set(buy.slice(0, BUY_CAP).map((r: any) => r.symbol));
-  const keepWatch = new Set(watch.slice(0, WATCH_CAP).map((r: any) => r.symbol));
-
-  const updates: any[] = [];
-  for (const r of rows ?? []) {
-    if (r.signal === "BUY" && !keepBuy.has(r.symbol)) {
-      updates.push({ date: scanDate, universe_slug: "liquid_2000", symbol: r.symbol, strategy_version: "v1", signal: "WATCH" });
-    }
-  }
-
-  // Recompute WATCH after buy downgrades (we’ll just cap overall WATCH set)
-  // Fetch again quickly is fine at this scale; keep simple.
-  const { data: rows2 } = await supabase
-    .from("daily_scans")
-    .select("symbol, signal, confidence")
-    .eq("date", scanDate)
-    .eq("universe_slug", "liquid_2000")
-    .eq("strategy_version", "v1");
-
-  const watch2 = (rows2 ?? []).filter((r: any) => r.signal === "WATCH").sort((a: any, b: any) => (b.confidence ?? 0) - (a.confidence ?? 0));
-  const keepWatch2 = new Set(watch2.slice(0, WATCH_CAP).map((r: any) => r.symbol));
-
-  for (const r of rows2 ?? []) {
-    if (r.signal === "WATCH" && !keepWatch2.has(r.symbol)) {
-      updates.push({ date: scanDate, universe_slug: "liquid_2000", symbol: r.symbol, strategy_version: "v1", signal: "AVOID" });
-    }
-  }
-
-  if (updates.length) {
-    const { error: upErr } = await supabase.from("daily_scans").upsert(updates, {
-      onConflict: "date,universe_slug,symbol,strategy_version",
-    });
-    if (upErr) return { ok: false, error: upErr.message };
-  }
-
-  return { ok: true, buy_cap: BUY_CAP, watch_cap: WATCH_CAP };
+function clamp(n: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, n));
 }
 
-export async function POST(req: Request) {
-  const body = await req.json().catch(() => ({}));
+// Score + signal for “strict v1” (daily swing)
+function scoreAndSignal(bars: Bar[]) {
+  const closes = bars.map((b) => b.close);
+  const latest = bars[bars.length - 1];
+  const prev = bars[bars.length - 2];
 
-  const universe_slug = (body?.universe_slug ?? "liquid_2000").toString();
-  const limit = typeof body?.limit === "number" ? Math.max(1, Math.min(600, body.limit)) : 300;
-  const offset = typeof body?.offset === "number" ? Math.max(0, body.offset) : 0;
+  const sma20 = sma(closes, 20);
+  const sma50 = sma(closes, 50);
+  const sma200 = sma(closes, 200);
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  const sma50Prev = sma(closes.slice(0, closes.length - 1), 50);
 
-  // Scan date
-  const { data: spyLatest, error: spyErr } = await supabase
-    .from("price_bars")
-    .select("date")
-    .eq("symbol", "SPY")
-    .order("date", { ascending: false })
-    .limit(1);
+  const r = rsi(closes, 14);
+  const a = atr(bars, 14);
+  const v20 = avgVolume(bars, 20);
 
-  if (spyErr || !spyLatest?.length) {
-    return NextResponse.json({ ok: false, error: spyErr?.message || "No SPY bars found" }, { status: 500 });
+  if (
+    sma20 == null ||
+    sma50 == null ||
+    sma200 == null ||
+    sma50Prev == null ||
+    r == null ||
+    a == null ||
+    v20 == null
+  ) {
+    return null;
   }
-  const scanDate = spyLatest[0].date as string;
 
-  // Regime
-  const { data: regimeRows } = await supabase
-    .from("market_regime")
-    .select("state")
-    .eq("symbol", "SPY")
-    .order("date", { ascending: false })
-    .limit(1);
+  const above50 = latest.close > sma50;
+  const above200 = latest.close > sma200;
+  const sma50Rising = sma50 > sma50Prev;
 
-  const regimeState: "FAVORABLE" | "CAUTION" | "DEFENSIVE" =
-    (regimeRows?.[0]?.state as any) ?? "CAUTION";
+  const volSpike = v20 > 0 ? latest.volume / v20 : 0;
 
-  // Universe union (liquid_2000 includes core_400)
-  const slugs = universe_slug === "liquid_2000" ? ["liquid_2000", "core_400"] : [universe_slug];
+  // “extension penalty”: dist from SMA20 > 2*ATR penalizes score
+  const distFromSma20 = Math.abs(latest.close - sma20);
+  const isExtended = distFromSma20 > 2 * a;
 
-  const { data: members, error: memErr } = await supabase
-    .from("universe_members")
-    .select("symbol, universes!inner(slug)")
-    .in("universes.slug", slugs)
-    .eq("active", true)
-    .order("symbol", { ascending: true });
+  // Base score (0..100)
+  let score = 50;
 
-  if (memErr) return NextResponse.json({ ok: false, error: memErr.message }, { status: 500 });
+  // Trend alignment
+  if (above50) score += 10;
+  else score -= 10;
 
-  const allSymbols = Array.from(
-    new Set((members ?? []).map((m: any) => String(m.symbol).toUpperCase()).filter(Boolean))
-  );
+  if (above200) score += 10;
+  else score -= 10;
 
-  const batch = allSymbols.slice(offset, offset + limit);
+  if (sma50Rising) score += 10;
+  else score -= 10;
 
-  const insertedRows: any[] = [];
-  const skipped: { symbol: string; reason: string }[] = [];
+  // RSI sweet spot 45–70
+  if (r >= 45 && r <= 70) score += 15;
+  else if (r < 40) score -= 10;
+  else if (r > 75) score -= 10;
 
-  for (const symbol of batch) {
-    const { data: bars, error: barErr } = await supabase
-      .from("price_bars")
-      .select("date, high, low, close, volume")
-      .eq("symbol", symbol)
-      .lte("date", scanDate)
-      .order("date", { ascending: true });
+  // Volume confirmation
+  if (volSpike >= 1.3) score += 10;
+  else score -= 5;
 
-    if (barErr || !bars || bars.length < 220) {
-      skipped.push({ symbol, reason: barErr?.message || "Not enough history (<220 bars)" });
-      continue;
-    }
+  // Extension penalty
+  if (isExtended) score -= 12;
 
-    const cleaned: Bar[] = bars.map((b: any) => ({
-      date: b.date,
-      high: Number(b.high),
-      low: Number(b.low),
-      close: Number(b.close),
-      volume: Number(b.volume),
-    }));
+  score = clamp(score, 0, 100);
 
-    const closes = cleaned.map((b) => b.close);
-    const highs = cleaned.map((b) => b.high);
-    const lows = cleaned.map((b) => b.low);
-    const vols = cleaned.map((b) => b.volume);
+  // Signal thresholds (tight)
+  let signal: "BUY" | "WATCH" | "AVOID" = "AVOID";
+  if (
+    score >= 75 &&
+    above50 &&
+    above200 &&
+    sma50Rising &&
+    r >= 45 &&
+    r <= 70 &&
+    volSpike >= 1.3
+  ) {
+    signal = "BUY";
+  } else if (score >= 60 && above50) {
+    signal = "WATCH";
+  }
 
-    const latestClose = closes[closes.length - 1];
+  // Confidence: map score to 0..100 (but keep it “truthy”)
+  const confidence = Math.round(score);
 
-    const sma20 = sma(closes, 20);
-    const sma50 = sma(closes, 50);
-    const sma200 = sma(closes, 200);
-    const prevSma50 = sma(closes.slice(0, -1), 50);
+  const entry = latest.close;
+  const stop = entry - 2 * a;
+  const rMultiple = entry - stop; // = 2*ATR
+  const tp1 = entry + 2 * rMultiple; // +2R
+  const tp2 = entry + 3 * rMultiple; // +3R
 
-    const rsi14 = rsi(closes, 14);
-    const atr14 = atr(highs, lows, closes, 14);
-    const vol20 = sma(vols, 20);
-    const volSpike = vol20 ? vols[vols.length - 1] / vol20 : null;
+  const reasons: string[] = [];
+  reasons.push(above50 ? "Above SMA50" : "Below SMA50");
+  reasons.push(above200 ? "Above SMA200" : "Below SMA200");
+  reasons.push(sma50Rising ? "SMA50 rising" : "SMA50 not rising");
+  reasons.push(`RSI ${r.toFixed(1)}`);
+  reasons.push(`VolSpike ${volSpike.toFixed(2)}x`);
+  if (isExtended) reasons.push("Extended vs SMA20 (penalty)");
 
-    if (!sma20 || !sma50 || !sma200 || rsi14 === null || !atr14 || !volSpike) {
-      skipped.push({ symbol, reason: "Indicator calc failed (null)" });
-      continue;
-    }
-
-    const above20 = latestClose > sma20;
-    const above50 = latestClose > sma50;
-    const above200 = latestClose > sma200;
-    const sma50Rising = prevSma50 ? sma50 > prevSma50 : false;
-
-    // score
-    let score = 0;
-    score += above20 ? 10 : 0;
-    score += above50 ? 20 : 0;
-    score += above200 ? 25 : 0;
-
-    // RSI
-    let rsiPts = 0;
-    if (rsi14 >= 45 && rsi14 <= 65) rsiPts = 20;
-    else if (rsi14 >= 35 && rsi14 < 45) rsiPts = 10;
-    else if (rsi14 > 65 && rsi14 <= 75) rsiPts = 5;
-    score += rsiPts;
-
-    // volume
-    let volPts = 0;
-    if (volSpike >= 1.5) volPts = 15;
-    else if (volSpike >= 1.2) volPts = 8;
-    score += volPts;
-
-    // extension penalty
-    const distFrom20 = Math.abs(latestClose - sma20);
-    if (distFrom20 > 2 * atr14) score -= 10;
-
-    // SMA50 rising bonus (and required for BUY)
-    if (sma50Rising) score += 5;
-
-    score = clamp(score, 0, 100);
-
-    let signal: "BUY" | "WATCH" | "AVOID" = "AVOID";
-
-    const baseBuy =
-      above50 &&
-      above200 &&
-      sma50Rising &&
-      rsi14 >= 45 &&
-      rsi14 <= 70 &&
-      volSpike >= 1.3;
-
-    // tight thresholds
-    if (baseBuy && score >= 75) signal = "BUY";
-    else if (score >= 50) signal = "WATCH";
-
-    if (regimeState === "DEFENSIVE" && signal === "BUY") {
-      signal = "WATCH";
-      score = clamp(score - 10, 0, 100);
-    }
-
-    const entry = latestClose;
-    const stop = entry - 2 * atr14;
-    const R = entry - stop;
-    const tp1 = entry + 2 * R;
-    const tp2 = entry + 3 * R;
-
-    const whyLines: WhyLine[] = [
-      { ok: above200, label: "Above SMA200" },
-      { ok: above50, label: "Above SMA50" },
-      { ok: sma50Rising, label: "SMA50 rising" },
-      { ok: above20, label: "Above SMA20" },
-      { ok: rsi14 >= 45 && rsi14 <= 70, label: "RSI healthy" },
-      { ok: volSpike >= 1.3, label: "Volume confirms" },
-      { ok: true, label: "Regime", detail: regimeState },
-    ];
-
-    insertedRows.push({
-      date: scanDate,
-      universe_slug: "liquid_2000",
-      symbol,
-      strategy_version: "v1",
-      signal,
-      confidence: Math.round(score),
-      entry,
-      stop,
-      tp1,
-      tp2,
+  const reason_summary = reasons.join(" • ");
+  const reason_json = {
+    version: "v1-strict",
+    latest: { date: latest.date, close: latest.close, volume: latest.volume },
+    indicators: {
       sma20,
       sma50,
       sma200,
-      rsi14,
-      atr14,
-      vol_spike: volSpike,
-      reason_summary: summarizeWhy(whyLines),
-      reason_json: { checks: whyLines, regime: regimeState },
-    });
-  }
+      rsi14: r,
+      atr14: a,
+      volAvg20: v20,
+      volSpike,
+      distFromSma20,
+      extended: isExtended,
+    },
+    checks: {
+      above50,
+      above200,
+      sma50Rising,
+      rsiSweetSpot: r >= 45 && r <= 70,
+      volSpikeOk: volSpike >= 1.3,
+    },
+    score,
+    signal,
+  };
 
-  if (insertedRows.length) {
-    const { error: upErr } = await supabase.from("daily_scans").upsert(insertedRows, {
-      onConflict: "date,universe_slug,symbol,strategy_version",
-    });
-    if (upErr) return NextResponse.json({ ok: false, error: upErr.message }, { status: 500 });
-  }
+  return {
+    signal,
+    confidence,
+    entry,
+    stop,
+    tp1,
+    tp2,
+    reason_summary,
+    reason_json,
+    score,
+  };
+}
 
-  // ✅ global caps
-  const capRes = await finalizeCaps(supabase, scanDate);
+function admin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("Missing Supabase env vars for admin client");
+  return createClient(url, key, { auth: { persistSession: false } });
+}
 
-  return NextResponse.json({
-    ok: true,
-    scanDate,
-    universe_slug: "liquid_2000",
-    regime: regimeState,
-    scanned: batch.length,
-    inserted: insertedRows.length,
-    skipped: skipped.length,
-    batch_offset: offset,
-    batch_limit: limit,
-    caps: capRes,
+/**
+ * GLOBAL CAP FINALIZER (per date + universe across ALL batches)
+ *
+ * Rules:
+ * - Keep top BUY_CAP BUY (confidence desc, symbol asc)
+ * - Remaining BUY become WATCH
+ * - Keep top WATCH_CAP WATCH (from original WATCH + downgraded BUY)
+ * - Remaining WATCH become AVOID
+ */
+async function enforceGlobalCaps(opts: {
+  supabase: ReturnType<typeof admin>;
+  date: string;
+  universe_slug: string;
+}) {
+  const { supabase, date, universe_slug } = opts;
+
+  // Pull only the rows that matter for capping
+  const { data, error } = await supabase
+    .from("daily_scans")
+    .select("id,symbol,signal,confidence")
+    .eq("date", date)
+    .eq("universe_slug", universe_slug)
+    .in("signal", ["BUY", "WATCH"]);
+
+  if (error) throw error;
+  if (!data || data.length === 0) return;
+
+  // Stable sort: confidence desc, symbol asc
+  const byRank = [...data].sort((a, b) => {
+    const ac = Number(a.confidence ?? 0);
+    const bc = Number(b.confidence ?? 0);
+    if (bc !== ac) return bc - ac;
+    return String(a.symbol).localeCompare(String(b.symbol));
   });
+
+  // Separate current BUY and WATCH (still ranked same way)
+  const buys = byRank.filter((r) => r.signal === "BUY");
+  const watches = byRank.filter((r) => r.signal === "WATCH");
+
+  const keepBuy = new Set(buys.slice(0, BUY_CAP).map((r) => r.id));
+
+  // Downgrade extra BUY -> WATCH pool
+  const downgradedBuyToWatch = buys.slice(BUY_CAP);
+
+  // Now build WATCH pool = existing WATCH + downgraded BUY
+  const watchPool = [...watches, ...downgradedBuyToWatch].sort((a, b) => {
+    const ac = Number(a.confidence ?? 0);
+    const bc = Number(b.confidence ?? 0);
+    if (bc !== ac) return bc - ac;
+    return String(a.symbol).localeCompare(String(b.symbol));
+  });
+
+  const keepWatch = new Set(watchPool.slice(0, WATCH_CAP).map((r) => r.id));
+
+  // Determine updates
+  const updates: Array<{ id: string; signal: "BUY" | "WATCH" | "AVOID" }> = [];
+
+  for (const row of data) {
+    const shouldBeBuy = keepBuy.has(row.id);
+    const shouldBeWatch = !shouldBeBuy && keepWatch.has(row.id);
+
+    let desired: "BUY" | "WATCH" | "AVOID" = "AVOID";
+    if (shouldBeBuy) desired = "BUY";
+    else if (shouldBeWatch) desired = "WATCH";
+
+    if (row.signal !== desired) {
+      updates.push({ id: row.id, signal: desired });
+    }
+  }
+
+  if (updates.length === 0) return;
+
+  // Bulk update via upsert on id (simple + reliable)
+  const { error: upErr } = await supabase
+    .from("daily_scans")
+    .upsert(updates, { onConflict: "id" });
+
+  if (upErr) throw upErr;
+}
+
+export async function POST(req: Request) {
+  try {
+    const supabase = admin();
+    const body = (await req.json()) as ScanBody;
+
+    const universe_slug = body.universe_slug ?? DEFAULT_UNIVERSE;
+    const version = body.version ?? DEFAULT_VERSION;
+
+    const offset = Number.isFinite(body.offset as number) ? Number(body.offset) : 0;
+    const limit = Number.isFinite(body.limit as number) ? Number(body.limit) : 300;
+
+    const scanDate = (body.scan_date && String(body.scan_date)) || isoDate();
+
+    // Universe members (deterministic batching)
+    const { data: universe, error: uErr } = await supabase
+      .from("universes")
+      .select("id,slug")
+      .eq("slug", universe_slug)
+      .single();
+
+    if (uErr || !universe) {
+      return NextResponse.json(
+        { ok: false, error: `Universe not found: ${universe_slug}` },
+        { status: 400 }
+      );
+    }
+
+    const from = offset;
+    const to = offset + limit - 1;
+
+    const { data: members, error: mErr } = await supabase
+      .from("universe_members")
+      .select("symbol")
+      .eq("universe_id", universe.id)
+      .eq("active", true)
+      .order("symbol", { ascending: true })
+      .range(from, to);
+
+    if (mErr) throw mErr;
+
+    const symbols = (members ?? []).map((m) => m.symbol).filter(Boolean);
+
+    if (symbols.length === 0) {
+      // Still enforce caps in case earlier batches exist
+      await enforceGlobalCaps({ supabase, date: scanDate, universe_slug });
+      return NextResponse.json({
+        ok: true,
+        universe_slug,
+        version,
+        date: scanDate,
+        offset,
+        limit,
+        processed: 0,
+        upserted: 0,
+        note: "No symbols in this batch range",
+      });
+    }
+
+    // Fetch bars per symbol (last ~260 daily bars)
+    // Note: This is intentionally simple. If you later want speed, we can batch-query + compute in memory.
+    const upserts: any[] = [];
+    let processed = 0;
+
+    for (const symbol of symbols) {
+      processed++;
+
+      const { data: bars, error: bErr } = await supabase
+        .from("price_bars")
+        .select("date,open,high,low,close,volume")
+        .eq("symbol", symbol)
+        .eq("source", "polygon")
+        .order("date", { ascending: true })
+        .limit(260);
+
+      if (bErr) continue;
+      if (!bars || bars.length < 220) continue;
+
+      const computed = scoreAndSignal(bars as Bar[]);
+      if (!computed) continue;
+
+      upserts.push({
+        date: scanDate,
+        universe_slug,
+        version,
+        symbol,
+        signal: computed.signal,
+        confidence: computed.confidence,
+        entry: computed.entry,
+        stop: computed.stop,
+        tp1: computed.tp1,
+        tp2: computed.tp2,
+        reason_summary: computed.reason_summary,
+        reason_json: computed.reason_json,
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    let upserted = 0;
+    if (upserts.length > 0) {
+      const { error: sErr, data: sData } = await supabase
+        .from("daily_scans")
+        .upsert(upserts, { onConflict: "date,universe_slug,symbol" })
+        .select("id");
+
+      if (sErr) throw sErr;
+      upserted = sData?.length ?? 0;
+    }
+
+    // ✅ GLOBAL caps across ALL batches for this date/universe
+    await enforceGlobalCaps({ supabase, date: scanDate, universe_slug });
+
+    return NextResponse.json({
+      ok: true,
+      universe_slug,
+      version,
+      date: scanDate,
+      offset,
+      limit,
+      processed,
+      upserted,
+      caps: { BUY: BUY_CAP, WATCH: WATCH_CAP },
+    });
+  } catch (e: any) {
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Unknown error" },
+      { status: 500 }
+    );
+  }
 }

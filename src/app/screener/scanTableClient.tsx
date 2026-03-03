@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 
-type Row = {
+export type Row = {
   symbol: string;
   signal: "BUY" | "WATCH" | "AVOID";
   confidence: number;
@@ -13,10 +13,6 @@ type Row = {
   tp2?: number | null;
 };
 
-function fmt2(n: number | null | undefined) {
-  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
-  return n.toFixed(2);
-}
 function fmtMoney(n: number | null | undefined) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "—";
   return `$${n.toFixed(2)}`;
@@ -25,15 +21,6 @@ function fmtPct(n: number | null | undefined) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "—";
   return `${(n * 100).toFixed(2)}%`;
 }
-
-type Props = {
-  universeSlug: string; // should be liquid_2000 by default
-  scanDate: string; // YYYY-MM-DD
-  initialRows: Row[];
-  accountSize: number;
-  riskPerTrade: number; // 0.01 => 1%
-  capitalDeployed: number;
-};
 
 type WhyRow = {
   symbol: string;
@@ -45,10 +32,48 @@ type WhyRow = {
   confidence: number;
 };
 
-export default function ScanTableClient(props: Props) {
-  const { universeSlug, scanDate, initialRows, accountSize, riskPerTrade, capitalDeployed } =
-    props;
+type Props = {
+  // ✅ Accept either (so page.tsx can pass rows or initialRows)
+  rows?: Row[];
+  initialRows?: Row[];
 
+  scanDate: string;
+
+  universeSlug?: string; // default liquid_2000
+  version?: string;
+
+  accountSize?: number;
+  riskPerTrade?: number;
+  capitalDeployed?: number;
+};
+
+export default function ScanTableClient(props: Props) {
+  const universeSlug = props.universeSlug ?? "liquid_2000";
+  const version = props.version ?? "v1";
+
+  const scanDate = props.scanDate;
+
+  const accountSize =
+    typeof props.accountSize === "number" && Number.isFinite(props.accountSize)
+      ? props.accountSize
+      : 20000;
+
+  const riskPerTrade =
+    typeof props.riskPerTrade === "number" && Number.isFinite(props.riskPerTrade)
+      ? props.riskPerTrade
+      : 0.01;
+
+  const capitalDeployed =
+    typeof props.capitalDeployed === "number" && Number.isFinite(props.capitalDeployed)
+      ? props.capitalDeployed
+      : 0;
+
+  const remainingCash = Math.max(0, accountSize - capitalDeployed);
+
+  // ✅ Bulletproof source of rows
+  const baseRows: Row[] = (props.rows ?? props.initialRows ?? []) as Row[];
+
+  // ✅ Default filter = BUY
   const [filter, setFilter] = useState<"BUY" | "WATCH" | "AVOID" | "ALL">("BUY");
 
   const [liveOn, setLiveOn] = useState(false);
@@ -61,13 +86,10 @@ export default function ScanTableClient(props: Props) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [details, setDetails] = useState<WhyRow | null>(null);
 
-  const remainingCash = Math.max(0, accountSize - capitalDeployed);
-
   const rows = useMemo(() => {
-    const base = initialRows ?? [];
-    if (filter === "ALL") return base;
-    return base.filter((r) => r.signal === filter);
-  }, [initialRows, filter]);
+    if (filter === "ALL") return baseRows;
+    return baseRows.filter((r) => r.signal === filter);
+  }, [baseRows, filter]);
 
   const symbols = useMemo(() => rows.map((r) => r.symbol), [rows]);
 
@@ -103,6 +125,7 @@ export default function ScanTableClient(props: Props) {
   function computeShares(row: Row) {
     const entry = getDisplayedPrice(row);
     const stop = row.stop;
+
     const riskDollars = accountSize * riskPerTrade;
     const perShareRisk = Math.max(0, entry - stop);
     if (perShareRisk <= 0) return 0;
@@ -138,9 +161,7 @@ export default function ScanTableClient(props: Props) {
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error || `HTTP ${res.status}`);
-      }
+      if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       alert(`Opened ${row.symbol} (${shares} shares).`);
     } catch (e: any) {
       alert(e?.message || "Failed to open position");
@@ -156,13 +177,11 @@ export default function ScanTableClient(props: Props) {
         symbol: row.symbol,
         date: scanDate,
         universe: universeSlug,
-        version: "v1",
+        version,
       });
       const res = await fetch(`/api/why?${qs.toString()}`, { method: "GET" });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error || `HTTP ${res.status}`);
-      }
+      if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       setDetails(data.row as WhyRow);
       setDetailsOpen(true);
     } catch (e: any) {
@@ -197,14 +216,10 @@ export default function ScanTableClient(props: Props) {
             <option value="ALL">ALL</option>
           </select>
 
-          <Button onClick={() => setLiveOn((v) => !v)}>
-            {liveOn ? "Live: ON" : "Live: OFF"}
-          </Button>
-
+          <Button onClick={() => setLiveOn((v) => !v)}>{liveOn ? "Live: ON" : "Live: OFF"}</Button>
           <Button disabled={!liveOn} onClick={() => setAutoRefresh((v) => !v)}>
             {autoRefresh ? "Auto: ON" : "Auto: OFF"}
           </Button>
-
           <Button disabled={!liveOn} onClick={() => fetchQuotes()}>
             Refresh
           </Button>
@@ -241,8 +256,7 @@ export default function ScanTableClient(props: Props) {
             ) : (
               rows.map((r) => {
                 const livePrice = quotes[r.symbol];
-                const entryShown =
-                  liveOn && typeof livePrice === "number" ? livePrice : r.entry;
+                const entryShown = liveOn && typeof livePrice === "number" ? livePrice : r.entry;
 
                 return (
                   <tr key={r.symbol} className="border-t">
