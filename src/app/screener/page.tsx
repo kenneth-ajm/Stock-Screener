@@ -10,7 +10,6 @@ function isoDate(d = new Date()) {
 }
 
 export default async function ScreenerPage() {
-  // ✅ Next cookies() is async in newer versions
   const cookieStore = await cookies();
 
   const supabase = createServerClient(
@@ -18,7 +17,6 @@ export default async function ScreenerPage() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        // ✅ Newer @supabase/ssr expects getAll + setAll
         getAll() {
           return cookieStore.getAll();
         },
@@ -28,8 +26,7 @@ export default async function ScreenerPage() {
               cookieStore.set(name, value, options);
             });
           } catch {
-            // If called during Server Component render, Next may throw.
-            // It's safe to ignore because auth refresh writes are best-effort here.
+            // ignore best-effort cookie writes during server component render
           }
         },
       },
@@ -39,7 +36,7 @@ export default async function ScreenerPage() {
   const universe_slug = DEFAULT_UNIVERSE;
   const today = isoDate();
 
-  // These can be wired to portfolio later; keeping sane defaults for now
+  // placeholders (wire to portfolio later)
   const accountSize = 20000;
   const riskPerTrade = 0.01;
   const capitalDeployed = 0;
@@ -51,6 +48,17 @@ export default async function ScreenerPage() {
     .eq("universe_slug", universe_slug)
     .order("confidence", { ascending: false })
     .limit(400);
+
+  const rows =
+    (scans ?? []).map((r: any) => ({
+      symbol: r.symbol,
+      signal: r.signal,
+      confidence: r.confidence,
+      entry: r.entry,
+      stop: r.stop,
+      tp1: r.tp1,
+      tp2: r.tp2,
+    })) ?? [];
 
   return (
     <div className="mx-auto max-w-6xl p-4">
@@ -68,15 +76,7 @@ export default async function ScreenerPage() {
       <ScanTableClient
         universeSlug={universe_slug}
         scanDate={today}
-        initialRows={(scans ?? []).map((r: any) => ({
-          symbol: r.symbol,
-          signal: r.signal,
-          confidence: r.confidence,
-          entry: r.entry,
-          stop: r.stop,
-          tp1: r.tp1,
-          tp2: r.tp2,
-        }))}
+        rows={rows}
         accountSize={accountSize}
         riskPerTrade={riskPerTrade}
         capitalDeployed={capitalDeployed}
