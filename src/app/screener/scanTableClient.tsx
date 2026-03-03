@@ -73,6 +73,9 @@ function extractCalcMetrics(payload: any, fallback?: { entry?: number; stop?: nu
     payload?.shares ?? payload?.qty ?? payload?.quantity ?? payload?.size ?? payload?.position_size
   );
   const accountSize = asNumber(payload?.account_size ?? payload?.portfolio_value ?? payload?.accountValue);
+  const cashAvailable = asNumber(payload?.cash_available ?? payload?.cashAvailable);
+  const investedValue = asNumber(payload?.invested_value ?? payload?.investedValue);
+  const equity = asNumber(payload?.equity ?? payload?.portfolio_equity);
   const riskPerTrade = asNumber(
     payload?.risk_per_trade ??
       payload?.risk_per_trade_pct ??
@@ -89,8 +92,24 @@ function extractCalcMetrics(payload: any, fallback?: { entry?: number; stop?: nu
   const positionCost =
     asNumber(payload?.position_cost ?? payload?.position_value ?? payload?.positionValue) ??
     (shares !== null && entry !== null ? shares * entry : null);
+  const sharesByRisk = asNumber(payload?.shares_by_risk ?? payload?.sharesByRisk);
+  const sharesByCash = asNumber(payload?.shares_by_cash ?? payload?.sharesByCash);
 
-  return { entry, stop, shares, accountSize, riskPct, riskPerShare, maxRiskUsd, positionCost };
+  return {
+    entry,
+    stop,
+    shares,
+    sharesByRisk,
+    sharesByCash,
+    accountSize,
+    cashAvailable,
+    investedValue,
+    equity,
+    riskPct,
+    riskPerShare,
+    maxRiskUsd,
+    positionCost,
+  };
 }
 
 function categoryForCheck(c: any): "Trend" | "Momentum" | "Volume" | "Extension" | "Regime" {
@@ -326,9 +345,9 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
       const json = await res.json().catch(() => null);
       const calc = extractCalcMetrics(json, { entry: row.entry, stop: row.stop });
       setTicketSymbol(row.symbol);
-      setTicketShares(
-        calc.shares !== null && Number.isFinite(calc.shares) ? String(Math.max(1, Math.floor(calc.shares))) : "1"
-      );
+      const defaultShares =
+        calc.shares !== null && Number.isFinite(calc.shares) ? Math.max(0, Math.floor(calc.shares)) : 0;
+      setTicketShares(String(defaultShares));
       setTicketEntry(calc.entry !== null ? calc.entry.toFixed(2) : Number(row.entry).toFixed(2));
       setTicketStop(calc.stop !== null ? calc.stop.toFixed(2) : Number(row.stop).toFixed(2));
       setTicketError(null);
@@ -396,6 +415,15 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     setTicketSubmitting(true);
     setTicketError(null);
     try {
+      const calc = extractCalcMetrics(modalJson);
+      const equitySnapshot =
+        calc.cashAvailable !== null || calc.equity !== null || calc.investedValue !== null
+          ? {
+              cash_available: calc.cashAvailable,
+              invested_value: calc.investedValue,
+              equity: calc.equity,
+            }
+          : null;
       const res = await fetch("/api/positions/add", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -404,6 +432,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
           entry_price: parseFloat(entryPrice.toString()),
           stop: parseFloat(stopPrice.toString()),
           shares: parseFloat(shares.toString()),
+          equity_snapshot: equitySnapshot,
         }),
       });
       const json = await res.json().catch(() => null);
@@ -453,12 +482,39 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
       const riskPerShare = Number.isFinite(entryNum) && Number.isFinite(stopNum) ? entryNum - stopNum : null;
       const riskUsed = Number.isFinite(sharesNum) && riskPerShare !== null ? sharesNum * riskPerShare : null;
       const positionCost = Number.isFinite(sharesNum) && Number.isFinite(entryNum) ? sharesNum * entryNum : null;
+      const cashAvailable =
+        calc.cashAvailable !== null ? calc.cashAvailable : calc.accountSize !== null ? calc.accountSize : null;
+      const investedValue = calc.investedValue !== null ? calc.investedValue : null;
+      const equity =
+        calc.equity !== null
+          ? calc.equity
+          : cashAvailable !== null && investedValue !== null
+            ? cashAvailable + investedValue
+            : calc.accountSize;
       const riskBudget =
-        calc.maxRiskUsd !== null
-          ? calc.maxRiskUsd
-          : calc.accountSize !== null && calc.riskPct !== null
-            ? calc.accountSize * (calc.riskPct / 100)
+        equity !== null && calc.riskPct !== null
+          ? equity * (calc.riskPct / 100)
+          : calc.maxRiskUsd !== null
+            ? calc.maxRiskUsd
             : null;
+      const sharesByRisk =
+        calc.sharesByRisk !== null
+          ? Math.max(0, Math.floor(calc.sharesByRisk))
+          : riskBudget !== null && riskPerShare !== null && riskPerShare > 0
+            ? Math.max(0, Math.floor(riskBudget / riskPerShare))
+            : null;
+      const sharesByCash =
+        calc.sharesByCash !== null
+          ? Math.max(0, Math.floor(calc.sharesByCash))
+          : cashAvailable !== null && Number.isFinite(entryNum) && entryNum > 0
+            ? Math.max(0, Math.floor(cashAvailable / entryNum))
+            : null;
+      const cashLimited =
+        sharesByRisk !== null && sharesByCash !== null && sharesByCash < sharesByRisk;
+      const exceedsCash =
+        sharesByCash !== null && Number.isFinite(sharesNum) && sharesNum > sharesByCash;
+      const cashRemainingAfter =
+        cashAvailable !== null && positionCost !== null ? cashAvailable - positionCost : null;
 
       return (
         <div className="space-y-3">
@@ -497,17 +553,37 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
           <div className="grid gap-2 sm:grid-cols-2">
             <KV k="Suggested shares" v={calc.shares !== null ? String(Math.floor(calc.shares)) : "—"} />
-            <KV k="Equity" v={calc.accountSize !== null ? fmtMoney(calc.accountSize) : "—"} />
+            <KV k="Cash" v={cashAvailable !== null ? fmtMoney(cashAvailable) : "—"} />
+            <KV k="Invested" v={investedValue !== null ? fmtMoney(investedValue) : "—"} />
+            <KV k="Equity" v={equity !== null ? fmtMoney(equity) : "—"} />
             <KV
               k="Risk/trade %"
               v={calc.riskPct !== null ? `${calc.riskPct.toFixed(2)}%` : "—"}
             />
             <KV k="Risk budget (USD)" v={riskBudget !== null ? fmtMoney(riskBudget) : "—"} />
+            <KV k="Shares by risk" v={sharesByRisk !== null ? String(sharesByRisk) : "—"} />
+            <KV k="Shares by cash" v={sharesByCash !== null ? String(sharesByCash) : "—"} />
             <KV k="Risk/share" v={riskPerShare !== null ? fmtMoney(riskPerShare) : "—"} />
             <KV k="Risk used" v={riskUsed !== null ? fmtMoney(riskUsed) : "—"} />
             <KV k="Position cost" v={positionCost !== null ? fmtMoney(positionCost) : "—"} />
-            <KV k="Cash available" v="—" />
+            <KV k="Cash after open" v={cashRemainingAfter !== null ? fmtMoney(cashRemainingAfter) : "—"} />
           </div>
+
+          {cashLimited ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              <span className="font-semibold">Cash-limited</span>: risk sizing suggests{" "}
+              <span className="font-mono">{sharesByRisk}</span> shares, but cash allows{" "}
+              <span className="font-mono">{sharesByCash}</span>.
+            </div>
+          ) : null}
+
+          {exceedsCash ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              <span className="font-semibold">Exceeds available cash.</span>{" "}
+              This is allowed (soft constraint). Estimated cash after open:{" "}
+              <span className="font-mono">{cashRemainingAfter !== null ? fmtMoney(cashRemainingAfter) : "—"}</span>
+            </div>
+          ) : null}
 
           {ticketError ? (
             <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
