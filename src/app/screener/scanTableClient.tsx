@@ -67,14 +67,16 @@ function extractCalcMetrics(payload: any, fallback?: { entry?: number; stop?: nu
   );
 
   const riskPerShare = entry !== null && stop !== null ? entry - stop : null;
+  const riskPct =
+    riskPerTrade === null ? null : riskPerTrade <= 1 ? riskPerTrade * 100 : riskPerTrade;
   const maxRiskUsd =
     asNumber(payload?.risk_usd ?? payload?.riskUsd ?? payload?.risk_amount ?? payload?.max_loss) ??
-    (accountSize !== null && riskPerTrade !== null ? accountSize * riskPerTrade : null);
+    (accountSize !== null && riskPct !== null ? accountSize * (riskPct / 100) : null);
   const positionCost =
     asNumber(payload?.position_cost ?? payload?.position_value ?? payload?.positionValue) ??
     (shares !== null && entry !== null ? shares * entry : null);
 
-  return { entry, stop, shares, accountSize, riskPerTrade, riskPerShare, maxRiskUsd, positionCost };
+  return { entry, stop, shares, accountSize, riskPct, riskPerShare, maxRiskUsd, positionCost };
 }
 
 function categoryForCheck(c: any): "Trend" | "Momentum" | "Volume" | "Extension" | "Regime" {
@@ -178,6 +180,12 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
   const [modalKind, setModalKind] = useState<"CALC" | "OPEN" | "WHY" | "GENERIC">("GENERIC");
   const [modalBusy, setModalBusy] = useState(false);
   const [calcBySymbol, setCalcBySymbol] = useState<Record<string, any>>({});
+  const [ticketSymbol, setTicketSymbol] = useState<string | null>(null);
+  const [ticketShares, setTicketShares] = useState<string>("");
+  const [ticketEntry, setTicketEntry] = useState<string>("");
+  const [ticketStop, setTicketStop] = useState<string>("");
+  const [ticketError, setTicketError] = useState<string | null>(null);
+  const [ticketSubmitting, setTicketSubmitting] = useState(false);
 
   const [toast, setToast] = useState<string | null>(null);
   function showToast(msg: string) {
@@ -282,6 +290,14 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         }),
       });
       const json = await res.json().catch(() => null);
+      const calc = extractCalcMetrics(json, { entry: row.entry, stop: row.stop });
+      setTicketSymbol(row.symbol);
+      setTicketShares(
+        calc.shares !== null && Number.isFinite(calc.shares) ? String(Math.max(1, Math.floor(calc.shares))) : "1"
+      );
+      setTicketEntry(calc.entry !== null ? calc.entry.toFixed(2) : Number(row.entry).toFixed(2));
+      setTicketStop(calc.stop !== null ? calc.stop.toFixed(2) : Number(row.stop).toFixed(2));
+      setTicketError(null);
       if (json?.ok) {
         setCalcBySymbol((prev) => ({ ...prev, [row.symbol]: json }));
       }
@@ -294,50 +310,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
   }
 
   async function doOpen(row: Row) {
-    setModalBusy(true);
-    showToast(`Open: ${row.symbol}`);
-    try {
-      const calcPayload = calcBySymbol[row.symbol] ?? (await (async () => {
-        const calcRes = await fetch("/api/position-size", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            symbol: row.symbol,
-            entry: row.entry,
-            stop: row.stop,
-          }),
-        });
-        const calcJson = await calcRes.json().catch(() => null);
-        if (!calcRes.ok || !calcJson?.ok) {
-          throw new Error(calcJson?.error || "Unable to compute shares for open action");
-        }
-        setCalcBySymbol((prev) => ({ ...prev, [row.symbol]: calcJson }));
-        return calcJson;
-      })());
-
-      const calc = extractCalcMetrics(calcPayload, { entry: row.entry, stop: row.stop });
-      const entryPrice = parseFloat(String(calc.entry ?? row.entry));
-      const stopPrice = parseFloat(String(calc.stop ?? row.stop));
-      const shares = parseFloat(String(calc.shares ?? 0));
-
-      const res = await fetch("/api/positions/add", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          symbol: row.symbol,
-          entry_price: entryPrice,
-          stop: stopPrice,
-          stop_price: stopPrice,
-          shares,
-        }),
-      });
-      const json = await res.json().catch(() => null);
-      openModal("OPEN", `Open position: ${row.symbol}`, json ?? { ok: false, error: "No response" });
-    } catch (e: any) {
-      openModal("OPEN", `Open position: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
-    } finally {
-      setModalBusy(false);
-    }
+    await doCalc(row);
   }
 
   async function doDetails(row: Row) {
@@ -360,6 +333,58 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
       openModal("WHY", `Why: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
     } finally {
       setModalBusy(false);
+    }
+  }
+
+  async function submitTicketOpen() {
+    const symbol = (ticketSymbol ?? "").trim().toUpperCase();
+    const shares = Math.floor(Number(ticketShares));
+    const entryPrice = Number(ticketEntry);
+    const stopPrice = Number(ticketStop);
+
+    if (!symbol) {
+      setTicketError("Symbol is missing. Re-open the ticket from a row.");
+      return;
+    }
+    if (!Number.isFinite(shares) || shares <= 0) {
+      setTicketError("Shares must be a positive integer.");
+      return;
+    }
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
+      setTicketError("Entry price must be a positive number.");
+      return;
+    }
+    if (!Number.isFinite(stopPrice) || stopPrice <= 0 || stopPrice >= entryPrice) {
+      setTicketError("Stop must be positive and strictly below entry.");
+      return;
+    }
+
+    setTicketSubmitting(true);
+    setTicketError(null);
+    try {
+      const res = await fetch("/api/positions/add", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          symbol,
+          entry_price: parseFloat(entryPrice.toString()),
+          stop: parseFloat(stopPrice.toString()),
+          shares: parseFloat(shares.toString()),
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) {
+        const detail = json?.detail ? ` (${JSON.stringify(json.detail)})` : "";
+        setTicketError(`${json?.error ?? "Open failed"}${detail}`);
+        return;
+      }
+
+      setModalOpen(false);
+      showToast("Position opened ✅");
+    } catch (e: any) {
+      setTicketError(e?.message ?? "Open failed");
+    } finally {
+      setTicketSubmitting(false);
     }
   }
 
@@ -388,16 +413,78 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
     if (modalKind === "CALC") {
       const calc = extractCalcMetrics(j);
+      const sharesNum = Math.floor(Number(ticketShares));
+      const entryNum = Number(ticketEntry);
+      const stopNum = Number(ticketStop);
+      const riskPerShare = Number.isFinite(entryNum) && Number.isFinite(stopNum) ? entryNum - stopNum : null;
+      const riskUsed = Number.isFinite(sharesNum) && riskPerShare !== null ? sharesNum * riskPerShare : null;
+      const positionCost = Number.isFinite(sharesNum) && Number.isFinite(entryNum) ? sharesNum * entryNum : null;
+      const riskBudget =
+        calc.maxRiskUsd !== null
+          ? calc.maxRiskUsd
+          : calc.accountSize !== null && calc.riskPct !== null
+            ? calc.accountSize * (calc.riskPct / 100)
+            : null;
 
       return (
         <div className="space-y-3">
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="space-y-1">
+              <label className="text-xs text-slate-500">Shares</label>
+              <input
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                value={ticketShares}
+                onChange={(e) => setTicketShares(e.target.value)}
+                inputMode="numeric"
+                disabled={ticketSubmitting}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-slate-500">Entry price</label>
+              <input
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                value={ticketEntry}
+                onChange={(e) => setTicketEntry(e.target.value)}
+                inputMode="decimal"
+                disabled={ticketSubmitting}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-slate-500">Stop price</label>
+              <input
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                value={ticketStop}
+                onChange={(e) => setTicketStop(e.target.value)}
+                inputMode="decimal"
+                disabled={ticketSubmitting}
+              />
+            </div>
+          </div>
+
           <div className="grid gap-2 sm:grid-cols-2">
             <KV k="Suggested shares" v={calc.shares !== null ? String(Math.floor(calc.shares)) : "—"} />
-            <KV k="Max risk (USD)" v={calc.maxRiskUsd !== null ? fmtMoney(calc.maxRiskUsd) : "—"} />
-            <KV k="Entry" v={calc.entry !== null ? fmt2(calc.entry) : "—"} />
-            <KV k="Stop" v={calc.stop !== null ? fmt2(calc.stop) : "—"} />
-            <KV k="Risk/share" v={calc.riskPerShare !== null ? fmtMoney(calc.riskPerShare) : "—"} />
-            <KV k="Position cost" v={calc.positionCost !== null ? fmtMoney(calc.positionCost) : "—"} />
+            <KV k="Equity" v={calc.accountSize !== null ? fmtMoney(calc.accountSize) : "—"} />
+            <KV
+              k="Risk/trade %"
+              v={calc.riskPct !== null ? `${calc.riskPct.toFixed(2)}%` : "—"}
+            />
+            <KV k="Risk budget (USD)" v={riskBudget !== null ? fmtMoney(riskBudget) : "—"} />
+            <KV k="Risk/share" v={riskPerShare !== null ? fmtMoney(riskPerShare) : "—"} />
+            <KV k="Risk used" v={riskUsed !== null ? fmtMoney(riskUsed) : "—"} />
+            <KV k="Position cost" v={positionCost !== null ? fmtMoney(positionCost) : "—"} />
+            <KV k="Cash available" v="—" />
+          </div>
+
+          {ticketError ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+              {ticketError}
+            </div>
+          ) : null}
+
+          <div className="flex justify-end">
+            <Button onClick={submitTicketOpen} disabled={ticketSubmitting}>
+              {ticketSubmitting ? "Opening..." : "Open position"}
+            </Button>
           </div>
 
           <details className="rounded-xl border border-slate-200 bg-white p-3">
