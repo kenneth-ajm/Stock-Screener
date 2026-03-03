@@ -76,6 +76,7 @@ async function ingestGroupedForDate(opts: {
   date: string;
   symbols: string[];
 }) {
+  const supa = opts.supabase as any;
   const apiKey = process.env.POLYGON_API_KEY;
   if (!apiKey) throw new Error("Missing POLYGON_API_KEY");
 
@@ -145,7 +146,6 @@ async function ingestGroupedForDate(opts: {
   let written = 0;
   for (let i = 0; i < upserts.length; i += chunkSize) {
     const chunk = upserts.slice(i, i + chunkSize);
-    const supa = opts.supabase as any;
     const chunkAny = chunk as any[];
     const { error } = await supa.from("price_bars").upsert(chunkAny, {
       onConflict: "symbol,date",
@@ -187,13 +187,18 @@ async function updateSpyRegimeForDate(opts: {
   const close = Number(latest.close);
   const state = close > sma200 ? "FAVORABLE" : "DEFENSIVE";
 
-  const { error: upErr } = await opts.supabase.from("market_regime").upsert({
-    symbol: "SPY",
-    date: opts.date,
-    close,
-    sma200,
-    state,
-  });
+  const { error: upErr } = await supa
+    .from("market_regime")
+    .upsert(
+      {
+        symbol: "SPY",
+        date: opts.date,
+        close,
+        sma200,
+        state,
+      },
+      { onConflict: "symbol,date" }
+    );
   if (upErr) throw upErr;
   return state;
 }
