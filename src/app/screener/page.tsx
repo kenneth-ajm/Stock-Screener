@@ -52,7 +52,7 @@ export default async function ScreenerPage() {
   if (latestScanDate) {
     const { data: rows } = await supabase
       .from("daily_scans")
-      .select("symbol, signal, confidence, entry, stop, tp1, tp2")
+      .select("symbol, signal, confidence, entry, stop, tp1, tp2, reason_json")
       .eq("universe_slug", DEFAULT_UNIVERSE)
       .eq("strategy_version", DEFAULT_STRATEGY_VERSION)
       .eq("date", latestScanDate)

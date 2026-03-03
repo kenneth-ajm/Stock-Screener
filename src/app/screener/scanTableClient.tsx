@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { computeExecutionGuidance, type ExecutionAction } from "@/lib/execution";
 
 type Row = {
   symbol: string;
@@ -9,6 +10,7 @@ type Row = {
   confidence: number;
   entry: number;
   stop: number;
+  reason_json?: any;
 };
 
 type DisplayRow = Row & {
@@ -16,6 +18,8 @@ type DisplayRow = Row & {
   livePrice: number | null;
   divergencePct: number | null;
   priceMismatch: boolean;
+  atr14: number | null;
+  execution: ReturnType<typeof computeExecutionGuidance>;
 };
 
 function fmt2(n: number | null | undefined) {
@@ -50,6 +54,18 @@ function signalPill(signal: Row["signal"]) {
   return "bg-rose-50 text-rose-700 border-rose-200";
 }
 
+function actionPill(action: ExecutionAction) {
+  if (action === "BUY_NOW") return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  if (action === "WAIT") return "bg-amber-50 text-amber-700 border-amber-200";
+  return "bg-slate-100 text-slate-700 border-slate-300";
+}
+
+function actionLabel(action: ExecutionAction) {
+  if (action === "BUY_NOW") return "BUY NOW";
+  if (action === "WAIT") return "WAIT";
+  return "SKIP";
+}
+
 function clsx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
 }
@@ -64,6 +80,15 @@ function computeDivergencePct(entry: number | null, live: number | null) {
     return null;
   }
   return Math.abs(live - entry) / entry;
+}
+
+function extractAtr14FromReasonJson(row: Row) {
+  const n = asNumber(
+    row?.reason_json?.indicators?.atr14 ??
+      row?.reason_json?.metrics?.atr14 ??
+      row?.reason_json?.atr14
+  );
+  return n !== null && n > 0 ? n : null;
 }
 
 function extractCalcMetrics(payload: any, fallback?: { entry?: number; stop?: number }) {
@@ -233,15 +258,37 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
       const live = typeof quotes[sym] === "number" ? (quotes[sym] as number) : null;
       const entry = Number(row.entry);
       const divergencePct = computeDivergencePct(Number.isFinite(entry) ? entry : null, live);
-      const priceMismatch = divergencePct !== null && divergencePct > 0.2;
+      const atr14 = extractAtr14FromReasonJson(row);
+      const baseExecution = computeExecutionGuidance({
+        signal: row.signal,
+        idealEntry: Number(row.entry),
+        stop: Number(row.stop),
+        live,
+        atr: atr14,
+        confidence: Number(row.confidence),
+      });
+      const priceMismatch = baseExecution.flags.priceMismatch;
       const effectiveSignal =
         priceMismatch && (row.signal === "BUY" || row.signal === "WATCH") ? "AVOID" : row.signal;
+      const execution =
+        effectiveSignal === row.signal
+          ? baseExecution
+          : computeExecutionGuidance({
+              signal: effectiveSignal,
+              idealEntry: Number(row.entry),
+              stop: Number(row.stop),
+              live,
+              atr: atr14,
+              confidence: Number(row.confidence),
+            });
       return {
         ...row,
         effectiveSignal,
         livePrice: live,
         divergencePct,
         priceMismatch,
+        atr14,
+        execution,
       };
     });
   }, [rows, quotes]);
@@ -284,6 +331,12 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     const syms = filtered.map((r) => (r.symbol ?? "").trim().toUpperCase()).filter(Boolean);
     return Array.from(new Set(syms)).slice(0, 50);
   }, [filtered]);
+
+  const ticketRow = useMemo(() => {
+    const sym = (ticketSymbol ?? "").trim().toUpperCase();
+    if (!sym) return null;
+    return effectiveRows.find((r) => (r.symbol ?? "").trim().toUpperCase() === sym) ?? null;
+  }, [ticketSymbol, effectiveRows]);
 
   async function refreshQuotes() {
     if (symbolsToQuote.length === 0) return;
@@ -329,7 +382,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     setModalOpen(true);
   }
 
-  async function doCalc(row: Row) {
+  async function doCalc(row: DisplayRow | Row) {
     setModalBusy(true);
     showToast(`Calc: ${row.symbol}`);
     try {
@@ -344,11 +397,21 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
       });
       const json = await res.json().catch(() => null);
       const calc = extractCalcMetrics(json, { entry: row.entry, stop: row.stop });
+      const liveForTicket =
+        "livePrice" in row && typeof row.livePrice === "number" && Number.isFinite(row.livePrice)
+          ? row.livePrice
+          : null;
       setTicketSymbol(row.symbol);
       const defaultShares =
         calc.shares !== null && Number.isFinite(calc.shares) ? Math.max(0, Math.floor(calc.shares)) : 0;
       setTicketShares(String(defaultShares));
-      setTicketEntry(calc.entry !== null ? calc.entry.toFixed(2) : Number(row.entry).toFixed(2));
+      setTicketEntry(
+        liveForTicket !== null
+          ? Number(liveForTicket).toFixed(2)
+          : calc.entry !== null
+            ? calc.entry.toFixed(2)
+            : Number(row.entry).toFixed(2)
+      );
       setTicketStop(calc.stop !== null ? calc.stop.toFixed(2) : Number(row.stop).toFixed(2));
       setTicketError(null);
       if (json?.ok) {
@@ -362,11 +425,11 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     }
   }
 
-  async function doOpen(row: Row) {
+  async function doOpen(row: DisplayRow | Row) {
     await doCalc(row);
   }
 
-  async function doDetails(row: Row) {
+  async function doDetails(row: DisplayRow | Row) {
     setModalBusy(true);
     showToast(`Details: ${row.symbol}`);
     try {
@@ -479,6 +542,15 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
       const sharesNum = Math.floor(Number(ticketShares));
       const entryNum = Number(ticketEntry);
       const stopNum = Number(ticketStop);
+      const liveForTicket = Number.isFinite(entryNum) ? entryNum : null;
+      const execution = computeExecutionGuidance({
+        signal: ticketRow?.effectiveSignal ?? "WATCH",
+        idealEntry: Number(ticketRow?.entry ?? calc.entry ?? entryNum),
+        stop: stopNum,
+        live: liveForTicket,
+        atr: ticketRow?.atr14 ?? null,
+        confidence: Number(ticketRow?.confidence ?? 0),
+      });
       const riskPerShare = Number.isFinite(entryNum) && Number.isFinite(stopNum) ? entryNum - stopNum : null;
       const riskUsed = Number.isFinite(sharesNum) && riskPerShare !== null ? sharesNum * riskPerShare : null;
       const positionCost = Number.isFinite(sharesNum) && Number.isFinite(entryNum) ? sharesNum * entryNum : null;
@@ -518,6 +590,17 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
 
       return (
         <div className="space-y-3">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${actionPill(execution.action)}`}>
+                {actionLabel(execution.action)}
+              </span>
+              {execution.reasons[0] ? (
+                <span className="text-xs text-slate-600">{execution.reasons[0]}</span>
+              ) : null}
+            </div>
+          </div>
+
           <div className="grid gap-2 sm:grid-cols-3">
             <div className="space-y-1">
               <label className="text-xs text-slate-500">Shares</label>
@@ -564,6 +647,8 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
             <KV k="Shares by risk" v={sharesByRisk !== null ? String(sharesByRisk) : "—"} />
             <KV k="Shares by cash" v={sharesByCash !== null ? String(sharesByCash) : "—"} />
             <KV k="Risk/share" v={riskPerShare !== null ? fmtMoney(riskPerShare) : "—"} />
+            <KV k="TP1 (1R)" v={Number.isFinite(execution.tp1) ? fmt2(execution.tp1) : "—"} />
+            <KV k="TP2 (2R)" v={Number.isFinite(execution.tp2) ? fmt2(execution.tp2) : "—"} />
             <KV k="Risk used" v={riskUsed !== null ? fmtMoney(riskUsed) : "—"} />
             <KV k="Position cost" v={positionCost !== null ? fmtMoney(positionCost) : "—"} />
             <KV k="Cash after open" v={cashRemainingAfter !== null ? fmtMoney(cashRemainingAfter) : "—"} />
@@ -780,11 +865,19 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                 </tr>
               ) : (
                 filtered.map((r) => {
-                  const sym = r.symbol.trim().toUpperCase();
                   const live = r.livePrice;
 
                   const entry = Number(r.entry);
                   const dEntry = typeof live === "number" && Number.isFinite(live) ? (live - entry) / entry : null;
+                  const lateByPct = r.execution.flags.late ? r.execution.extensionPct * 100 : 0;
+                  const isExtended =
+                    (r.execution.extensionAtr !== null && r.execution.extensionAtr > 1.5) ||
+                    r.execution.extensionPct >= 0.08;
+                  const notes: string[] = [];
+                  if (lateByPct > 0) notes.push(`Late by +${lateByPct.toFixed(1)}%`);
+                  if (r.execution.riskPct > 0.12) notes.push("Risk wide");
+                  if (isExtended) notes.push("Extended");
+                  if (live === null) notes.push("No live");
 
                   const dEntryClass =
                     typeof dEntry === "number"
@@ -806,6 +899,12 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                           <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
                             PRICE MISMATCH
                           </span>
+                        ) : null}
+                        <span className={`ml-2 rounded-full border px-2 py-1 text-[10px] font-semibold ${actionPill(r.execution.action)}`}>
+                          {actionLabel(r.execution.action)}
+                        </span>
+                        {notes.length > 0 ? (
+                          <div className="mt-1 text-[10px] text-slate-500">{notes.join(" • ")}</div>
                         ) : null}
                       </td>
                       <td className="p-3 text-slate-800 font-semibold">{r.confidence}</td>
