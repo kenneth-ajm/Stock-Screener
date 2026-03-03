@@ -55,7 +55,7 @@ export default function UtilitiesClient() {
       })() : null,
     });
 
-    const timeoutMs = 35000;
+    const timeoutMs = 60000;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
