@@ -72,7 +72,7 @@ function sma(values: number[], period: number) {
 }
 
 async function ingestGroupedForDate(opts: {
-  supabase: ReturnType<typeof createClient>;
+  supabase: any;
   date: string;
   symbols: string[];
 }) {
@@ -157,7 +157,7 @@ async function ingestGroupedForDate(opts: {
 }
 
 async function updateSpyRegimeForDate(opts: {
-  supabase: ReturnType<typeof createClient>;
+  supabase: any;
   date: string;
 }) {
   const supa = opts.supabase as any;
