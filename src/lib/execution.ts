@@ -18,10 +18,10 @@ export type ExecutionOutput = {
   rrToTP2: number;
   tp1: number;
   tp2: number;
-  flags: { late: boolean; priceMismatch: boolean };
+  flags: { late: boolean; priceMismatch: boolean; stopTooWide: boolean };
   extensionPct: number;
   extensionAtr: number | null;
-  riskPct: number;
+  stopDistancePct: number;
 };
 
 export const EXECUTION_LIMITS = {
@@ -31,7 +31,7 @@ export const EXECUTION_LIMITS = {
   SKIP_EXT_PCT: 0.1,
   WAIT_EXT_ATR: 1.5,
   SKIP_EXT_ATR: 2.0,
-  MAX_RISK_PCT: 0.12,
+  MAX_STOP_DISTANCE_PCT: 0.1,
 } as const;
 
 function safeNumber(v: unknown) {
@@ -61,22 +61,23 @@ export function computeExecutionGuidance(input: ExecutionInput): ExecutionOutput
       rrToTP2: 0,
       tp1: NaN,
       tp2: NaN,
-      flags: { late, priceMismatch },
+      flags: { late, priceMismatch, stopTooWide: false },
       extensionPct,
       extensionAtr,
-      riskPct: NaN,
+      stopDistancePct: NaN,
     };
   }
 
   const riskPerShare = entryUsed - stop;
-  const tp1 = entryUsed + riskPerShare;
-  const tp2 = entryUsed + 2 * riskPerShare;
-  const riskPct = riskPerShare / entryUsed;
+  const tp1 = entryUsed * 1.05;
+  const tp2 = entryUsed * 1.1;
+  const stopDistancePct = riskPerShare / entryUsed;
   const reasons: string[] = [];
+  const stopTooWide = stopDistancePct > EXECUTION_LIMITS.MAX_STOP_DISTANCE_PCT;
 
   if (input.signal === "AVOID") reasons.push("Signal is AVOID");
   if (live === null) reasons.push("No live price; use entry zone");
-  if (riskPct > EXECUTION_LIMITS.MAX_RISK_PCT) reasons.push("Risk wide");
+  if (stopTooWide) reasons.push("Stop too wide (>10%) for short-term system");
   if (extensionAtr !== null && extensionAtr > EXECUTION_LIMITS.WAIT_EXT_ATR) reasons.push("Extended");
   if (atr === null && extensionPct >= EXECUTION_LIMITS.WAIT_EXT_PCT_NO_ATR) reasons.push("Late by >8% without ATR");
 
@@ -87,9 +88,9 @@ export function computeExecutionGuidance(input: ExecutionInput): ExecutionOutput
     extensionPct > EXECUTION_LIMITS.SKIP_EXT_PCT;
 
   if (input.signal === "AVOID") action = "SKIP";
+  else if (stopTooWide) action = "SKIP";
   else if (extremeExtension) action = "SKIP";
   else if (live === null) action = "WAIT";
-  else if (riskPct > EXECUTION_LIMITS.MAX_RISK_PCT) action = "WAIT";
   else if (extensionAtr !== null && extensionAtr > EXECUTION_LIMITS.WAIT_EXT_ATR) action = "WAIT";
   else if (atr === null && extensionPct >= EXECUTION_LIMITS.WAIT_EXT_PCT_NO_ATR) action = "WAIT";
   else {
@@ -103,13 +104,12 @@ export function computeExecutionGuidance(input: ExecutionInput): ExecutionOutput
     reasons: reasons.length > 0 ? reasons : ["Entry and stop are actionable"],
     entryUsed,
     riskPerShare,
-    rrToTP2: 2,
+    rrToTP2: riskPerShare > 0 ? (tp2 - entryUsed) / riskPerShare : 0,
     tp1,
     tp2,
-    flags: { late, priceMismatch },
+    flags: { late, priceMismatch, stopTooWide },
     extensionPct,
     extensionAtr,
-    riskPct,
+    stopDistancePct,
   };
 }
-

@@ -552,6 +552,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         confidence: Number(ticketRow?.confidence ?? 0),
       });
       const riskPerShare = Number.isFinite(entryNum) && Number.isFinite(stopNum) ? entryNum - stopNum : null;
+      const stopTooWide = execution.flags.stopTooWide;
       const riskUsed = Number.isFinite(sharesNum) && riskPerShare !== null ? sharesNum * riskPerShare : null;
       const positionCost = Number.isFinite(sharesNum) && Number.isFinite(entryNum) ? sharesNum * entryNum : null;
       const cashAvailable =
@@ -647,12 +648,18 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
             <KV k="Shares by risk" v={sharesByRisk !== null ? String(sharesByRisk) : "—"} />
             <KV k="Shares by cash" v={sharesByCash !== null ? String(sharesByCash) : "—"} />
             <KV k="Risk/share" v={riskPerShare !== null ? fmtMoney(riskPerShare) : "—"} />
-            <KV k="TP1 (1R)" v={Number.isFinite(execution.tp1) ? fmt2(execution.tp1) : "—"} />
-            <KV k="TP2 (2R)" v={Number.isFinite(execution.tp2) ? fmt2(execution.tp2) : "—"} />
+            <KV k="TP1 (5%)" v={Number.isFinite(execution.tp1) ? fmt2(execution.tp1) : "—"} />
+            <KV k="TP2 (10%)" v={Number.isFinite(execution.tp2) ? fmt2(execution.tp2) : "—"} />
             <KV k="Risk used" v={riskUsed !== null ? fmtMoney(riskUsed) : "—"} />
             <KV k="Position cost" v={positionCost !== null ? fmtMoney(positionCost) : "—"} />
             <KV k="Cash after open" v={cashRemainingAfter !== null ? fmtMoney(cashRemainingAfter) : "—"} />
           </div>
+
+          {stopTooWide ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+              <span className="font-semibold">Risk too wide for % system.</span>
+            </div>
+          ) : null}
 
           {cashLimited ? (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
@@ -677,7 +684,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
           ) : null}
 
           <div className="flex justify-end">
-            <Button onClick={submitTicketOpen} disabled={ticketSubmitting}>
+            <Button onClick={submitTicketOpen} disabled={ticketSubmitting || stopTooWide}>
               {ticketSubmitting ? "Opening..." : "Open position"}
             </Button>
           </div>
@@ -875,7 +882,6 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                     r.execution.extensionPct >= 0.08;
                   const notes: string[] = [];
                   if (lateByPct > 0) notes.push(`Late by +${lateByPct.toFixed(1)}%`);
-                  if (r.execution.riskPct > 0.12) notes.push("Risk wide");
                   if (isExtended) notes.push("Extended");
                   if (live === null) notes.push("No live");
 
@@ -903,6 +909,11 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                         <span className={`ml-2 rounded-full border px-2 py-1 text-[10px] font-semibold ${actionPill(r.execution.action)}`}>
                           {actionLabel(r.execution.action)}
                         </span>
+                        {r.execution.flags.stopTooWide ? (
+                          <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
+                            STOP TOO WIDE
+                          </span>
+                        ) : null}
                         {notes.length > 0 ? (
                           <div className="mt-1 text-[10px] text-slate-500">{notes.join(" • ")}</div>
                         ) : null}
