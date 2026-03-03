@@ -134,7 +134,9 @@ async function ingestGroupedForDate(opts: {
   let written = 0;
   for (let i = 0; i < upserts.length; i += chunkSize) {
     const chunk = upserts.slice(i, i + chunkSize);
-    const { error } = await opts.supabase.from("price_bars").upsert(chunk, {
+    const supa = opts.supabase as any;
+    const chunkAny = chunk as any[];
+    const { error } = await supa.from("price_bars").upsert(chunkAny, {
       onConflict: "symbol,date",
     });
     if (error) throw error;
