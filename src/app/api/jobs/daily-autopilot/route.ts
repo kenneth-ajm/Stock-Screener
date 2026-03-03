@@ -209,10 +209,11 @@ async function runAutopilot() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
+  const supa = supabase as any;
 
   const dateUsed = lastCompletedUsTradingDay();
 
-  const { data: universe, error: universeErr } = await supabase
+  const { data: universe, error: universeErr } = await supa
     .from("universes")
     .select("id")
     .eq("slug", UNIVERSE_SLUG)
@@ -220,17 +221,19 @@ async function runAutopilot() {
   if (universeErr) throw new Error(universeErr.message);
   if (!universe?.id) throw new Error(`Universe not found: ${UNIVERSE_SLUG}`);
 
-  const { data: members, error: membersErr } = await supabase
+  const { data: members, error: membersErr } = await supa
     .from("universe_members")
     .select("symbol")
     .eq("universe_id", universe.id)
     .eq("active", true)
     .order("symbol", { ascending: true });
   if (membersErr) throw new Error(membersErr.message);
-  const symbols = (members ?? []).map((m) => String(m.symbol ?? "").toUpperCase()).filter(Boolean);
+  const symbols = (members ?? [])
+    .map((m: { symbol?: string | null }) => String(m.symbol ?? "").toUpperCase())
+    .filter(Boolean);
 
-  const barsUpserted = await ingestGroupedForDate({ supabase, date: dateUsed, symbols });
-  const regimeState = await updateSpyRegimeForDate({ supabase, date: dateUsed });
+  const barsUpserted = await ingestGroupedForDate({ supabase: supa, date: dateUsed, symbols });
+  const regimeState = await updateSpyRegimeForDate({ supabase: supa, date: dateUsed });
 
   const scanReq = new Request("http://localhost/api/scan", {
     method: "POST",
@@ -249,7 +252,7 @@ async function runAutopilot() {
     throw new Error(scanJson?.error || `Scan failed with status ${scanRes.status}`);
   }
 
-  const { data: counts, error: countErr } = await supabase
+  const { data: counts, error: countErr } = await supa
     .from("daily_scans")
     .select("signal")
     .eq("universe_slug", UNIVERSE_SLUG)
@@ -258,8 +261,8 @@ async function runAutopilot() {
     .in("signal", ["BUY", "WATCH"]);
   if (countErr) throw new Error(countErr.message);
 
-  const buyCount = (counts ?? []).filter((r) => r.signal === "BUY").length;
-  const watchCount = (counts ?? []).filter((r) => r.signal === "WATCH").length;
+  const buyCount = (counts ?? []).filter((r: { signal?: string | null }) => r.signal === "BUY").length;
+  const watchCount = (counts ?? []).filter((r: { signal?: string | null }) => r.signal === "WATCH").length;
 
   return {
     ok: true,

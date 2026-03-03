@@ -84,10 +84,12 @@ export async function POST(req: Request) {
       offset,
       next_offset: nextOffset,
       done,
-      symbols_attempted: ingestJson.symbols_attempted ?? 0,
-      symbols_succeeded: ingestJson.symbols_succeeded ?? 0,
-      total_rows_upserted: ingestJson.total_rows_upserted ?? 0,
-      failed: ingestJson.failed ?? [],
+      counts: {
+        symbols_attempted: ingestJson.symbols_attempted ?? 0,
+        symbols_succeeded: ingestJson.symbols_succeeded ?? 0,
+        total_rows_upserted: ingestJson.total_rows_upserted ?? 0,
+        failed: ingestJson.failed ?? [],
+      },
       duration_ms: Date.now() - startedAt,
     });
   } catch (e: unknown) {
