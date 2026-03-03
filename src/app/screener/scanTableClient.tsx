@@ -11,6 +11,13 @@ type Row = {
   stop: number;
 };
 
+type DisplayRow = Row & {
+  effectiveSignal: "BUY" | "WATCH" | "AVOID";
+  livePrice: number | null;
+  divergencePct: number | null;
+  priceMismatch: boolean;
+};
+
 function fmt2(n: number | null | undefined) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "—";
   return n.toFixed(2);
@@ -50,6 +57,13 @@ function clsx(...xs: Array<string | false | null | undefined>) {
 function asNumber(v: unknown): number | null {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+function computeDivergencePct(entry: number | null, live: number | null) {
+  if (entry === null || live === null || !Number.isFinite(entry) || !Number.isFinite(live) || entry <= 0) {
+    return null;
+  }
+  return Math.abs(live - entry) / entry;
 }
 
 function extractCalcMetrics(payload: any, fallback?: { entry?: number; stop?: number }) {
@@ -193,16 +207,36 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     setTimeout(() => setToast(null), 1400);
   }
 
-  const counts = useMemo(() => {
+  const effectiveRows = useMemo<DisplayRow[]>(() => {
     const r = rows ?? [];
+    return r.map((row) => {
+      const sym = (row.symbol ?? "").trim().toUpperCase();
+      const live = typeof quotes[sym] === "number" ? (quotes[sym] as number) : null;
+      const entry = Number(row.entry);
+      const divergencePct = computeDivergencePct(Number.isFinite(entry) ? entry : null, live);
+      const priceMismatch = divergencePct !== null && divergencePct > 0.2;
+      const effectiveSignal =
+        priceMismatch && (row.signal === "BUY" || row.signal === "WATCH") ? "AVOID" : row.signal;
+      return {
+        ...row,
+        effectiveSignal,
+        livePrice: live,
+        divergencePct,
+        priceMismatch,
+      };
+    });
+  }, [rows, quotes]);
+
+  const counts = useMemo(() => {
+    const r = effectiveRows ?? [];
     return {
       total: r.length,
-      buy: r.filter((x) => x.signal === "BUY").length,
-      watch: r.filter((x) => x.signal === "WATCH").length,
-      avoid: r.filter((x) => x.signal === "AVOID").length,
-      buyWatch: r.filter((x) => x.signal === "BUY" || x.signal === "WATCH").length,
+      buy: r.filter((x) => x.effectiveSignal === "BUY").length,
+      watch: r.filter((x) => x.effectiveSignal === "WATCH").length,
+      avoid: r.filter((x) => x.effectiveSignal === "AVOID").length,
+      buyWatch: r.filter((x) => x.effectiveSignal === "BUY" || x.effectiveSignal === "WATCH").length,
     };
-  }, [rows]);
+  }, [effectiveRows]);
 
   useEffect(() => {
     if (filter === "BUY+WATCH" && counts.buyWatch === 0 && counts.total > 0) {
@@ -211,21 +245,21 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
   }, [filter, counts.buyWatch, counts.total]);
 
   const filtered = useMemo(() => {
-    const r = rows ?? [];
+    const r = effectiveRows ?? [];
     if (filter === "ALL") return r;
-    if (filter === "BUY+WATCH") return r.filter((x) => x.signal === "BUY" || x.signal === "WATCH");
-    return r.filter((x) => x.signal === filter);
-  }, [rows, filter]);
+    if (filter === "BUY+WATCH") return r.filter((x) => x.effectiveSignal === "BUY" || x.effectiveSignal === "WATCH");
+    return r.filter((x) => x.effectiveSignal === filter);
+  }, [effectiveRows, filter]);
 
   const countsShown = useMemo(() => {
-    const r = rows ?? [];
+    const r = effectiveRows ?? [];
     return {
       showing: filtered.length,
-      buy: r.filter((x) => x.signal === "BUY").length,
-      watch: r.filter((x) => x.signal === "WATCH").length,
-      avoid: r.filter((x) => x.signal === "AVOID").length,
+      buy: r.filter((x) => x.effectiveSignal === "BUY").length,
+      watch: r.filter((x) => x.effectiveSignal === "WATCH").length,
+      avoid: r.filter((x) => x.effectiveSignal === "AVOID").length,
     };
-  }, [rows, filtered]);
+  }, [effectiveRows, filtered]);
 
   const symbolsToQuote = useMemo(() => {
     const syms = filtered.map((r) => (r.symbol ?? "").trim().toUpperCase()).filter(Boolean);
@@ -671,7 +705,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
               ) : (
                 filtered.map((r) => {
                   const sym = r.symbol.trim().toUpperCase();
-                  const live = quotes?.[sym] ?? null;
+                  const live = r.livePrice;
 
                   const entry = Number(r.entry);
                   const dEntry = typeof live === "number" && Number.isFinite(live) ? (live - entry) / entry : null;
@@ -689,9 +723,14 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                     <tr key={r.symbol} className="border-b border-slate-100">
                       <td className="p-3 font-semibold text-slate-900">{r.symbol}</td>
                       <td className="p-3">
-                        <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${signalPill(r.signal)}`}>
-                          {r.signal}
+                        <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${signalPill(r.effectiveSignal)}`}>
+                          {r.effectiveSignal}
                         </span>
+                        {r.priceMismatch ? (
+                          <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
+                            PRICE MISMATCH
+                          </span>
+                        ) : null}
                       </td>
                       <td className="p-3 text-slate-800 font-semibold">{r.confidence}</td>
                       <td className="p-3 text-slate-800">{Number(r.entry).toFixed(2)}</td>

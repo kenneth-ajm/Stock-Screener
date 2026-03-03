@@ -2,6 +2,42 @@ import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
+function toNumber(v: unknown) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+async function fetchLivePrice(symbol: string) {
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey || !symbol) return null;
+
+  const url = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${encodeURIComponent(
+    symbol
+  )}?apiKey=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) return null;
+  const json = await res.json().catch(() => null);
+
+  const candidates = [
+    json?.ticker?.lastTrade?.p,
+    json?.ticker?.last_trade?.p,
+    json?.ticker?.lastTrade?.price,
+    json?.ticker?.last_trade?.price,
+    json?.ticker?.day?.c,
+  ];
+  for (const v of candidates) {
+    const n = toNumber(v);
+    if (n !== null && n > 0) return n;
+  }
+  return null;
+}
+
+function scanCloseFromRow(row: any) {
+  const fromIndicators = toNumber(row?.reason_json?.indicators?.close);
+  const fromEntry = toNumber(row?.entry);
+  return fromIndicators ?? fromEntry;
+}
+
 export async function GET(req: Request) {
   const cookieStore = await cookies();
 
@@ -43,7 +79,7 @@ export async function GET(req: Request) {
 
   const { data: row, error } = await supabase
     .from("daily_scans")
-    .select("symbol, signal, confidence, reason_summary, reason_json")
+    .select("symbol, signal, confidence, entry, reason_summary, reason_json")
     .eq("symbol", symbol)
     .eq("date", date)
     .eq("universe_slug", universe)
@@ -61,7 +97,14 @@ export async function GET(req: Request) {
     );
   }
 
-  return NextResponse.json({ ok: true, row });
+  const scan_close = scanCloseFromRow(row);
+  const live_price = await fetchLivePrice(symbol);
+  const divergence_pct =
+    scan_close !== null && live_price !== null && scan_close > 0
+      ? Math.abs(live_price - scan_close) / scan_close
+      : null;
+
+  return NextResponse.json({ ok: true, row, scan_close, live_price, divergence_pct });
 }
 
 export async function POST(req: Request) {
@@ -105,7 +148,7 @@ export async function POST(req: Request) {
 
   const { data: row, error } = await supabase
     .from("daily_scans")
-    .select("symbol, signal, confidence, reason_summary, reason_json")
+    .select("symbol, signal, confidence, entry, reason_summary, reason_json")
     .eq("symbol", symbol)
     .eq("date", date)
     .eq("universe_slug", universe)
@@ -123,5 +166,12 @@ export async function POST(req: Request) {
     );
   }
 
-  return NextResponse.json({ ok: true, row });
+  const scan_close = scanCloseFromRow(row);
+  const live_price = await fetchLivePrice(symbol);
+  const divergence_pct =
+    scan_close !== null && live_price !== null && scan_close > 0
+      ? Math.abs(live_price - scan_close) / scan_close
+      : null;
+
+  return NextResponse.json({ ok: true, row, scan_close, live_price, divergence_pct });
 }
