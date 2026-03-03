@@ -215,14 +215,6 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
     }
   }
 
-  async function openPortfolio(p: Portfolio) {
-    if (busy) return;
-    if (!p.is_default) {
-      await setActive(p.id, { silent: true });
-    }
-    router.push("/portfolio");
-  }
-
   async function deletePortfolio(portfolioId: string) {
     const ok = window.confirm("Delete this portfolio? This cannot be undone.");
     if (!ok) return;
@@ -290,11 +282,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
                   realized > 0 ? "text-emerald-600" : realized < 0 ? "text-rose-600" : "text-slate-600";
 
                 return (
-                  <tr
-                    key={p.id}
-                    className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
-                    onClick={() => openPortfolio(p)}
-                  >
+                  <tr key={p.id} className="border-b border-slate-100">
                     <td className="p-3 font-semibold text-slate-900">{p.name ?? "—"}</td>
 
                     <td className="p-3 text-slate-800">
@@ -333,18 +321,6 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
 
                     <td className="p-3 text-right">
                       <div className="flex justify-end gap-2">
-                        <button
-                          className="rounded-lg bg-slate-900 px-2 py-1 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            openPortfolio(p);
-                          }}
-                          disabled={busy}
-                        >
-                          Open
-                        </button>
-
                         <button
                           className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-900 hover:bg-slate-50"
                           onClick={(e) => {
