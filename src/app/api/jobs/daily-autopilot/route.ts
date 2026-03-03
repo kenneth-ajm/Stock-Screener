@@ -4,6 +4,17 @@ import { POST as scanPost } from "@/app/api/scan/route";
 
 const UNIVERSE_SLUG = "core_800";
 
+type BarRow = {
+  symbol: string;
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  source?: string | null;
+};
+
 function ymd(date: Date) {
   return date.toISOString().slice(0, 10);
 }
@@ -149,23 +160,27 @@ async function updateSpyRegimeForDate(opts: {
   supabase: ReturnType<typeof createClient>;
   date: string;
 }) {
-  const { data: bars, error } = await opts.supabase
+  const supa = opts.supabase as any;
+  const { data: bars, error: barsErr } = await supa
     .from("price_bars")
-    .select("date,close")
+    .select("symbol,date,open,high,low,close,volume,source")
     .eq("symbol", "SPY")
     .lte("date", opts.date)
     .order("date", { ascending: false })
     .limit(260);
-  if (error || !bars || bars.length < 200) {
-    throw new Error(error?.message || "Not enough SPY bars to compute regime");
+  if (barsErr) throw barsErr;
+  const typedBars = (bars ?? []) as BarRow[];
+  if (typedBars.length < 200) {
+    throw new Error("Not enough SPY bars to compute regime");
   }
 
-  const latest = bars[0];
+  const latest = typedBars[0];
+  if (!latest) throw new Error("SPY bar missing");
   if (String(latest.date) !== opts.date) {
     throw new Error(`SPY bar missing for ${opts.date}`);
   }
 
-  const asc = [...bars].reverse();
+  const asc = [...typedBars].reverse();
   const closes = asc.map((b) => Number(b.close));
   const sma200 = sma(closes, 200);
   if (!sma200) throw new Error("Unable to compute SPY SMA200");
