@@ -10,7 +10,7 @@ const DEFAULT_STRATEGY_VERSION = "v2_core_momentum";
 
 function pretty(obj: JsonValue) {
   try {
-    return JSON.stringify(obj, null, 2);
+    return JSON.stringify(obj ?? null, null, 2);
   } catch {
     return String(obj);
   }
@@ -75,8 +75,9 @@ export default function UtilitiesClient() {
       append(`${title} (${res.status})`, json ?? { ok: true, message: "No JSON payload" });
       return { res, json };
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      append(`${title} (error)`, { ok: false, error: message });
+      const message = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+      const stack = e instanceof Error ? e.stack ?? null : null;
+      append(`${title} (error)`, { ok: false, error: message, detail: stack });
       return { res: null, json: null };
     } finally {
       clearTimeout(timeoutId);
@@ -193,8 +194,9 @@ export default function UtilitiesClient() {
         first_error_detail: firstErrorDetail,
       });
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      append("Scan ALL batches (error)", { ok: false, error: message });
+      const message = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+      const stack = e instanceof Error ? e.stack ?? null : null;
+      append("Scan ALL batches (error)", { ok: false, error: message, detail: stack });
     } finally {
       setBusy(null);
     }

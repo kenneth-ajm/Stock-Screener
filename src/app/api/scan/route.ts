@@ -267,9 +267,14 @@ export async function POST(req: Request) {
       },
     });
   } catch (e: unknown) {
-    console.error("Scan route failed", e);
-    const errorMessage = e instanceof Error ? e.message : String(e);
-    const detail = e instanceof Error ? e.stack ?? e.message : String(e);
-    return NextResponse.json({ ok: false, error: errorMessage, detail }, { status: 500 });
+    console.error("scan error", e);
+    const message =
+      e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+    const stack = e instanceof Error ? e.stack : undefined;
+
+    return NextResponse.json(
+      { ok: false, error: message, detail: stack ?? null },
+      { status: 500 }
+    );
   }
 }
