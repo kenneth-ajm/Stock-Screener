@@ -31,16 +31,63 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const symbol = String(body?.symbol ?? "").toUpperCase().trim();
   const entry_price = Number(body?.entry_price);
-  const stop = Number(body?.stop);
+  const stopRaw = body?.stop ?? body?.stop_price;
+  const stop = Number(stopRaw);
   const shares = Number(body?.shares);
 
   if (!symbol) return NextResponse.json({ ok: false, error: "symbol required" }, { status: 400 });
-  if (!Number.isFinite(entry_price) || entry_price <= 0)
-    return NextResponse.json({ ok: false, error: "entry_price invalid" }, { status: 400 });
-  if (!Number.isFinite(stop) || stop <= 0)
-    return NextResponse.json({ ok: false, error: "stop invalid" }, { status: 400 });
-  if (!Number.isFinite(shares) || shares <= 0)
-    return NextResponse.json({ ok: false, error: "shares invalid" }, { status: 400 });
+  if (!Number.isFinite(entry_price) || entry_price <= 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "entry_price invalid",
+        detail: {
+          received: { entry_price: body?.entry_price, stop: stopRaw, shares: body?.shares },
+          rule: "entry_price must be > 0",
+        },
+      },
+      { status: 400 }
+    );
+  }
+  if (!Number.isFinite(stop) || stop <= 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "stop invalid",
+        detail: {
+          received: { entry_price, stop: stopRaw, shares: body?.shares },
+          rule: "stop (or stop_price) must be > 0",
+        },
+      },
+      { status: 400 }
+    );
+  }
+  if (entry_price <= stop) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Invalid trade: entry_price must be greater than stop",
+        detail: {
+          received: { entry_price, stop, shares: body?.shares },
+          rule: "entry_price > stop",
+        },
+      },
+      { status: 400 }
+    );
+  }
+  if (!Number.isFinite(shares) || shares <= 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "shares invalid",
+        detail: {
+          received: { entry_price, stop, shares: body?.shares },
+          rule: "shares must be > 0",
+        },
+      },
+      { status: 400 }
+    );
+  }
 
   // default portfolio
   const { data: portfolio, error: pErr } = await supabase

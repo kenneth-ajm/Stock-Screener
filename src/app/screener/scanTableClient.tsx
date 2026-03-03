@@ -47,6 +47,47 @@ function clsx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
 }
 
+function asNumber(v: unknown): number | null {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function extractCalcMetrics(payload: any, fallback?: { entry?: number; stop?: number }) {
+  const entry = asNumber(payload?.entry ?? payload?.entry_price ?? fallback?.entry);
+  const stop = asNumber(payload?.stop ?? payload?.stop_price ?? fallback?.stop);
+  const shares = asNumber(
+    payload?.shares ?? payload?.qty ?? payload?.quantity ?? payload?.size ?? payload?.position_size
+  );
+  const accountSize = asNumber(payload?.account_size ?? payload?.portfolio_value ?? payload?.accountValue);
+  const riskPerTrade = asNumber(
+    payload?.risk_per_trade ??
+      payload?.risk_per_trade_pct ??
+      payload?.riskPct ??
+      payload?.risk_percent
+  );
+
+  const riskPerShare = entry !== null && stop !== null ? entry - stop : null;
+  const maxRiskUsd =
+    asNumber(payload?.risk_usd ?? payload?.riskUsd ?? payload?.risk_amount ?? payload?.max_loss) ??
+    (accountSize !== null && riskPerTrade !== null ? accountSize * riskPerTrade : null);
+  const positionCost =
+    asNumber(payload?.position_cost ?? payload?.position_value ?? payload?.positionValue) ??
+    (shares !== null && entry !== null ? shares * entry : null);
+
+  return { entry, stop, shares, accountSize, riskPerTrade, riskPerShare, maxRiskUsd, positionCost };
+}
+
+function categoryForCheck(c: any): "Trend" | "Momentum" | "Volume" | "Extension" | "Regime" {
+  const key = String(c?.key ?? "").toLowerCase();
+  const label = String(c?.label ?? "").toLowerCase();
+  const text = `${key} ${label}`;
+  if (text.includes("regime")) return "Regime";
+  if (text.includes("volume")) return "Volume";
+  if (text.includes("rsi") || text.includes("momentum")) return "Momentum";
+  if (text.includes("extend") || text.includes("atr")) return "Extension";
+  return "Trend";
+}
+
 function Toast({ msg }: { msg: string }) {
   return (
     <div className="fixed bottom-5 right-5 z-[10001]">
@@ -136,6 +177,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
   const [modalJson, setModalJson] = useState<any>(null);
   const [modalKind, setModalKind] = useState<"CALC" | "OPEN" | "WHY" | "GENERIC">("GENERIC");
   const [modalBusy, setModalBusy] = useState(false);
+  const [calcBySymbol, setCalcBySymbol] = useState<Record<string, any>>({});
 
   const [toast, setToast] = useState<string | null>(null);
   function showToast(msg: string) {
@@ -240,6 +282,9 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         }),
       });
       const json = await res.json().catch(() => null);
+      if (json?.ok) {
+        setCalcBySymbol((prev) => ({ ...prev, [row.symbol]: json }));
+      }
       openModal("CALC", `Position sizing: ${row.symbol}`, json ?? { ok: false, error: "No response" }, "Uses your active portfolio risk settings.");
     } catch (e: any) {
       openModal("CALC", `Position sizing: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
@@ -252,13 +297,38 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     setModalBusy(true);
     showToast(`Open: ${row.symbol}`);
     try {
+      const calcPayload = calcBySymbol[row.symbol] ?? (await (async () => {
+        const calcRes = await fetch("/api/position-size", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            symbol: row.symbol,
+            entry: row.entry,
+            stop: row.stop,
+          }),
+        });
+        const calcJson = await calcRes.json().catch(() => null);
+        if (!calcRes.ok || !calcJson?.ok) {
+          throw new Error(calcJson?.error || "Unable to compute shares for open action");
+        }
+        setCalcBySymbol((prev) => ({ ...prev, [row.symbol]: calcJson }));
+        return calcJson;
+      })());
+
+      const calc = extractCalcMetrics(calcPayload, { entry: row.entry, stop: row.stop });
+      const entryPrice = parseFloat(String(calc.entry ?? row.entry));
+      const stopPrice = parseFloat(String(calc.stop ?? row.stop));
+      const shares = parseFloat(String(calc.shares ?? 0));
+
       const res = await fetch("/api/positions/add", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           symbol: row.symbol,
-          entry_price: row.entry,
-          stop_price: row.stop,
+          entry_price: entryPrice,
+          stop: stopPrice,
+          stop_price: stopPrice,
+          shares,
         }),
       });
       const json = await res.json().catch(() => null);
@@ -317,21 +387,17 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     }
 
     if (modalKind === "CALC") {
-      // best-effort display (we don't assume exact keys)
-      const shares =
-        j?.shares ?? j?.qty ?? j?.quantity ?? j?.size ?? j?.position_size ?? null;
-
-      const riskUsd = j?.risk_usd ?? j?.riskUsd ?? j?.max_loss ?? null;
-      const entry = j?.entry ?? j?.entry_price ?? null;
-      const stop = j?.stop ?? j?.stop_price ?? null;
+      const calc = extractCalcMetrics(j);
 
       return (
         <div className="space-y-3">
           <div className="grid gap-2 sm:grid-cols-2">
-            <KV k="Suggested shares" v={shares !== null ? String(shares) : "—"} />
-            <KV k="Max risk (USD)" v={riskUsd !== null ? fmtMoney(Number(riskUsd)) : "—"} />
-            <KV k="Entry" v={entry !== null ? fmt2(Number(entry)) : "—"} />
-            <KV k="Stop" v={stop !== null ? fmt2(Number(stop)) : "—"} />
+            <KV k="Suggested shares" v={calc.shares !== null ? String(Math.floor(calc.shares)) : "—"} />
+            <KV k="Max risk (USD)" v={calc.maxRiskUsd !== null ? fmtMoney(calc.maxRiskUsd) : "—"} />
+            <KV k="Entry" v={calc.entry !== null ? fmt2(calc.entry) : "—"} />
+            <KV k="Stop" v={calc.stop !== null ? fmt2(calc.stop) : "—"} />
+            <KV k="Risk/share" v={calc.riskPerShare !== null ? fmtMoney(calc.riskPerShare) : "—"} />
+            <KV k="Position cost" v={calc.positionCost !== null ? fmtMoney(calc.positionCost) : "—"} />
           </div>
 
           <details className="rounded-xl border border-slate-200 bg-white p-3">
@@ -345,8 +411,17 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     }
 
     if (modalKind === "WHY") {
-      const summary = j?.reason_summary ?? j?.summary ?? null;
-      const checks = j?.reason_json?.checks ?? j?.checks ?? null;
+      const why = j?.row ?? j;
+      const summary = why?.reason_summary ?? why?.summary ?? null;
+      const checks = why?.reason_json?.checks ?? why?.checks ?? null;
+      const groupedChecks: Record<string, any[]> = Array.isArray(checks)
+        ? checks.reduce((acc: Record<string, any[]>, c: any) => {
+            const cat = categoryForCheck(c);
+            if (!acc[cat]) acc[cat] = [];
+            acc[cat].push(c);
+            return acc;
+          }, {})
+        : {};
 
       return (
         <div className="space-y-3">
@@ -360,12 +435,22 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
           {Array.isArray(checks) ? (
             <div className="rounded-xl border border-slate-200 bg-white p-3">
               <div className="text-sm font-semibold text-slate-900">Checks</div>
-              <div className="mt-2 space-y-2">
-                {checks.slice(0, 12).map((c: any, idx: number) => (
-                  <div key={idx} className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <div className="text-sm font-medium text-slate-900">{c?.label ?? "Check"}</div>
-                    <div className={clsx("text-xs font-semibold", c?.ok ? "text-emerald-600" : "text-rose-600")}>
-                      {c?.ok ? "PASS" : "FAIL"}
+              <div className="mt-2 space-y-3">
+                {Object.entries(groupedChecks).map(([group, groupItems]) => (
+                  <div key={group} className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{group}</div>
+                    <div className="space-y-2">
+                      {groupItems.map((c: any, idx: number) => (
+                        <div key={`${group}-${idx}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="text-sm font-medium text-slate-900">{c?.label ?? "Check"}</div>
+                            <div className={clsx("text-xs font-semibold", c?.ok ? "text-emerald-600" : "text-rose-600")}>
+                              {c?.ok ? "✓ PASS" : "✕ FAIL"}
+                            </div>
+                          </div>
+                          {c?.detail ? <div className="mt-1 text-xs text-slate-500">{String(c.detail)}</div> : null}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
