@@ -3,12 +3,12 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 
-type Json = any;
+type JsonValue = unknown;
 
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY_VERSION = "v2_core_momentum";
 
-function pretty(obj: any) {
+function pretty(obj: JsonValue) {
   try {
     return JSON.stringify(obj, null, 2);
   } catch {
@@ -25,7 +25,8 @@ export default function UtilitiesClient() {
   const [log, setLog] = useState<string>("");
 
   // ingest controls
-  const [ingestBatchSize, setIngestBatchSize] = useState<number>(100);
+  const [ingestBatchSize, setIngestBatchSize] = useState<number>(20);
+  const [ingestOffset, setIngestOffset] = useState<number>(0);
 
   // scan batch controls
   const [scanLimit, setScanLimit] = useState<number>(200);
@@ -36,22 +37,49 @@ export default function UtilitiesClient() {
     return [0, 200, 400, 600];
   }, []);
 
-  function append(title: string, payload: any) {
+  function append(title: string, payload: JsonValue) {
     const block = `\n\n### ${title}\n${pretty(payload)}`;
     setLog((prev) => (prev ? prev + block : block));
   }
 
   async function callJson(title: string, url: string, init?: RequestInit) {
+    append(`${title} (start)`, {
+      url,
+      method: init?.method ?? "GET",
+      body: init?.body ? (() => {
+        try {
+          return JSON.parse(String(init.body));
+        } catch {
+          return String(init.body);
+        }
+      })() : null,
+    });
+
+    const timeoutMs = 35000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
     try {
       setBusy(title);
-      const res = await fetch(url, init);
-      const json = await res.json().catch(() => null);
-      append(`${title} (${res.status})`, json ?? { ok: false, error: "No JSON response" });
+      const res = await fetch(url, { ...init, signal: controller.signal });
+      const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+      if (!res.ok) {
+        append(`${title} (${res.status})`, {
+          ok: false,
+          status: res.status,
+          error: json?.error ?? `Request failed with status ${res.status}`,
+          payload: json,
+        });
+        return { res, json };
+      }
+      append(`${title} (${res.status})`, json ?? { ok: true, message: "No JSON payload" });
       return { res, json };
-    } catch (e: any) {
-      append(`${title} (error)`, { ok: false, error: e?.message ?? "Unknown error" });
-      return { res: null as any, json: null as any };
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      append(`${title} (error)`, { ok: false, error: message });
+      return { res: null, json: null };
     } finally {
+      clearTimeout(timeoutId);
       setBusy(null);
     }
   }
@@ -77,15 +105,22 @@ export default function UtilitiesClient() {
   }
 
   async function ingestCoreUniverse() {
-    await callJson(
+    const { res, json } = await callJson(
       `Ingest ${DEFAULT_UNIVERSE} history (batch_size=${ingestBatchSize})`,
       "/api/universe/ingest-liquid-2000",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ universe_slug: DEFAULT_UNIVERSE, batch_size: ingestBatchSize }),
+        body: JSON.stringify({
+          universe_slug: DEFAULT_UNIVERSE,
+          limit: ingestBatchSize,
+          offset: ingestOffset,
+        }),
       }
     );
+    if (res?.ok && json?.ok) {
+      setIngestOffset((prev) => prev + ingestBatchSize);
+    }
   }
 
   async function runScanBatch(offset: number, limit: number) {
@@ -111,6 +146,10 @@ export default function UtilitiesClient() {
     append("Scan ALL batches (start)", { universe_slug: DEFAULT_UNIVERSE, offsets: scanOffsets, limit: scanLimit });
 
     try {
+      let batchesOk = 0;
+      let batchesFailed = 0;
+      let firstError: string | null = null;
+
       for (const off of scanOffsets) {
         const res = await fetch("/api/scan", {
           method: "POST",
@@ -122,16 +161,28 @@ export default function UtilitiesClient() {
             limit: scanLimit,
           }),
         });
-        const json = await res.json().catch(() => null);
+        const json = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
         append(`Scan batch offset=${off} (${res.status})`, json);
+        const batchOk = res.ok && !!json?.ok;
+        if (batchOk) batchesOk += 1;
+        else {
+          batchesFailed += 1;
+          if (!firstError) firstError = json?.error ?? `Batch offset=${off} failed with status ${res.status}`;
+        }
 
         // tiny pause to reduce burst load
         await sleep(300);
       }
 
-      append("Scan ALL batches (done)", { ok: true });
-    } catch (e: any) {
-      append("Scan ALL batches (error)", { ok: false, error: e?.message ?? "Unknown error" });
+      append("Scan ALL batches (done)", {
+        ok: batchesFailed === 0,
+        batches_ok: batchesOk,
+        batches_failed: batchesFailed,
+        first_error: firstError,
+      });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      append("Scan ALL batches (error)", { ok: false, error: message });
     } finally {
       setBusy(null);
     }
@@ -163,7 +214,15 @@ export default function UtilitiesClient() {
           <input
             className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
             value={ingestBatchSize}
-            onChange={(e) => setIngestBatchSize(Number(e.target.value) || 100)}
+            onChange={(e) => setIngestBatchSize(Number(e.target.value) || 20)}
+            inputMode="numeric"
+            disabled={!!busy}
+          />
+          <label className="text-xs text-slate-500">Offset</label>
+          <input
+            className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+            value={ingestOffset}
+            onChange={(e) => setIngestOffset(Number(e.target.value) || 0)}
             inputMode="numeric"
             disabled={!!busy}
           />

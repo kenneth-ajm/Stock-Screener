@@ -7,19 +7,46 @@ function isoDate(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
+function toInt(v: unknown): number | null {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.trunc(n);
+}
+
+function parseString(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return s ? s : null;
+}
+
 async function fetchAggs(symbol: string, apiKey: string, from: string, to: string) {
   const url = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(
     symbol
   )}/range/1/day/${from}/${to}?adjusted=false&sort=asc&limit=50000&apiKey=${apiKey}`;
 
-  const res = await fetch(url, { cache: "no-store" });
+  const controller = new AbortController();
+  const timeoutMs = 12000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const res = await fetch(url, { cache: "no-store", signal: controller.signal }).catch((e: unknown) => {
+    const message = e instanceof Error ? e.message : "Unknown fetch error";
+    return { ok: false, status: 0, _err: message } as const;
+  });
+  clearTimeout(timeout);
+
+  if (!res || (typeof res === "object" && "_err" in res)) {
+    const err = (res as { _err?: string } | null)?._err ?? "Fetch failed";
+    return { ok: false, results: [], error: err };
+  }
+
   if (!res.ok) return { ok: false, results: [], error: `Polygon ${res.status}` };
-  const json = await res.json().catch(() => null);
+  const json = (await res.json().catch(() => null)) as { results?: Array<Record<string, unknown>> } | null;
   const results = Array.isArray(json?.results) ? json.results : [];
   return { ok: true, results, error: null as string | null };
 }
 
 export async function POST(req: Request) {
+  const startedAt = Date.now();
   const apiKey = process.env.POLYGON_API_KEY;
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -30,96 +57,133 @@ export async function POST(req: Request) {
 
   const supabase = createClient(supabaseUrl, serviceKey);
 
-  const body = await req.json().catch(() => ({}));
-  const batchSize = typeof body?.batch_size === "number" ? Math.max(5, Math.min(150, body.batch_size)) : 50;
-  const universeSlug =
-    typeof body?.universe_slug === "string" && body.universe_slug.trim()
-      ? body.universe_slug.trim()
-      : "liquid_2000";
+  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  const url = new URL(req.url);
+  const bodyUniverse = parseString(body?.universe_slug);
+  const queryUniverse = parseString(url.searchParams.get("universe_slug"));
+  const universeSlug = bodyUniverse ?? queryUniverse ?? "core_800";
+
+  const bodyLimit = toInt(body?.limit ?? body?.batch_size);
+  const queryLimit = toInt(url.searchParams.get("limit"));
+  const limit = Math.max(10, Math.min(50, bodyLimit ?? queryLimit ?? 20));
+
+  const bodyOffset = toInt(body?.offset);
+  const queryOffset = toInt(url.searchParams.get("offset"));
+  const offset = Math.max(0, bodyOffset ?? queryOffset ?? 0);
+
+  const { data: universe, error: universeErr } = await supabase
+    .from("universes")
+    .select("id,slug")
+    .eq("slug", universeSlug)
+    .maybeSingle();
+  if (universeErr) {
+    return NextResponse.json({ ok: false, error: universeErr.message }, { status: 500 });
+  }
+  if (!universe) {
+    return NextResponse.json({ ok: false, error: `Universe not found: ${universeSlug}` }, { status: 404 });
+  }
+
+  const { data: members, error: membersErr } = await supabase
+    .from("universe_members")
+    .select("symbol")
+    .eq("universe_id", universe.id)
+    .eq("active", true)
+    .order("symbol", { ascending: true })
+    .range(offset, offset + limit - 1);
+  if (membersErr) {
+    return NextResponse.json({ ok: false, error: membersErr.message }, { status: 500 });
+  }
+
+  const symbols = (members ?? []).map((m) => String(m.symbol ?? "").toUpperCase()).filter(Boolean);
+  if (symbols.length === 0) {
+    return NextResponse.json({
+      ok: true,
+      universe_slug: universeSlug,
+      offset,
+      limit,
+      symbols_attempted: 0,
+      symbols_succeeded: 0,
+      total_rows_upserted: 0,
+      failed: [],
+      duration_ms: Date.now() - startedAt,
+      note: "No active symbols in this batch range",
+    });
+  }
 
   const to = isoDate(new Date());
   const fromDate = new Date();
   fromDate.setFullYear(fromDate.getFullYear() - 2);
   const from = isoDate(fromDate);
+  const failed: Array<{ symbol: string; error: string }> = [];
+  let symbolsSucceeded = 0;
+  let totalRowsUpserted = 0;
 
-  // Ensure RPC exists
-  const { data: need, error: rpcErr } = await supabase.rpc("symbols_needing_history", {
-    universe_slug_input: universeSlug,
-    min_bars: 220,
-  });
-
-  if (rpcErr) {
-    return NextResponse.json({ ok: false, error: `RPC failed: ${rpcErr.message}` }, { status: 500 });
-  }
-
-  const symbols: string[] = Array.isArray(need) ? need.map((x: any) => String(x.symbol).toUpperCase()) : [];
-  if (symbols.length === 0) {
-    return NextResponse.json({ ok: true, message: "All symbols already have >=220 bars." });
-  }
-
-  const targets = symbols.slice(0, batchSize);
-
-  const ingested: Array<{ symbol: string; rows_upserted: number; bars_after: number }> = [];
-  const failed: Array<{ symbol: string; reason: string }> = [];
-
-  for (const symbol of targets) {
+  for (const symbol of symbols) {
     const { ok, results, error } = await fetchAggs(symbol, apiKey, from, to);
     if (!ok || results.length === 0) {
-      failed.push({ symbol, reason: error || "No results" });
+      failed.push({ symbol, error: error || "No results" });
       continue;
     }
 
-    const rows = results.map((r: any) => ({
-      symbol,
-      date: new Date(r.t).toISOString().slice(0, 10), // YYYY-MM-DD
-      open: r.o,
-      high: r.h,
-      low: r.l,
-      close: r.c,
-      volume: Math.round(r.v),
-      source: "polygon",
-    }));
+    const rows: Array<{
+      symbol: string;
+      date: string;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume: number;
+      source: string;
+    }> = [];
 
-    // IMPORTANT: Ensure your price_bars unique constraint is on (symbol, date).
-    // If your constraint name differs, Supabase still needs the column list.
+    for (const r of results) {
+      const t = toInt(r.t);
+      const o = Number(r.o);
+      const h = Number(r.h);
+      const l = Number(r.l);
+      const c = Number(r.c);
+      const v = Number(r.v);
+      if (t == null || !Number.isFinite(o) || !Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(c) || !Number.isFinite(v)) {
+        continue;
+      }
+      rows.push({
+        symbol,
+        date: new Date(t).toISOString().slice(0, 10),
+        open: o,
+        high: h,
+        low: l,
+        close: c,
+        volume: Math.round(v),
+        source: "polygon",
+      });
+    }
+
+    if (rows.length === 0) {
+      failed.push({ symbol, error: "No valid rows parsed from Polygon response" });
+      continue;
+    }
+
     const { error: upErr } = await supabase.from("price_bars").upsert(rows, {
       onConflict: "symbol,date",
     });
 
     if (upErr) {
-      failed.push({ symbol, reason: `Upsert failed: ${upErr.message}` });
+      failed.push({ symbol, error: `Upsert failed: ${upErr.message}` });
       continue;
     }
-
-    const { data: cnt, error: cntErr } = await supabase
-      .from("price_bars")
-      .select("symbol", { count: "exact", head: true })
-      .eq("symbol", symbol);
-
-    if (cntErr) {
-      ingested.push({ symbol, rows_upserted: rows.length, bars_after: -1 });
-    } else {
-      // @ts-ignore count exists on response
-      ingested.push({ symbol, rows_upserted: rows.length, bars_after: (cnt as any)?.count ?? -1 });
-    }
+    symbolsSucceeded += 1;
+    totalRowsUpserted += rows.length;
   }
-
-  // Recompute remaining
-  const { data: needAfter } = await supabase.rpc("symbols_needing_history", {
-    universe_slug_input: universeSlug,
-    min_bars: 220,
-  });
-
-  const remaining = Array.isArray(needAfter) ? needAfter.length : null;
 
   return NextResponse.json({
     ok: true,
-    attempted: targets.length,
-    ingested_count: ingested.length,
-    remaining_to_fill: remaining,
     universe_slug: universeSlug,
-    ingested,
+    offset,
+    limit,
+    symbols_attempted: symbols.length,
+    symbols_succeeded: symbolsSucceeded,
+    total_rows_upserted: totalRowsUpserted,
     failed,
-    note: "If remaining_to_fill does not decrease, check price_bars unique constraint on (symbol, date).",
+    duration_ms: Date.now() - startedAt,
   });
 }
