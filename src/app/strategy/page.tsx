@@ -23,11 +23,10 @@ export default function StrategyPage() {
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-2">
         <div className="text-lg font-semibold">0) Universe</div>
         <div className="text-sm text-slate-700">
-          The screener scans <b>Liquid 2000</b>: approximately the <b>top 2000 most liquid US stocks</b> by dollar volume.
-          This increases opportunity while keeping the system focused on tradable names.
+          The default universe is <b>Core 800</b> (or Core 600 for tighter selection): US equities, daily timeframe, long-only.
         </div>
         <div className="text-sm text-slate-700">
-          The strategy remains a <b>daily swing system</b> (typically days to a few weeks), not long-term investing.
+          Liquidity is enforced in the signal engine: average dollar volume must be at least <b>$50M/day</b>.
         </div>
       </section>
 
@@ -43,30 +42,26 @@ export default function StrategyPage() {
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-2">
-        <div className="text-lg font-semibold">2) Signals</div>
+        <div className="text-lg font-semibold">2) Signal rules</div>
         <div className="text-sm text-slate-700">
-          Indicators (daily): SMA20/50/200, RSI(14), ATR(14), and volume confirmation.
+          This is a strict <b>momentum continuation</b> model: strong trend + controlled pullback + resumption.
         </div>
         <ul className="list-disc pl-5 text-sm text-slate-700 space-y-1">
-          <li>
-            <b>BUY</b> is intentionally rare: trend alignment (above SMA50 &amp; SMA200), healthy RSI zone, volume confirmation, and confidence threshold.
-          </li>
-          <li>
-            <b>WATCH</b> means the setup is interesting but missing one or more BUY requirements.
-          </li>
-          <li>
-            <b>AVOID</b> means weak trend or low confidence for this strategy.
-          </li>
+          <li><b>BUY</b> requires all: Close &gt; SMA50 and SMA200, SMA20 &gt; SMA50, SMA50 rising, RSI 50–65, volume spike ≥ 1.2x, and distance from SMA20 ≤ 1.5 ATR.</li>
+          <li><b>WATCH</b> requires: Close &gt; SMA50, trend aligned (above/reclaimed SMA200), RSI 45–70, volume spike ≥ 1.1x, and distance from SMA20 ≤ 2.0 ATR.</li>
+          <li><b>Regime gate</b>: if SPY regime is DEFENSIVE, BUY is downgraded to WATCH.</li>
+          <li><b>Global caps</b> per day/universe: BUY ≤ 5 and WATCH ≤ 10 (overflow downgrades deterministically).</li>
         </ul>
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-2">
-        <div className="text-lg font-semibold">3) Entry & Stop</div>
+        <div className="text-lg font-semibold">3) Trade plan</div>
         <div className="text-sm text-slate-700">
-          <b>Entry</b> is the reference price (from daily bars). <b>Stop</b> is the recommended invalidation level (ATR-based by default).
+          <b>Entry</b> is latest close. <b>Stop</b> is standardized to <b>8% below entry</b>.
         </div>
         <div className="text-sm text-slate-700">
-          The platform does not place broker orders. It gives you a plan to execute with discipline.
+          Targets are fixed at <b>TP1 = +5%</b> and <b>TP2 = +10%</b> with max holding period <b>7 trading days</b>.
+          Suggested management is 50% off at TP1 and remainder at TP2.
         </div>
       </section>
 

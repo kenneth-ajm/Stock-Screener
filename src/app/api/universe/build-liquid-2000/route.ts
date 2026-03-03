@@ -33,6 +33,10 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
   const targetDate = typeof body?.date === "string" && body.date ? body.date : isoDate(previousWeekday(new Date()));
+  const universeSlug =
+    typeof body?.universe_slug === "string" && body.universe_slug.trim()
+      ? body.universe_slug.trim()
+      : "liquid_2000";
 
   // price band preferences
   const minPrice = typeof body?.min_price === "number" ? body.min_price : 5;
@@ -83,7 +87,6 @@ export async function POST(req: Request) {
   }
 
   // Ensure universe exists
-  const universeSlug = "liquid_2000";
 
   const { data: existingUniverse } = await supabase
     .from("universes")
@@ -96,7 +99,7 @@ export async function POST(req: Request) {
   if (!universeId) {
     const { data: created, error: uErr } = await supabase
       .from("universes")
-      .insert({ slug: universeSlug, name: `Liquid ${limit} ($${minPrice}–$${maxPrice})` })
+      .insert({ slug: universeSlug, name: `Core ${limit} ($${minPrice}–$${maxPrice})` })
       .select("id")
       .maybeSingle();
 
@@ -108,7 +111,7 @@ export async function POST(req: Request) {
     // Update name to reflect filters (optional)
     await supabase
       .from("universes")
-      .update({ name: `Liquid ${limit} ($${minPrice}–$${maxPrice})` })
+      .update({ name: `Core ${limit} ($${minPrice}–$${maxPrice})` })
       .eq("id", universeId);
   }
 

@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/Button";
 
 type Json = any;
 
-const DEFAULT_UNIVERSE = "liquid_2000";
-const DEFAULT_STRATEGY_VERSION = "v1";
+const DEFAULT_UNIVERSE = "core_800";
+const DEFAULT_STRATEGY_VERSION = "v2_core_momentum";
 
 function pretty(obj: any) {
   try {
@@ -28,12 +28,12 @@ export default function UtilitiesClient() {
   const [ingestBatchSize, setIngestBatchSize] = useState<number>(100);
 
   // scan batch controls
-  const [scanLimit, setScanLimit] = useState<number>(300);
+  const [scanLimit, setScanLimit] = useState<number>(200);
   const [scanOffset, setScanOffset] = useState<number>(0);
 
   const scanOffsets = useMemo(() => {
-    // for 2000: 0..1800 step 300
-    return [0, 300, 600, 900, 1200, 1500, 1800];
+    // core_800 default batching
+    return [0, 200, 400, 600];
   }, []);
 
   function append(title: string, payload: any) {
@@ -58,31 +58,32 @@ export default function UtilitiesClient() {
 
   // --- actions ---
 
-  async function buildLiquid2000() {
-    // “No price cap” version: set a very high max_price so it behaves like uncapped
+  async function buildCore800() {
+    // Build a high-liquidity universe tuned for swing momentum
     await callJson(
-      "Build Liquid 2000 universe",
+      "Build Core 800 universe",
       "/api/universe/build-liquid-2000",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          universe_slug: DEFAULT_UNIVERSE,
           min_price: 5,
           max_price: 999999,
-          limit: 2000,
+          limit: 800,
         }),
       }
     );
   }
 
-  async function ingestLiquid2000() {
+  async function ingestCoreUniverse() {
     await callJson(
-      `Ingest Liquid 2000 history (batch_size=${ingestBatchSize})`,
+      `Ingest ${DEFAULT_UNIVERSE} history (batch_size=${ingestBatchSize})`,
       "/api/universe/ingest-liquid-2000",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ batch_size: ingestBatchSize }),
+        body: JSON.stringify({ universe_slug: DEFAULT_UNIVERSE, batch_size: ingestBatchSize }),
       }
     );
   }
@@ -139,14 +140,14 @@ export default function UtilitiesClient() {
   return (
     <div className="space-y-4">
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-        <div className="text-sm font-semibold text-slate-900">Universe: Liquid 2000</div>
+        <div className="text-sm font-semibold text-slate-900">Universe: Core 800</div>
         <div className="text-sm text-slate-600">
           These utilities help you (1) build the universe, (2) ingest daily history, then (3) scan in safe batches.
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={buildLiquid2000} disabled={!!busy}>
-            {busy === "Build Liquid 2000 universe" ? "Building..." : "Build / Refresh Liquid 2000"}
+          <Button variant="secondary" onClick={buildCore800} disabled={!!busy}>
+            {busy === "Build Core 800 universe" ? "Building..." : "Build / Refresh Core 800"}
           </Button>
         </div>
       </div>
@@ -166,8 +167,8 @@ export default function UtilitiesClient() {
             inputMode="numeric"
             disabled={!!busy}
           />
-          <Button onClick={ingestLiquid2000} disabled={!!busy}>
-            {busy?.startsWith("Ingest Liquid 2000 history") ? "Ingesting..." : "Ingest next batch"}
+          <Button onClick={ingestCoreUniverse} disabled={!!busy}>
+            {busy?.startsWith(`Ingest ${DEFAULT_UNIVERSE} history`) ? "Ingesting..." : "Ingest next batch"}
           </Button>
         </div>
       </div>
@@ -183,7 +184,7 @@ export default function UtilitiesClient() {
           <input
             className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
             value={scanLimit}
-            onChange={(e) => setScanLimit(Number(e.target.value) || 300)}
+            onChange={(e) => setScanLimit(Number(e.target.value) || 200)}
             inputMode="numeric"
             disabled={!!busy}
           />
@@ -210,7 +211,7 @@ export default function UtilitiesClient() {
         </div>
 
         <div className="text-xs text-slate-500">
-          Suggested: keep ingesting until 800–1200 symbols are scan-ready, then run scan (all batches).
+          Suggested: keep ingesting until 500+ symbols are scan-ready, then run scan (all batches).
         </div>
       </div>
 

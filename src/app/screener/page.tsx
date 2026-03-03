@@ -9,8 +9,8 @@ import { Button } from "@/components/ui/Button";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_UNIVERSE = "liquid_2000";
-const DEFAULT_STRATEGY_VERSION = "v1";
+const DEFAULT_UNIVERSE = "core_800";
+const DEFAULT_STRATEGY_VERSION = "v2_core_momentum";
 
 export default async function ScreenerPage() {
   const supabase = await supabaseServer();
@@ -37,7 +37,7 @@ export default async function ScreenerPage() {
 
   const regime = regimeRows?.[0] ?? null;
 
-  // Latest scan date for LIQUID 2000
+  // Latest scan date for the core momentum universe
   const { data: latestScan } = await supabase
     .from("daily_scans")
     .select("date")
@@ -98,7 +98,7 @@ export default async function ScreenerPage() {
             title="Latest scan"
             subtitle={
               latestScanDate
-                ? `Scan date: ${latestScanDate} • Universe: Liquid 2000 (Top Liquidity)`
+                ? `Scan date: ${latestScanDate} • Universe: Core 800 (Momentum)`
                 : "Run a scan to populate results"
             }
             right={regime ? regimeBadge : <Badge variant="neutral">No regime</Badge>}
@@ -106,7 +106,7 @@ export default async function ScreenerPage() {
           <CardContent>
             {!latestScanDate ? (
               <div className="text-sm muted">
-                No Liquid 2000 scan results yet. Use Utilities below:
+                No Core 800 scan results yet. Use Utilities below:
                 <br />
                 1) Ingest history (until you have good coverage)
                 <br />

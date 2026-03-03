@@ -280,8 +280,8 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         body: JSON.stringify({
           symbol: row.symbol,
           date: scanDate,
-          universe_slug: "liquid_2000",
-          strategy_version: "v1",
+          universe_slug: "core_800",
+          strategy_version: "v2_core_momentum",
         }),
       });
       const json = await res.json().catch(() => null);
@@ -424,7 +424,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
       </div>
 
       <div className="text-sm muted">
-        Confidence is a 0–100 score from trend alignment (SMA), RSI, volume confirmation, and extension penalties (regime may downgrade).
+        Confidence is a 0–100 score from strict momentum continuation checks: trend alignment, RSI band, volume confirmation, extension control, and regime gating.
       </div>
 
       <div className="grid gap-3 sm:grid-cols-4">

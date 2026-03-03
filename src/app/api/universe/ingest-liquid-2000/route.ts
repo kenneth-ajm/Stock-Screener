@@ -32,6 +32,10 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
   const batchSize = typeof body?.batch_size === "number" ? Math.max(5, Math.min(150, body.batch_size)) : 50;
+  const universeSlug =
+    typeof body?.universe_slug === "string" && body.universe_slug.trim()
+      ? body.universe_slug.trim()
+      : "liquid_2000";
 
   const to = isoDate(new Date());
   const fromDate = new Date();
@@ -40,7 +44,7 @@ export async function POST(req: Request) {
 
   // Ensure RPC exists
   const { data: need, error: rpcErr } = await supabase.rpc("symbols_needing_history", {
-    universe_slug_input: "liquid_2000",
+    universe_slug_input: universeSlug,
     min_bars: 220,
   });
 
@@ -102,7 +106,7 @@ export async function POST(req: Request) {
 
   // Recompute remaining
   const { data: needAfter } = await supabase.rpc("symbols_needing_history", {
-    universe_slug_input: "liquid_2000",
+    universe_slug_input: universeSlug,
     min_bars: 220,
   });
 
@@ -113,6 +117,7 @@ export async function POST(req: Request) {
     attempted: targets.length,
     ingested_count: ingested.length,
     remaining_to_fill: remaining,
+    universe_slug: universeSlug,
     ingested,
     failed,
     note: "If remaining_to_fill does not decrease, check price_bars unique constraint on (symbol, date).",
