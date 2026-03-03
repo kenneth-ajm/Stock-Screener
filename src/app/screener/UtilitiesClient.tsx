@@ -149,6 +149,7 @@ export default function UtilitiesClient() {
       let batchesOk = 0;
       let batchesFailed = 0;
       let firstError: string | null = null;
+      let firstErrorDetail: string | null = null;
 
       for (const off of scanOffsets) {
         const res = await fetch("/api/scan", {
@@ -161,13 +162,23 @@ export default function UtilitiesClient() {
             limit: scanLimit,
           }),
         });
-        const json = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
-        append(`Scan batch offset=${off} (${res.status})`, json);
+        const json = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          error?: string;
+          detail?: string;
+          [key: string]: unknown;
+        } | null;
+        append(`Scan batch offset=${off} (${res.status})`, {
+          status: res.status,
+          ok: res.ok && !!json?.ok,
+          payload: json,
+        });
         const batchOk = res.ok && !!json?.ok;
         if (batchOk) batchesOk += 1;
         else {
           batchesFailed += 1;
           if (!firstError) firstError = json?.error ?? `Batch offset=${off} failed with status ${res.status}`;
+          if (!firstErrorDetail) firstErrorDetail = json?.detail ?? null;
         }
 
         // tiny pause to reduce burst load
@@ -179,6 +190,7 @@ export default function UtilitiesClient() {
         batches_ok: batchesOk,
         batches_failed: batchesFailed,
         first_error: firstError,
+        first_error_detail: firstErrorDetail,
       });
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Unknown error";

@@ -267,7 +267,9 @@ export async function POST(req: Request) {
       },
     });
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "Unknown error";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    console.error("Scan route failed", e);
+    const errorMessage = e instanceof Error ? e.message : String(e);
+    const detail = e instanceof Error ? e.stack ?? e.message : String(e);
+    return NextResponse.json({ ok: false, error: errorMessage, detail }, { status: 500 });
   }
 }
