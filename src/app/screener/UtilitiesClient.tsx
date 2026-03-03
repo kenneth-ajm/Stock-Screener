@@ -27,6 +27,7 @@ export default function UtilitiesClient() {
   // ingest controls
   const [ingestBatchSize, setIngestBatchSize] = useState<number>(20);
   const [ingestOffset, setIngestOffset] = useState<number>(0);
+  const [backfillOffset, setBackfillOffset] = useState<number>(0);
 
   // scan batch controls
   const [scanLimit, setScanLimit] = useState<number>(200);
@@ -124,6 +125,25 @@ export default function UtilitiesClient() {
     }
   }
 
+  async function runBackfillAuto() {
+    const { res, json } = await callJson(
+      `Backfill ${DEFAULT_UNIVERSE} auto (offset=${backfillOffset}, batch=25)`,
+      "/api/jobs/backfill-core-800",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          batch_size: 25,
+          offset: backfillOffset,
+        }),
+      }
+    );
+
+    if (res?.ok && json?.ok && typeof json.next_offset === "number") {
+      setBackfillOffset(json.next_offset);
+    }
+  }
+
   async function runScanBatch(offset: number, limit: number) {
     await callJson(
       `Scan ${DEFAULT_UNIVERSE} batch (offset=${offset}, limit=${limit})`,
@@ -213,6 +233,9 @@ export default function UtilitiesClient() {
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" onClick={buildCore800} disabled={!!busy}>
             {busy === "Build Core 800 universe" ? "Building..." : "Build / Refresh Core 800"}
+          </Button>
+          <Button variant="secondary" onClick={runBackfillAuto} disabled={!!busy}>
+            {busy?.startsWith(`Backfill ${DEFAULT_UNIVERSE} auto`) ? "Backfilling..." : "Backfill core_800 (auto)"}
           </Button>
         </div>
       </div>
