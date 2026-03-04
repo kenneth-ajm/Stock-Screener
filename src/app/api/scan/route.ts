@@ -10,6 +10,12 @@ import {
   type RegimeState,
   type RuleEvaluation,
 } from "@/lib/strategy/coreMomentumSwing";
+import {
+  TREND_HOLD_BUY_CAP,
+  TREND_HOLD_DEFAULT_VERSION,
+  TREND_HOLD_WATCH_CAP,
+  evaluateTrendHold,
+} from "@/lib/strategy/trendHold";
 
 type ScanBody = {
   universe_slug?: string;
@@ -50,14 +56,18 @@ async function enforceGlobalCaps(opts: {
   supabase: ReturnType<typeof admin>;
   date: string;
   universe_slug: string;
+  strategy_version: string;
+  buyCap: number;
+  watchCap: number;
 }) {
-  const { supabase, date, universe_slug } = opts;
+  const { supabase, date, universe_slug, strategy_version, buyCap, watchCap } = opts;
 
   const { data, error } = await supabase
     .from("daily_scans")
     .select("id,symbol,signal,confidence,reason_summary,reason_json")
     .eq("date", date)
     .eq("universe_slug", universe_slug)
+    .eq("strategy_version", strategy_version)
     .in("signal", ["BUY", "WATCH"]);
 
   if (error) throw error;
@@ -73,8 +83,8 @@ async function enforceGlobalCaps(opts: {
   const buys = byRank.filter((row) => row.signal === "BUY");
   const watches = byRank.filter((row) => row.signal === "WATCH");
 
-  const keepBuy = new Set(buys.slice(0, CORE_MOMENTUM_BUY_CAP).map((row) => row.id));
-  const buyOverflow = buys.slice(CORE_MOMENTUM_BUY_CAP);
+  const keepBuy = new Set(buys.slice(0, buyCap).map((row) => row.id));
+  const buyOverflow = buys.slice(buyCap);
 
   const watchPool = [...watches, ...buyOverflow].sort((a, b) => {
     const ac = Number(a.confidence ?? 0);
@@ -83,7 +93,7 @@ async function enforceGlobalCaps(opts: {
     return String(a.symbol ?? "").localeCompare(String(b.symbol ?? ""));
   });
 
-  const keepWatch = new Set(watchPool.slice(0, CORE_MOMENTUM_WATCH_CAP).map((row) => row.id));
+  const keepWatch = new Set(watchPool.slice(0, watchCap).map((row) => row.id));
 
   const updates: Array<{
     id: string;
@@ -135,6 +145,9 @@ export async function POST(req: Request) {
 
     const universe_slug = body.universe_slug ?? CORE_MOMENTUM_DEFAULT_UNIVERSE;
     const strategyVersion = body.strategy_version ?? body.version ?? CORE_MOMENTUM_DEFAULT_VERSION;
+    const isTrend = strategyVersion === TREND_HOLD_DEFAULT_VERSION;
+    const buyCap = isTrend ? TREND_HOLD_BUY_CAP : CORE_MOMENTUM_BUY_CAP;
+    const watchCap = isTrend ? TREND_HOLD_WATCH_CAP : CORE_MOMENTUM_WATCH_CAP;
     const offset = Number.isFinite(body.offset as number) ? Number(body.offset) : 0;
     const limit = Number.isFinite(body.limit as number) ? Number(body.limit) : 200;
     const scanDate = (body.scan_date && String(body.scan_date)) || isoDate();
@@ -161,7 +174,14 @@ export async function POST(req: Request) {
 
     const symbols = (members ?? []).map((m) => String(m.symbol ?? "").toUpperCase()).filter(Boolean);
     if (symbols.length === 0) {
-      await enforceGlobalCaps({ supabase, date: scanDate, universe_slug });
+      await enforceGlobalCaps({
+        supabase,
+        date: scanDate,
+        universe_slug,
+        strategy_version: strategyVersion,
+        buyCap,
+        watchCap,
+      });
       return NextResponse.json({
         ok: true,
         universe_slug,
@@ -207,17 +227,29 @@ export async function POST(req: Request) {
         .limit(260);
       if (bErr || !bars || bars.length < 220) continue;
 
-      const computed = evaluateCoreMomentumSwing({
-        bars: bars.map((bar) => ({
-          date: String(bar.date),
-          open: Number(bar.open),
-          high: Number(bar.high),
-          low: Number(bar.low),
-          close: Number(bar.close),
-          volume: Number(bar.volume),
-        })),
-        regime,
-      });
+      const computed = isTrend
+        ? evaluateTrendHold({
+            bars: bars.map((bar) => ({
+              date: String(bar.date),
+              open: Number(bar.open),
+              high: Number(bar.high),
+              low: Number(bar.low),
+              close: Number(bar.close),
+              volume: Number(bar.volume),
+            })),
+            regime,
+          })
+        : evaluateCoreMomentumSwing({
+            bars: bars.map((bar) => ({
+              date: String(bar.date),
+              open: Number(bar.open),
+              high: Number(bar.high),
+              low: Number(bar.low),
+              close: Number(bar.close),
+              volume: Number(bar.volume),
+            })),
+            regime,
+          });
       if (!computed) continue;
       scored += 1;
 
@@ -242,13 +274,20 @@ export async function POST(req: Request) {
     if (upserts.length > 0) {
       const { data: sData, error: sErr } = await supabase
         .from("daily_scans")
-        .upsert(upserts, { onConflict: "date,universe_slug,symbol" })
+        .upsert(upserts, { onConflict: "date,universe_slug,strategy_version,symbol" })
         .select("id");
       if (sErr) throw sErr;
       upserted = sData?.length ?? 0;
     }
 
-    await enforceGlobalCaps({ supabase, date: scanDate, universe_slug });
+    await enforceGlobalCaps({
+      supabase,
+      date: scanDate,
+      universe_slug,
+      strategy_version: strategyVersion,
+      buyCap,
+      watchCap,
+    });
 
     return NextResponse.json({
       ok: true,
@@ -262,8 +301,8 @@ export async function POST(req: Request) {
       scored,
       upserted,
       caps: {
-        BUY: CORE_MOMENTUM_BUY_CAP,
-        WATCH: CORE_MOMENTUM_WATCH_CAP,
+        BUY: buyCap,
+        WATCH: watchCap,
       },
     });
   } catch (e: unknown) {

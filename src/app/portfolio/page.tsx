@@ -25,6 +25,10 @@ type PositionRow = {
   portfolio_id: string;
   symbol: string;
   status: string;
+  strategy_version?: string | null;
+  max_hold_days?: number | null;
+  tp_model?: string | null;
+  entry_date?: string | null;
 
   entry_price: number | null;
   stop_price: number | null;

@@ -148,6 +148,18 @@ function categoryForCheck(c: any): "Trend" | "Momentum" | "Volume" | "Extension"
   return "Trend";
 }
 
+function maxHoldDaysForStrategy(strategyVersion: string) {
+  return strategyVersion === "v1_trend_hold" ? 45 : 7;
+}
+
+function tpModelForStrategy(strategyVersion: string) {
+  return strategyVersion === "v1_trend_hold" ? "percent_10_20" : "percent_5_10";
+}
+
+function strategyName(strategyVersion: string) {
+  return strategyVersion === "v1_trend_hold" ? "Trend Hold" : "Momentum Swing";
+}
+
 function Toast({ msg }: { msg: string }) {
   return (
     <div className="fixed bottom-5 right-5 z-[10001]">
@@ -222,7 +234,15 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
   );
 }
 
-export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanDate: string }) {
+export default function ScanTableClient({
+  rows,
+  scanDate,
+  strategyVersion = "v2_core_momentum",
+}: {
+  rows: Row[];
+  scanDate: string;
+  strategyVersion?: string;
+}) {
   const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY+WATCH");
 
   const [quotes, setQuotes] = useState<Record<string, number | null>>({});
@@ -266,6 +286,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         live,
         atr: atr14,
         confidence: Number(row.confidence),
+        strategyVersion,
       });
       const priceMismatch = baseExecution.flags.priceMismatch;
       const effectiveSignal =
@@ -280,6 +301,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
               live,
               atr: atr14,
               confidence: Number(row.confidence),
+              strategyVersion,
             });
       return {
         ...row,
@@ -291,7 +313,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         execution,
       };
     });
-  }, [rows, quotes]);
+  }, [rows, quotes, strategyVersion]);
 
   const counts = useMemo(() => {
     const r = effectiveRows ?? [];
@@ -440,7 +462,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
           symbol: row.symbol,
           date: scanDate,
           universe_slug: "core_800",
-          strategy_version: "v2_core_momentum",
+          strategy_version: strategyVersion,
         }),
       });
       const json = await res.json().catch(() => null);
@@ -479,6 +501,8 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
     setTicketError(null);
     try {
       const calc = extractCalcMetrics(modalJson);
+      const maxHoldDays = maxHoldDaysForStrategy(strategyVersion);
+      const tpModel = tpModelForStrategy(strategyVersion);
       const equitySnapshot =
         calc.cashAvailable !== null || calc.equity !== null || calc.investedValue !== null
           ? {
@@ -495,6 +519,9 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
           entry_price: parseFloat(entryPrice.toString()),
           stop: parseFloat(stopPrice.toString()),
           shares: parseFloat(shares.toString()),
+          strategy_version: strategyVersion,
+          max_hold_days: maxHoldDays,
+          tp_model: tpModel,
           equity_snapshot: equitySnapshot,
         }),
       });
@@ -550,9 +577,14 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
         live: liveForTicket,
         atr: ticketRow?.atr14 ?? null,
         confidence: Number(ticketRow?.confidence ?? 0),
+        strategyVersion,
       });
       const riskPerShare = Number.isFinite(entryNum) && Number.isFinite(stopNum) ? entryNum - stopNum : null;
       const stopTooWide = execution.flags.stopTooWide;
+      const maxHoldDays = maxHoldDaysForStrategy(strategyVersion);
+      const entryDate = new Date(scanDate);
+      const timeStopDate = new Date(entryDate);
+      timeStopDate.setDate(entryDate.getDate() + maxHoldDays);
       const riskUsed = Number.isFinite(sharesNum) && riskPerShare !== null ? sharesNum * riskPerShare : null;
       const positionCost = Number.isFinite(sharesNum) && Number.isFinite(entryNum) ? sharesNum * entryNum : null;
       const cashAvailable =
@@ -599,6 +631,9 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
               {execution.reasons[0] ? (
                 <span className="text-xs text-slate-600">{execution.reasons[0]}</span>
               ) : null}
+              <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700">
+                {strategyName(strategyVersion)}
+              </span>
             </div>
           </div>
 
@@ -648,11 +683,19 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
             <KV k="Shares by risk" v={sharesByRisk !== null ? String(sharesByRisk) : "—"} />
             <KV k="Shares by cash" v={sharesByCash !== null ? String(sharesByCash) : "—"} />
             <KV k="Risk/share" v={riskPerShare !== null ? fmtMoney(riskPerShare) : "—"} />
-            <KV k="TP1 (5%)" v={Number.isFinite(execution.tp1) ? fmt2(execution.tp1) : "—"} />
-            <KV k="TP2 (10%)" v={Number.isFinite(execution.tp2) ? fmt2(execution.tp2) : "—"} />
+            <KV
+              k={strategyVersion === "v1_trend_hold" ? "TP1 (10%)" : "TP1 (5%)"}
+              v={Number.isFinite(execution.tp1) ? fmt2(execution.tp1) : "—"}
+            />
+            <KV
+              k={strategyVersion === "v1_trend_hold" ? "TP2 (20%)" : "TP2 (10%)"}
+              v={Number.isFinite(execution.tp2) ? fmt2(execution.tp2) : "—"}
+            />
             <KV k="Risk used" v={riskUsed !== null ? fmtMoney(riskUsed) : "—"} />
             <KV k="Position cost" v={positionCost !== null ? fmtMoney(positionCost) : "—"} />
             <KV k="Cash after open" v={cashRemainingAfter !== null ? fmtMoney(cashRemainingAfter) : "—"} />
+            <KV k="Max hold (days)" v={String(maxHoldDays)} />
+            <KV k="Time-stop date" v={timeStopDate.toISOString().slice(0, 10)} />
           </div>
 
           {stopTooWide ? (
@@ -883,6 +926,7 @@ export default function ScanTableClient({ rows, scanDate }: { rows: Row[]; scanD
                   const notes: string[] = [];
                   if (lateByPct > 0) notes.push(`Late by +${lateByPct.toFixed(1)}%`);
                   if (isExtended) notes.push("Extended");
+                  if (r.execution.flags.stopVeryWide && !r.execution.flags.stopTooWide) notes.push("Stop very wide");
                   if (live === null) notes.push("No live");
 
                   const dEntryClass =

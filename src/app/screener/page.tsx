@@ -11,8 +11,22 @@ export const dynamic = "force-dynamic";
 
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY_VERSION = "v2_core_momentum";
+const TREND_STRATEGY_VERSION = "v1_trend_hold";
 
-export default async function ScreenerPage() {
+function strategyLabel(version: string) {
+  return version === TREND_STRATEGY_VERSION ? "Trend Hold" : "Momentum Swing";
+}
+
+export default async function ScreenerPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ strategy?: string }>;
+}) {
+  const params = (await searchParams) ?? {};
+  const requested = String(params.strategy ?? DEFAULT_STRATEGY_VERSION).trim();
+  const activeStrategy =
+    requested === TREND_STRATEGY_VERSION ? TREND_STRATEGY_VERSION : DEFAULT_STRATEGY_VERSION;
+
   const supabase = await supabaseServer();
 
   const {
@@ -42,7 +56,7 @@ export default async function ScreenerPage() {
     .from("daily_scans")
     .select("date")
     .eq("universe_slug", DEFAULT_UNIVERSE)
-    .eq("strategy_version", DEFAULT_STRATEGY_VERSION)
+    .eq("strategy_version", activeStrategy)
     .order("date", { ascending: false })
     .limit(1);
 
@@ -54,7 +68,7 @@ export default async function ScreenerPage() {
       .from("daily_scans")
       .select("symbol, signal, confidence, entry, stop, tp1, tp2, reason_json")
       .eq("universe_slug", DEFAULT_UNIVERSE)
-      .eq("strategy_version", DEFAULT_STRATEGY_VERSION)
+      .eq("strategy_version", activeStrategy)
       .eq("date", latestScanDate)
       .order("confidence", { ascending: false })
       .limit(200);
@@ -98,22 +112,46 @@ export default async function ScreenerPage() {
             title="Latest scan"
             subtitle={
               latestScanDate
-                ? `Scan date: ${latestScanDate} • Universe: Core 800 (Momentum)`
+                ? `Scan date: ${latestScanDate} • Universe: Core 800 (${strategyLabel(activeStrategy)})`
                 : "Run a scan to populate results"
             }
             right={regime ? regimeBadge : <Badge variant="neutral">No regime</Badge>}
           />
           <CardContent>
+            <div className="mb-3 flex items-center gap-2">
+              <a href="/screener?strategy=v2_core_momentum">
+                <button
+                  className={`rounded-xl border px-3 py-1.5 text-sm font-medium ${
+                    activeStrategy === DEFAULT_STRATEGY_VERSION
+                      ? "border-slate-300 bg-slate-900 text-white"
+                      : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50"
+                  }`}
+                >
+                  Momentum Swing
+                </button>
+              </a>
+              <a href="/screener?strategy=v1_trend_hold">
+                <button
+                  className={`rounded-xl border px-3 py-1.5 text-sm font-medium ${
+                    activeStrategy === TREND_STRATEGY_VERSION
+                      ? "border-slate-300 bg-slate-900 text-white"
+                      : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50"
+                  }`}
+                >
+                  Trend Hold
+                </button>
+              </a>
+            </div>
             {!latestScanDate ? (
               <div className="text-sm muted">
                 No Core 800 scan results yet. Use Utilities below:
                 <br />
                 1) Ingest history (until you have good coverage)
                 <br />
-                2) Run scan (all batches)
+                2) Run scan (all batches) for {strategyLabel(activeStrategy)}
               </div>
             ) : (
-              <ScanTableClient rows={scanRows} scanDate={latestScanDate} />
+              <ScanTableClient rows={scanRows} scanDate={latestScanDate} strategyVersion={activeStrategy} />
             )}
           </CardContent>
         </Card>
@@ -181,7 +219,7 @@ export default async function ScreenerPage() {
       <Card>
         <CardHeader title="Utilities" subtitle="Build universe, ingest history, and scan in safe batches" />
         <CardContent>
-          <UtilitiesClient />
+          <UtilitiesClient strategyVersion={activeStrategy} strategyLabel={strategyLabel(activeStrategy)} />
         </CardContent>
       </Card>
     </div>

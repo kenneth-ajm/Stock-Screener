@@ -34,6 +34,13 @@ export async function POST(req: Request) {
   const stopRaw = body?.stop ?? body?.stop_price;
   const stop = Number(stopRaw);
   const shares = Number(body?.shares);
+  const strategy_version = String(body?.strategy_version ?? "v2_core_momentum").trim() || "v2_core_momentum";
+  const max_hold_days_raw = body?.max_hold_days;
+  const max_hold_days =
+    max_hold_days_raw == null || max_hold_days_raw === ""
+      ? null
+      : Math.max(1, Math.floor(Number(max_hold_days_raw)));
+  const tp_model = body?.tp_model == null ? null : String(body.tp_model);
 
   if (!symbol) return NextResponse.json({ ok: false, error: "symbol required" }, { status: 400 });
   if (!Number.isFinite(entry_price) || entry_price <= 0) {
@@ -88,6 +95,19 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
+  if (max_hold_days !== null && !Number.isFinite(max_hold_days)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "max_hold_days invalid",
+        detail: {
+          received: { max_hold_days: max_hold_days_raw },
+          rule: "max_hold_days must be a positive integer when provided",
+        },
+      },
+      { status: 400 }
+    );
+  }
 
   // default portfolio
   const { data: portfolio, error: pErr } = await supabase
@@ -130,6 +150,9 @@ export async function POST(req: Request) {
       entry_price,
       shares,
       stop,
+      strategy_version,
+      max_hold_days,
+      tp_model,
       status: "OPEN",
     })
     .select("id")

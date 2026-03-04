@@ -8,6 +8,10 @@ type PositionRow = {
   id: string;
   symbol: string;
   status: "OPEN" | "CLOSED" | string;
+  strategy_version?: string | null;
+  max_hold_days?: number | null;
+  tp_model?: string | null;
+  entry_date?: string | null;
 
   entry_price: number | null;
   stop_price?: number | null;
@@ -24,6 +28,8 @@ type PositionRow = {
 
 type GroupedOpenRow = {
   symbol: string;
+  strategy_version: string;
+  maxHoldDays: number | null;
   qty: number;
   avgEntry: number | null;
   stop: number | null; // placeholder; we’ll keep blank for now
@@ -73,6 +79,26 @@ function resolveQty(p: PositionRow): number {
     (typeof p.position_size === "number" ? p.position_size : null) ??
     0;
   return Number.isFinite(v) ? v : 0;
+}
+
+function strategyLabel(version: string | null | undefined) {
+  return version === "v1_trend_hold" ? "Trend" : "Momentum";
+}
+
+function strategyChipClass(version: string | null | undefined) {
+  return version === "v1_trend_hold"
+    ? "border-sky-200 bg-sky-50 text-sky-700"
+    : "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function dayDiffFromDate(dateStr: string | null | undefined) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  const utcStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const utcEntry = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  return Math.max(0, Math.floor((utcStart - utcEntry) / 86_400_000));
 }
 
 function computeClosedPnL(p: PositionRow) {
@@ -142,6 +168,7 @@ export default function PositionsClient({
   latestPriceBySymbol: Record<string, number | null>;
 }) {
   const [tab, setTab] = useState<"OPEN" | "CLOSED">("OPEN");
+  const [strategyFilter, setStrategyFilter] = useState<"ALL" | "MOMENTUM" | "TREND">("ALL");
 
   // Open table mode: grouped vs lots
   const [openMode, setOpenMode] = useState<"GROUPED" | "LOTS">("GROUPED");
@@ -169,11 +196,23 @@ export default function PositionsClient({
   const [manualError, setManualError] = useState<string | null>(null);
   const [manualBusy, setManualBusy] = useState(false);
 
-  const closedWithPnL = useMemo(() => {
-    return closedPositions.map((p) => ({ ...p, pnl: computeClosedPnL(p) }));
-  }, [closedPositions]);
+  const openFiltered = useMemo(() => {
+    if (strategyFilter === "ALL") return openPositions;
+    if (strategyFilter === "TREND") return openPositions.filter((p) => p.strategy_version === "v1_trend_hold");
+    return openPositions.filter((p) => (p.strategy_version ?? "v2_core_momentum") !== "v1_trend_hold");
+  }, [openPositions, strategyFilter]);
 
-  const hasClosedTrades = (closedSummary?.trades ?? 0) > 0;
+  const closedFiltered = useMemo(() => {
+    if (strategyFilter === "ALL") return closedPositions;
+    if (strategyFilter === "TREND") return closedPositions.filter((p) => p.strategy_version === "v1_trend_hold");
+    return closedPositions.filter((p) => (p.strategy_version ?? "v2_core_momentum") !== "v1_trend_hold");
+  }, [closedPositions, strategyFilter]);
+
+  const closedWithPnL = useMemo(() => {
+    return closedFiltered.map((p) => ({ ...p, pnl: computeClosedPnL(p) }));
+  }, [closedFiltered]);
+
+  const hasClosedTrades = closedWithPnL.length > 0;
 
   function openCloseModal(p: PositionRow) {
     setActivePosition(p);
@@ -286,17 +325,20 @@ export default function PositionsClient({
   const groupedOpen: GroupedOpenRow[] = useMemo(() => {
     const map = new Map<string, { lots: PositionRow[] }>();
 
-    for (const p of openPositions) {
+    for (const p of openFiltered) {
       const sym = (p.symbol ?? "").toUpperCase();
       if (!sym) continue;
-      const cur = map.get(sym) ?? { lots: [] };
+      const strat = p.strategy_version ?? "v2_core_momentum";
+      const key = `${strat}::${sym}`;
+      const cur = map.get(key) ?? { lots: [] };
       cur.lots.push(p);
-      map.set(sym, cur);
+      map.set(key, cur);
     }
 
     const rows: GroupedOpenRow[] = [];
 
-    for (const [symbol, { lots }] of map.entries()) {
+    for (const [_key, { lots }] of map.entries()) {
+      const symbol = (lots[0]?.symbol ?? "").toUpperCase();
       let totalQty = 0;
       let costSum = 0;
 
@@ -327,8 +369,12 @@ export default function PositionsClient({
         unrealPct = (last - avgEntry) / avgEntry;
       }
 
+      const defaultMaxHold = (lots[0]?.strategy_version ?? "v2_core_momentum") === "v1_trend_hold" ? 45 : 7;
+
       rows.push({
         symbol,
+        strategy_version: lots[0]?.strategy_version ?? "v2_core_momentum",
+        maxHoldDays: lots[0]?.max_hold_days ?? defaultMaxHold,
         qty: totalQty,
         avgEntry,
         stop: null,
@@ -348,7 +394,7 @@ export default function PositionsClient({
     });
 
     return rows;
-  }, [openPositions, latestPriceBySymbol]);
+  }, [openFiltered, latestPriceBySymbol]);
 
   return (
     <div className="space-y-4">
@@ -378,6 +424,36 @@ export default function PositionsClient({
         >
           Closed
         </button>
+
+        <div className="ml-2 flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
+          <button
+            className={clsx(
+              "rounded-lg px-2 py-1 text-xs font-medium",
+              strategyFilter === "ALL" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
+            )}
+            onClick={() => setStrategyFilter("ALL")}
+          >
+            All
+          </button>
+          <button
+            className={clsx(
+              "rounded-lg px-2 py-1 text-xs font-medium",
+              strategyFilter === "MOMENTUM" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
+            )}
+            onClick={() => setStrategyFilter("MOMENTUM")}
+          >
+            Momentum
+          </button>
+          <button
+            className={clsx(
+              "rounded-lg px-2 py-1 text-xs font-medium",
+              strategyFilter === "TREND" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
+            )}
+            onClick={() => setStrategyFilter("TREND")}
+          >
+            Trend
+          </button>
+        </div>
       </div>
 
       {/* OPEN */}
@@ -423,19 +499,20 @@ export default function PositionsClient({
                 <thead className="text-left text-xs text-slate-500">
                   <tr className="border-b border-slate-200">
                     <th className="p-3">Symbol</th>
+                    <th className="p-3">Strategy</th>
                     <th className="p-3">Avg cost</th>
                     <th className="p-3">Last</th>
                     <th className="p-3">Qty</th>
                     <th className="p-3">Unrealized $</th>
                     <th className="p-3">Unrealized %</th>
-                    <th className="p-3">Opened</th>
+                    <th className="p-3">Time stop</th>
                     <th className="p-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {groupedOpen.length === 0 ? (
                     <tr>
-                      <td className="p-3 text-slate-500" colSpan={8}>
+                      <td className="p-3 text-slate-500" colSpan={9}>
                         No open positions.
                       </td>
                     </tr>
@@ -451,9 +528,27 @@ export default function PositionsClient({
                               : "text-slate-600"
                           : "text-slate-500";
 
+                      const daysHeld = dayDiffFromDate(g.openedAt);
+                      const maxHold = g.maxHoldDays;
+                      const daysLeft = daysHeld !== null && maxHold !== null ? maxHold - daysHeld : null;
+                      const timeStopWarn = daysLeft !== null && daysLeft <= 1;
+                      const timeStopDate =
+                        g.openedAt && maxHold !== null
+                          ? (() => {
+                              const d = new Date(g.openedAt);
+                              d.setDate(d.getDate() + maxHold);
+                              return d.toISOString().slice(0, 10);
+                            })()
+                          : "—";
+
                       return (
-                        <tr key={g.symbol} className="border-b border-slate-100">
+                        <tr key={`${g.strategy_version}-${g.symbol}`} className="border-b border-slate-100">
                           <td className="p-3 font-semibold text-slate-900">{g.symbol}</td>
+                          <td className="p-3">
+                            <span className={clsx("rounded-full border px-2 py-1 text-xs font-semibold", strategyChipClass(g.strategy_version))}>
+                              {strategyLabel(g.strategy_version)}
+                            </span>
+                          </td>
                           <td className="p-3 text-slate-800">{formatMoney(g.avgEntry)}</td>
                           <td className="p-3 text-slate-800">{formatMoney(g.last)}</td>
                           <td className="p-3 text-slate-800">{formatInt(g.qty)}</td>
@@ -461,7 +556,18 @@ export default function PositionsClient({
                           <td className={clsx("p-3 font-semibold", pnlClass)}>
                             {typeof g.unrealPct === "number" ? formatPct(g.unrealPct) : "—"}
                           </td>
-                          <td className="p-3 text-slate-800">{formatDate(g.openedAt)}</td>
+                          <td className="p-3 text-slate-800">
+                            <div>{timeStopDate}</div>
+                            <div className="text-xs text-slate-500">
+                              {daysHeld !== null ? `${daysHeld}d held` : "—"}{" "}
+                              {daysLeft !== null ? `• ${Math.max(daysLeft, 0)}d left` : ""}
+                            </div>
+                            {timeStopWarn ? (
+                              <span className="mt-1 inline-block rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                                Time stop tomorrow
+                              </span>
+                            ) : null}
+                          </td>
                           <td className="p-3 text-right text-xs text-slate-500">
                             {g.lotIds.length} lot{g.lotIds.length === 1 ? "" : "s"}
                           </td>
@@ -476,26 +582,41 @@ export default function PositionsClient({
                 <thead className="text-left text-xs text-slate-500">
                   <tr className="border-b border-slate-200">
                     <th className="p-3">Symbol</th>
+                    <th className="p-3">Strategy</th>
                     <th className="p-3">Entry</th>
                     <th className="p-3">Last</th>
                     <th className="p-3">Qty</th>
                     <th className="p-3">Unrealized $</th>
                     <th className="p-3">Unrealized %</th>
-                    <th className="p-3">Opened</th>
+                    <th className="p-3">Time stop</th>
                     <th className="p-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {openPositions.length === 0 ? (
+                  {openFiltered.length === 0 ? (
                     <tr>
-                      <td className="p-3 text-slate-500" colSpan={8}>
+                      <td className="p-3 text-slate-500" colSpan={9}>
                         No open positions.
                       </td>
                     </tr>
                   ) : (
-                    openPositions.map((p) => {
+                    openFiltered.map((p) => {
                       const qty = resolveQty(p);
                       const last = latestPriceBySymbol?.[(p.symbol ?? "").toUpperCase()] ?? null;
+                      const strategyVer = p.strategy_version ?? "v2_core_momentum";
+                      const maxHold = p.max_hold_days ?? (strategyVer === "v1_trend_hold" ? 45 : 7);
+                      const heldFrom = p.entry_date ?? p.created_at ?? null;
+                      const daysHeld = dayDiffFromDate(heldFrom);
+                      const daysLeft = daysHeld !== null ? maxHold - daysHeld : null;
+                      const timeStopWarn = daysLeft !== null && daysLeft <= 1;
+                      const timeStopDate =
+                        heldFrom != null
+                          ? (() => {
+                              const d = new Date(heldFrom);
+                              d.setDate(d.getDate() + maxHold);
+                              return d.toISOString().slice(0, 10);
+                            })()
+                          : "—";
 
                       let unrealUsd: number | null = null;
                       let unrealPct: number | null = null;
@@ -523,6 +644,11 @@ export default function PositionsClient({
                       return (
                         <tr key={p.id} className="border-b border-slate-100">
                           <td className="p-3 font-semibold text-slate-900">{p.symbol}</td>
+                          <td className="p-3">
+                            <span className={clsx("rounded-full border px-2 py-1 text-xs font-semibold", strategyChipClass(strategyVer))}>
+                              {strategyLabel(strategyVer)}
+                            </span>
+                          </td>
                           <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
                           <td className="p-3 text-slate-800">{formatMoney(last)}</td>
                           <td className="p-3 text-slate-800">{qty || "—"}</td>
@@ -530,7 +656,18 @@ export default function PositionsClient({
                           <td className={clsx("p-3 font-semibold", pnlClass)}>
                             {typeof unrealPct === "number" ? formatPct(unrealPct) : "—"}
                           </td>
-                          <td className="p-3 text-slate-800">{formatDate(p.created_at ?? null)}</td>
+                          <td className="p-3 text-slate-800">
+                            <div>{timeStopDate}</div>
+                            <div className="text-xs text-slate-500">
+                              {daysHeld !== null ? `${daysHeld}d held` : "—"}{" "}
+                              {daysLeft !== null ? `• ${Math.max(daysLeft, 0)}d left` : ""}
+                            </div>
+                            {timeStopWarn ? (
+                              <span className="mt-1 inline-block rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                                Time stop tomorrow
+                              </span>
+                            ) : null}
+                          </td>
                           <td className="p-3 text-right">
                             <button
                               className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50"
@@ -681,6 +818,7 @@ export default function PositionsClient({
                     <thead className="text-left text-xs text-slate-500">
                       <tr className="border-b border-slate-200">
                         <th className="p-3">Symbol</th>
+                        <th className="p-3">Strategy</th>
                         <th className="p-3">Entry</th>
                         <th className="p-3">Exit</th>
                         <th className="p-3">P/L %</th>
@@ -702,6 +840,11 @@ export default function PositionsClient({
                         return (
                           <tr key={p.id} className="border-b border-slate-100">
                             <td className="p-3 font-semibold text-slate-900">{p.symbol}</td>
+                            <td className="p-3">
+                              <span className={clsx("rounded-full border px-2 py-1 text-xs font-semibold", strategyChipClass(p.strategy_version))}>
+                                {strategyLabel(p.strategy_version)}
+                              </span>
+                            </td>
                             <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
                             <td className="p-3 text-slate-800">{formatMoney(p.exit_price)}</td>
                             <td className={clsx("p-3 font-semibold", pnlClass)}>

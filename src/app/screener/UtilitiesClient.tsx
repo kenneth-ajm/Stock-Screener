@@ -20,7 +20,13 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export default function UtilitiesClient() {
+export default function UtilitiesClient({
+  strategyVersion = DEFAULT_STRATEGY_VERSION,
+  strategyLabel = "Momentum Swing",
+}: {
+  strategyVersion?: string;
+  strategyLabel?: string;
+}) {
   const [busy, setBusy] = useState<string | null>(null);
   const [log, setLog] = useState<string>("");
 
@@ -153,7 +159,7 @@ export default function UtilitiesClient() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           universe_slug: DEFAULT_UNIVERSE,
-          strategy_version: DEFAULT_STRATEGY_VERSION,
+          strategy_version: strategyVersion,
           offset,
           limit,
         }),
@@ -164,7 +170,12 @@ export default function UtilitiesClient() {
   async function runScanAllBatches() {
     // sequential batches so we don’t blow up Vercel
     setBusy("Scan ALL batches");
-    append("Scan ALL batches (start)", { universe_slug: DEFAULT_UNIVERSE, offsets: scanOffsets, limit: scanLimit });
+    append("Scan ALL batches (start)", {
+      universe_slug: DEFAULT_UNIVERSE,
+      strategy_version: strategyVersion,
+      offsets: scanOffsets,
+      limit: scanLimit,
+    });
 
     try {
       let batchesOk = 0;
@@ -178,7 +189,7 @@ export default function UtilitiesClient() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             universe_slug: DEFAULT_UNIVERSE,
-            strategy_version: DEFAULT_STRATEGY_VERSION,
+            strategy_version: strategyVersion,
             offset: off,
             limit: scanLimit,
           }),
@@ -272,7 +283,8 @@ export default function UtilitiesClient() {
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
         <div className="text-sm font-semibold text-slate-900">Run scan</div>
         <div className="text-sm text-slate-600">
-          Runs the daily scan on <span className="font-mono">{DEFAULT_UNIVERSE}</span>. Use batches to avoid timeouts.
+          Runs the daily scan on <span className="font-mono">{DEFAULT_UNIVERSE}</span> for{" "}
+          <span className="font-semibold">{strategyLabel}</span>. Use batches to avoid timeouts.
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
