@@ -176,7 +176,7 @@ function strategyName(strategyVersion: string) {
   return strategyVersion === "v1_trend_hold" ? "Trend Hold" : "Momentum Swing";
 }
 
-type TpPlan = "TP1_ONLY" | "TP1_TP2" | "TRAIL_ONLY" | "MANUAL";
+type TpPlan = "none" | "tp1_only" | "tp1_tp2";
 
 function defaultTpPercents(strategyVersion: string) {
   return strategyVersion === "v1_trend_hold"
@@ -288,7 +288,7 @@ export default function ScanTableClient({
   const [ticketShares, setTicketShares] = useState<string>("");
   const [ticketEntry, setTicketEntry] = useState<string>("");
   const [ticketStop, setTicketStop] = useState<string>("");
-  const [ticketTpPlan, setTicketTpPlan] = useState<TpPlan>("TP1_TP2");
+  const [ticketTpPlan, setTicketTpPlan] = useState<TpPlan>("tp1_tp2");
   const [ticketTp1Pct, setTicketTp1Pct] = useState<string>("");
   const [ticketTp2Pct, setTicketTp2Pct] = useState<string>("");
   const [ticketTp1SizePct, setTicketTp1SizePct] = useState<string>("");
@@ -475,7 +475,7 @@ export default function ScanTableClient({
       );
       setTicketStop(calc.stop !== null ? calc.stop.toFixed(2) : Number(row.stop).toFixed(2));
       const defaults = defaultTpPercents(strategyVersion);
-      setTicketTpPlan("TP1_TP2");
+      setTicketTpPlan("tp1_tp2");
       setTicketTp1Pct(String(defaults.tp1Pct));
       setTicketTp2Pct(String(defaults.tp2Pct));
       setTicketTp1SizePct("50");
@@ -577,19 +577,19 @@ export default function ScanTableClient({
     const tp1SizePct = Math.round(Number(ticketTp1SizePct));
     const tp2SizePct = Math.round(Number(ticketTp2SizePct));
     const plan = ticketTpPlan;
-    if ((plan === "TP1_ONLY" || plan === "TP1_TP2") && (!Number.isFinite(tp1Pct) || tp1Pct <= 0)) {
+    if ((plan === "tp1_only" || plan === "tp1_tp2") && (!Number.isFinite(tp1Pct) || tp1Pct <= 0)) {
       setTicketError("TP1 % must be a positive number.");
       return;
     }
-    if (plan === "TP1_TP2" && (!Number.isFinite(tp2Pct) || tp2Pct <= 0)) {
+    if (plan === "tp1_tp2" && (!Number.isFinite(tp2Pct) || tp2Pct <= 0)) {
       setTicketError("TP2 % must be a positive number.");
       return;
     }
-    if ((plan === "TP1_ONLY" || plan === "TP1_TP2") && (!Number.isFinite(tp1SizePct) || tp1SizePct < 0 || tp1SizePct > 100)) {
+    if ((plan === "tp1_only" || plan === "tp1_tp2") && (!Number.isFinite(tp1SizePct) || tp1SizePct < 0 || tp1SizePct > 100)) {
       setTicketError("TP1 size % must be between 0 and 100.");
       return;
     }
-    if (plan === "TP1_TP2" && (!Number.isFinite(tp2SizePct) || tp2SizePct < 0 || tp2SizePct > 100)) {
+    if (plan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || tp2SizePct < 0 || tp2SizePct > 100)) {
       setTicketError("TP2 size % must be between 0 and 100.");
       return;
     }
@@ -624,10 +624,10 @@ export default function ScanTableClient({
           max_hold_days: maxHoldDays,
           tp_model: tpModel,
           tp_plan: plan,
-          tp1_pct: plan === "TRAIL_ONLY" || plan === "MANUAL" ? null : tp1Pct,
-          tp2_pct: plan === "TP1_TP2" ? tp2Pct : null,
-          tp1_size_pct: plan === "TRAIL_ONLY" || plan === "MANUAL" ? null : tp1SizePct,
-          tp2_size_pct: plan === "TP1_TP2" ? tp2SizePct : null,
+          tp1_pct: plan === "none" ? null : tp1Pct,
+          tp2_pct: plan === "tp1_tp2" ? tp2Pct : null,
+          tp1_size_pct: plan === "none" ? null : tp1SizePct,
+          tp2_size_pct: plan === "tp1_tp2" ? tp2SizePct : 0,
           equity_snapshot: equitySnapshot,
         }),
       });
@@ -788,12 +788,12 @@ export default function ScanTableClient({
                     const next = e.target.value as TpPlan;
                     const defaults = defaultTpPercents(strategyVersion);
                     setTicketTpPlan(next);
-                    if (next === "TP1_ONLY") {
+                    if (next === "tp1_only") {
                       setTicketTp1Pct(String(defaults.tp1Pct));
                       setTicketTp1SizePct("100");
                       setTicketTp2Pct("");
-                      setTicketTp2SizePct("");
-                    } else if (next === "TP1_TP2") {
+                      setTicketTp2SizePct("0");
+                    } else if (next === "tp1_tp2") {
                       setTicketTp1Pct(String(defaults.tp1Pct));
                       setTicketTp2Pct(String(defaults.tp2Pct));
                       setTicketTp1SizePct("50");
@@ -807,14 +807,13 @@ export default function ScanTableClient({
                   }}
                   disabled={ticketSubmitting}
                 >
-                  <option value="TP1_ONLY">TP1 only</option>
-                  <option value="TP1_TP2">TP1+TP2</option>
-                  <option value="TRAIL_ONLY">Trail only</option>
-                  <option value="MANUAL">Manual</option>
+                  <option value="none">None</option>
+                  <option value="tp1_only">TP1 only</option>
+                  <option value="tp1_tp2">TP1+TP2</option>
                 </select>
               </div>
 
-              {ticketTpPlan === "TP1_ONLY" || ticketTpPlan === "TP1_TP2" ? (
+              {ticketTpPlan === "tp1_only" || ticketTpPlan === "tp1_tp2" ? (
                 <>
                   <div className="space-y-1">
                     <label className="text-xs text-slate-500">TP1 %</label>
@@ -839,7 +838,7 @@ export default function ScanTableClient({
                 </>
               ) : null}
 
-              {ticketTpPlan === "TP1_TP2" ? (
+              {ticketTpPlan === "tp1_tp2" ? (
                 <>
                   <div className="space-y-1">
                     <label className="text-xs text-slate-500">TP2 %</label>

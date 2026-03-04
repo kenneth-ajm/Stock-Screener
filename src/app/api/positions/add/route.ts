@@ -41,12 +41,11 @@ export async function POST(req: Request) {
       ? null
       : Math.max(1, Math.floor(Number(max_hold_days_raw)));
   const tp_model = body?.tp_model == null ? null : String(body.tp_model);
-  const tp_plan_raw = body?.tp_plan == null ? "" : String(body.tp_plan).trim().toUpperCase();
+  const tp_plan_raw = body?.tp_plan == null ? "" : String(body.tp_plan).trim().toLowerCase();
   const tp_plan =
-    tp_plan_raw === "TP1_ONLY" ||
-    tp_plan_raw === "TP1_TP2" ||
-    tp_plan_raw === "TRAIL_ONLY" ||
-    tp_plan_raw === "MANUAL"
+    tp_plan_raw === "none" ||
+    tp_plan_raw === "tp1_only" ||
+    tp_plan_raw === "tp1_tp2"
       ? tp_plan_raw
       : null;
   const tp1_pct_raw = body?.tp1_pct;
@@ -133,7 +132,7 @@ export async function POST(req: Request) {
         error: "tp_plan invalid",
         detail: {
           received: { tp_plan: tp_plan_raw },
-          rule: "tp_plan must be TP1_ONLY | TP1_TP2 | TRAIL_ONLY | MANUAL",
+          rule: "tp_plan must be none | tp1_only | tp1_tp2",
         },
       },
       { status: 400 }
@@ -197,27 +196,50 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-  if ((tp_plan === "TP1_ONLY" || tp_plan === "TP1_TP2") && tp1_pct === null) {
+  const normalizedTpPlan =
+    tp_plan === "tp1_only"
+      ? "tp1_only"
+      : tp_plan === "tp1_tp2"
+        ? "tp1_tp2"
+      : "none";
+  const finalTp1Pct = normalizedTpPlan === "none" ? null : tp1_pct;
+  const finalTp2Pct = normalizedTpPlan === "tp1_tp2" ? tp2_pct : null;
+  const finalTp1SizePct =
+    normalizedTpPlan === "none"
+      ? null
+      : tp1_size_pct == null
+        ? normalizedTpPlan === "tp1_only"
+          ? 100
+          : 50
+        : tp1_size_pct;
+  const finalTp2SizePct =
+    normalizedTpPlan === "tp1_tp2"
+      ? tp2_size_pct == null
+        ? 50
+        : tp2_size_pct
+      : 0;
+
+  if ((normalizedTpPlan === "tp1_only" || normalizedTpPlan === "tp1_tp2") && tp1_pct === null) {
     return NextResponse.json(
       {
         ok: false,
         error: "tp1_pct required",
         detail: {
           received: { tp_plan, tp1_pct: tp1_pct_raw },
-          rule: "tp1_pct is required for TP1_ONLY or TP1_TP2",
+          rule: "tp1_pct is required for tp1_only or tp1_tp2",
         },
       },
       { status: 400 }
     );
   }
-  if (tp_plan === "TP1_TP2" && tp2_pct === null) {
+  if (normalizedTpPlan === "tp1_tp2" && tp2_pct === null) {
     return NextResponse.json(
       {
         ok: false,
         error: "tp2_pct required",
         detail: {
           received: { tp_plan, tp2_pct: tp2_pct_raw },
-          rule: "tp2_pct is required for TP1_TP2",
+          rule: "tp2_pct is required for tp1_tp2",
         },
       },
       { status: 400 }
@@ -268,11 +290,11 @@ export async function POST(req: Request) {
       strategy_version,
       max_hold_days,
       tp_model,
-      tp_plan,
-      tp1_pct,
-      tp2_pct,
-      tp1_size_pct,
-      tp2_size_pct,
+      tp_plan: normalizedTpPlan,
+      tp1_pct: finalTp1Pct,
+      tp2_pct: finalTp2Pct,
+      tp1_size_pct: finalTp1SizePct,
+      tp2_size_pct: finalTp2SizePct,
       status: "OPEN",
     })
     .select("id")

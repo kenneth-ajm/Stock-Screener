@@ -1,4 +1,5 @@
 -- TP intention plan fields for portfolio positions.
+-- tp_plan values used by app: 'none' | 'tp1_only' | 'tp1_tp2'
 -- Run in Supabase SQL editor.
 
 begin;
@@ -11,4 +12,3 @@ alter table public.portfolio_positions
   add column if not exists tp2_size_pct integer;
 
 commit;
-

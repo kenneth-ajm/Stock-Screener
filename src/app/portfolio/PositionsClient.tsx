@@ -48,6 +48,8 @@ type GroupedOpenRow = {
   tpPlanSummary: string | null;
 };
 
+type TpPlan = "none" | "tp1_only" | "tp1_tp2";
+
 function clsx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
 }
@@ -113,7 +115,7 @@ function tpPlanSummaryFor(p: {
   tp2_size_pct?: number | null;
   strategy_version?: string | null;
 }) {
-  const plan = String(p.tp_plan ?? "").toUpperCase();
+  const plan = String(p.tp_plan ?? "").toLowerCase();
   const isTrend = (p.strategy_version ?? "") === "v1_trend_hold";
   const defaultTp1 = isTrend ? 10 : 5;
   const defaultTp2 = isTrend ? 20 : 10;
@@ -121,13 +123,17 @@ function tpPlanSummaryFor(p: {
   const tp2 = typeof p.tp2_pct === "number" ? p.tp2_pct : defaultTp2;
   const tp1Label = fmtPctShort(tp1) ?? `${tp1}%`;
   const tp2Label = fmtPctShort(tp2) ?? `${tp2}%`;
-  const tp1Size = typeof p.tp1_size_pct === "number" ? p.tp1_size_pct : plan === "TP1_ONLY" ? 100 : 50;
+  const tp1Size = typeof p.tp1_size_pct === "number" ? p.tp1_size_pct : plan === "tp1_only" ? 100 : 50;
   const tp2Size = typeof p.tp2_size_pct === "number" ? p.tp2_size_pct : 50;
 
-  if (plan === "TRAIL_ONLY") return "Trail only";
-  if (plan === "MANUAL") return "Manual";
-  if (plan === "TP1_ONLY") return `TP1 ${tp1Label} (${Math.round(tp1Size)}%)`;
-  return `TP1 ${tp1Label} (${Math.round(tp1Size)}%) + TP2 ${tp2Label} (${Math.round(tp2Size)}%)`;
+  if (plan === "" || plan === "none") return "No TP";
+  if (plan === "tp1_only") return `TP1 ${tp1Label} (${Math.round(tp1Size)}%)`;
+  if (plan === "tp1_tp2") return `TP1 ${tp1Label} (${Math.round(tp1Size)}%) + TP2 ${tp2Label} (${Math.round(tp2Size)}%)`;
+  return "No TP";
+}
+
+function defaultTpPercentsForStrategy(version: string | null | undefined) {
+  return version === "v1_trend_hold" ? { tp1Pct: 10, tp2Pct: 20 } : { tp1Pct: 5, tp2Pct: 10 };
 }
 
 function dayDiffFromDate(dateStr: string | null | undefined) {
@@ -269,8 +275,23 @@ export default function PositionsClient({
   const [mEntry, setMEntry] = useState("");
   const [mStop, setMStop] = useState("");
   const [mQty, setMQty] = useState("");
+  const [mTpPlan, setMTpPlan] = useState<TpPlan>("none");
+  const [mTp1Pct, setMTp1Pct] = useState("");
+  const [mTp2Pct, setMTp2Pct] = useState("");
+  const [mTp1SizePct, setMTp1SizePct] = useState("");
+  const [mTp2SizePct, setMTp2SizePct] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
   const [manualBusy, setManualBusy] = useState(false);
+
+  const [editTpOpen, setEditTpOpen] = useState(false);
+  const [editTpPosition, setEditTpPosition] = useState<PositionRow | null>(null);
+  const [editTpPlan, setEditTpPlan] = useState<TpPlan>("none");
+  const [editTp1Pct, setEditTp1Pct] = useState("");
+  const [editTp2Pct, setEditTp2Pct] = useState("");
+  const [editTp1SizePct, setEditTp1SizePct] = useState("");
+  const [editTp2SizePct, setEditTp2SizePct] = useState("");
+  const [editTpBusy, setEditTpBusy] = useState(false);
+  const [editTpError, setEditTpError] = useState<string | null>(null);
 
   const openFiltered = useMemo(() => {
     if (strategyFilter === "ALL") return openPositions;
@@ -350,6 +371,11 @@ export default function PositionsClient({
     setMEntry("");
     setMStop("");
     setMQty("");
+    setMTpPlan("none");
+    setMTp1Pct("");
+    setMTp2Pct("");
+    setMTp1SizePct("");
+    setMTp2SizePct("");
     setManualError(null);
     setManualOpen(true);
   }
@@ -360,11 +386,44 @@ export default function PositionsClient({
     setManualError(null);
   }
 
+  function applyTpPlanDefaults(
+    plan: TpPlan,
+    strategyVersion: string | null | undefined,
+    setTp1Pct: (v: string) => void,
+    setTp2Pct: (v: string) => void,
+    setTp1SizePct: (v: string) => void,
+    setTp2SizePct: (v: string) => void
+  ) {
+    const defaults = defaultTpPercentsForStrategy(strategyVersion);
+    if (plan === "none") {
+      setTp1Pct("");
+      setTp2Pct("");
+      setTp1SizePct("");
+      setTp2SizePct("");
+      return;
+    }
+    if (plan === "tp1_only") {
+      setTp1Pct(String(defaults.tp1Pct));
+      setTp2Pct("");
+      setTp1SizePct("100");
+      setTp2SizePct("0");
+      return;
+    }
+    setTp1Pct(String(defaults.tp1Pct));
+    setTp2Pct(String(defaults.tp2Pct));
+    setTp1SizePct("50");
+    setTp2SizePct("50");
+  }
+
   async function submitManual() {
     const symbol = mSymbol.trim().toUpperCase();
     const entry = Number(mEntry);
     const stop = Number(mStop);
     const qty = Number(mQty);
+    const tp1Pct = Number(mTp1Pct);
+    const tp2Pct = Number(mTp2Pct);
+    const tp1SizePct = Math.round(Number(mTp1SizePct));
+    const tp2SizePct = Math.round(Number(mTp2SizePct));
 
     if (!symbol) return setManualError("Symbol is required (e.g. AAPL).");
     if (!Number.isFinite(entry) || entry <= 0) return setManualError("Entry price must be a positive number.");
@@ -372,6 +431,14 @@ export default function PositionsClient({
       return setManualError("Stop must be blank or a positive number.");
     if (mQty.trim() && (!Number.isFinite(qty) || qty <= 0))
       return setManualError("Quantity must be blank or a positive number.");
+    if (mTpPlan !== "none" && (!Number.isFinite(tp1Pct) || tp1Pct <= 0))
+      return setManualError("TP1 % must be a positive number.");
+    if (mTpPlan === "tp1_tp2" && (!Number.isFinite(tp2Pct) || tp2Pct <= 0))
+      return setManualError("TP2 % must be a positive number.");
+    if (mTpPlan !== "none" && (!Number.isFinite(tp1SizePct) || tp1SizePct < 0 || tp1SizePct > 100))
+      return setManualError("TP1 size % must be between 0 and 100.");
+    if (mTpPlan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || tp2SizePct < 0 || tp2SizePct > 100))
+      return setManualError("TP2 size % must be between 0 and 100.");
 
     try {
       setManualBusy(true);
@@ -385,6 +452,11 @@ export default function PositionsClient({
           entry_price: entry,
           stop_price: mStop.trim() ? stop : null,
           quantity: mQty.trim() ? qty : null,
+          tp_plan: mTpPlan,
+          tp1_pct: mTpPlan === "none" ? null : tp1Pct,
+          tp2_pct: mTpPlan === "tp1_tp2" ? tp2Pct : null,
+          tp1_size_pct: mTpPlan === "none" ? null : tp1SizePct,
+          tp2_size_pct: mTpPlan === "tp1_tp2" ? tp2SizePct : 0,
         }),
       });
 
@@ -400,6 +472,92 @@ export default function PositionsClient({
       setManualError(e?.message ?? "Manual add failed.");
     } finally {
       setManualBusy(false);
+    }
+  }
+
+  function openEditTpModal(p: PositionRow) {
+    setEditTpPosition(p);
+    const currentPlan = String(p.tp_plan ?? "").toLowerCase();
+    const plan: TpPlan =
+      currentPlan === "tp1_only" || currentPlan === "tp1_tp2" || currentPlan === "none"
+        ? (currentPlan as TpPlan)
+        : "none";
+    setEditTpPlan(plan);
+
+    const defaults = defaultTpPercentsForStrategy(p.strategy_version);
+    setEditTp1Pct(String(p.tp1_pct ?? defaults.tp1Pct));
+    setEditTp2Pct(String(p.tp2_pct ?? defaults.tp2Pct));
+    setEditTp1SizePct(String(p.tp1_size_pct ?? (plan === "tp1_only" ? 100 : 50)));
+    setEditTp2SizePct(String(p.tp2_size_pct ?? (plan === "tp1_tp2" ? 50 : 0)));
+    if (plan === "none") {
+      setEditTp1Pct("");
+      setEditTp2Pct("");
+      setEditTp1SizePct("");
+      setEditTp2SizePct("");
+    }
+    setEditTpError(null);
+    setEditTpOpen(true);
+  }
+
+  function closeEditTpModal() {
+    if (editTpBusy) return;
+    setEditTpOpen(false);
+    setEditTpPosition(null);
+    setEditTpError(null);
+  }
+
+  async function submitEditTp() {
+    if (!editTpPosition) return;
+    const tp1Pct = Number(editTp1Pct);
+    const tp2Pct = Number(editTp2Pct);
+    const tp1SizePct = Math.round(Number(editTp1SizePct));
+    const tp2SizePct = Math.round(Number(editTp2SizePct));
+
+    if (editTpPlan !== "none" && (!Number.isFinite(tp1Pct) || tp1Pct <= 0)) {
+      setEditTpError("TP1 % must be a positive number.");
+      return;
+    }
+    if (editTpPlan === "tp1_tp2" && (!Number.isFinite(tp2Pct) || tp2Pct <= 0)) {
+      setEditTpError("TP2 % must be a positive number.");
+      return;
+    }
+    if (editTpPlan !== "none" && (!Number.isFinite(tp1SizePct) || tp1SizePct < 0 || tp1SizePct > 100)) {
+      setEditTpError("TP1 size % must be between 0 and 100.");
+      return;
+    }
+    if (editTpPlan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || tp2SizePct < 0 || tp2SizePct > 100)) {
+      setEditTpError("TP2 size % must be between 0 and 100.");
+      return;
+    }
+
+    try {
+      setEditTpBusy(true);
+      setEditTpError(null);
+
+      const res = await fetch("/api/positions/update-tp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          position_id: editTpPosition.id,
+          tp_plan: editTpPlan,
+          tp1_pct: editTpPlan === "none" ? null : tp1Pct,
+          tp2_pct: editTpPlan === "tp1_tp2" ? tp2Pct : null,
+          tp1_size_pct: editTpPlan === "none" ? null : tp1SizePct,
+          tp2_size_pct: editTpPlan === "tp1_tp2" ? tp2SizePct : 0,
+        }),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(payload?.error || "Update TP plan failed.");
+      }
+
+      closeEditTpModal();
+      showToast("TP plan updated ✅");
+      setTimeout(() => window.location.reload(), 500);
+    } catch (e: any) {
+      setEditTpError(e?.message ?? "Update TP plan failed.");
+    } finally {
+      setEditTpBusy(false);
     }
   }
 
@@ -480,6 +638,12 @@ export default function PositionsClient({
 
     return rows;
   }, [openFiltered, latestPriceBySymbol]);
+
+  const openById = useMemo(() => {
+    const m = new Map<string, PositionRow>();
+    for (const p of openFiltered) m.set(p.id, p);
+    return m;
+  }, [openFiltered]);
 
   return (
     <div className="space-y-4">
@@ -658,7 +822,22 @@ export default function PositionsClient({
                             ) : null}
                           </td>
                           <td className="p-3 text-right text-xs text-slate-500">
-                            {g.lotIds.length} lot{g.lotIds.length === 1 ? "" : "s"}
+                            <div className="flex justify-end gap-2">
+                              <button
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                                onClick={() => {
+                                  const lot = g.lotIds[0] ? openById.get(g.lotIds[0]) : null;
+                                  if (lot) openEditTpModal(lot);
+                                }}
+                                disabled={g.lotIds.length !== 1}
+                                title={g.lotIds.length !== 1 ? "Switch to Lots mode to edit per-lot TP plan" : "Edit TP plan"}
+                              >
+                                Edit TP plan
+                              </button>
+                              <span className="self-center">
+                                {g.lotIds.length} lot{g.lotIds.length === 1 ? "" : "s"}
+                              </span>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -763,12 +942,20 @@ export default function PositionsClient({
                             ) : null}
                           </td>
                           <td className="p-3 text-right">
-                            <button
-                              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50"
-                              onClick={() => openCloseModal(p)}
-                            >
-                              Close
-                            </button>
+                            <div className="flex justify-end gap-2">
+                              <button
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50"
+                                onClick={() => openEditTpModal(p)}
+                              >
+                                Edit TP plan
+                              </button>
+                              <button
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50"
+                                onClick={() => openCloseModal(p)}
+                              >
+                                Close
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -896,6 +1083,87 @@ export default function PositionsClient({
                     disabled={manualBusy}
                   />
                 </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs text-slate-500">Take profit plan</label>
+                  <select
+                    value={mTpPlan}
+                    onChange={(e) => {
+                      const next = e.target.value as TpPlan;
+                      setMTpPlan(next);
+                      applyTpPlanDefaults(
+                        next,
+                        "v2_core_momentum",
+                        setMTp1Pct,
+                        setMTp2Pct,
+                        setMTp1SizePct,
+                        setMTp2SizePct
+                      );
+                    }}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                    disabled={manualBusy}
+                  >
+                    <option value="none">None</option>
+                    <option value="tp1_only">TP1 only</option>
+                    <option value="tp1_tp2">TP1 + TP2</option>
+                  </select>
+                </div>
+
+                {mTpPlan !== "none" ? (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">TP1 %</label>
+                      <input
+                        value={mTp1Pct}
+                        onChange={(e) => setMTp1Pct(e.target.value)}
+                        inputMode="decimal"
+                        placeholder="e.g. 5"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        disabled={manualBusy}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">TP1 size %</label>
+                      <input
+                        value={mTp1SizePct}
+                        onChange={(e) => setMTp1SizePct(e.target.value)}
+                        inputMode="numeric"
+                        placeholder="e.g. 100"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        disabled={manualBusy}
+                      />
+                    </div>
+                  </>
+                ) : null}
+
+                {mTpPlan === "tp1_tp2" ? (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">TP2 %</label>
+                      <input
+                        value={mTp2Pct}
+                        onChange={(e) => setMTp2Pct(e.target.value)}
+                        inputMode="decimal"
+                        placeholder="e.g. 10"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        disabled={manualBusy}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">TP2 size %</label>
+                      <input
+                        value={mTp2SizePct}
+                        onChange={(e) => setMTp2SizePct(e.target.value)}
+                        inputMode="numeric"
+                        placeholder="e.g. 50"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        disabled={manualBusy}
+                      />
+                    </div>
+                  </>
+                ) : null}
               </div>
 
               {manualError ? <div className="text-sm text-rose-600">{manualError}</div> : null}
@@ -914,6 +1182,110 @@ export default function PositionsClient({
                   disabled={manualBusy}
                 >
                   {manualBusy ? "Saving..." : "Save Holding"}
+                </button>
+              </div>
+            </div>
+          </Modal>
+
+          <Modal
+            open={editTpOpen}
+            title={editTpPosition ? `Edit TP plan: ${editTpPosition.symbol}` : "Edit TP plan"}
+            onClose={closeEditTpModal}
+          >
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-xs text-slate-500">Take profit plan</label>
+                <select
+                  value={editTpPlan}
+                  onChange={(e) => {
+                    const next = e.target.value as TpPlan;
+                    setEditTpPlan(next);
+                    applyTpPlanDefaults(
+                      next,
+                      editTpPosition?.strategy_version ?? "v2_core_momentum",
+                      setEditTp1Pct,
+                      setEditTp2Pct,
+                      setEditTp1SizePct,
+                      setEditTp2SizePct
+                    );
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  disabled={editTpBusy}
+                >
+                  <option value="none">None</option>
+                  <option value="tp1_only">TP1 only</option>
+                  <option value="tp1_tp2">TP1 + TP2</option>
+                </select>
+              </div>
+
+              {editTpPlan !== "none" ? (
+                <>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">TP1 %</label>
+                      <input
+                        value={editTp1Pct}
+                        onChange={(e) => setEditTp1Pct(e.target.value)}
+                        inputMode="decimal"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        disabled={editTpBusy}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">TP1 size %</label>
+                      <input
+                        value={editTp1SizePct}
+                        onChange={(e) => setEditTp1SizePct(e.target.value)}
+                        inputMode="numeric"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        disabled={editTpBusy}
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : null}
+
+              {editTpPlan === "tp1_tp2" ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-500">TP2 %</label>
+                    <input
+                      value={editTp2Pct}
+                      onChange={(e) => setEditTp2Pct(e.target.value)}
+                      inputMode="decimal"
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                      disabled={editTpBusy}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-500">TP2 size %</label>
+                    <input
+                      value={editTp2SizePct}
+                      onChange={(e) => setEditTp2SizePct(e.target.value)}
+                      inputMode="numeric"
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                      disabled={editTpBusy}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {editTpError ? <div className="text-sm text-rose-600">{editTpError}</div> : null}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                  onClick={closeEditTpModal}
+                  disabled={editTpBusy}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                  onClick={submitEditTp}
+                  disabled={editTpBusy}
+                >
+                  {editTpBusy ? "Saving..." : "Save TP plan"}
                 </button>
               </div>
             </div>
