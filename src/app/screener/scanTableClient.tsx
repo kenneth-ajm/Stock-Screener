@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { computeExecutionGuidance, type ExecutionAction } from "@/lib/execution";
 import { fmt2, fmtCompact, fmtDate, fmtInt, fmtMoney } from "@/lib/format";
@@ -257,25 +257,45 @@ function Modal({
   children: React.ReactNode;
   onClose: () => void;
 }) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open || typeof document === "undefined") return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    panelRef.current?.focus();
+  }, [open]);
+
   if (!open) return null;
 
-  // lock scroll behind modal
-  // (simple approach)
-  if (typeof document !== "undefined") document.body.style.overflow = "hidden";
-
   return (
-    <div className="fixed inset-0 z-[9999]">
+    <div
+      className="fixed inset-0 z-[9999]"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
       <div
         className="absolute inset-0 bg-black/40"
-        onClick={() => {
-          if (typeof document !== "undefined") document.body.style.overflow = "";
-          onClose();
-        }}
+        onClick={onClose}
         aria-hidden="true"
       />
       {/* pin near top so you don't "lose" it */}
-      <div className="absolute inset-0 flex items-start justify-center p-4 pt-10">
-        <div className="relative z-[10000] w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
+      <div className="pointer-events-none absolute inset-0 flex items-start justify-center p-4 pt-10">
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-modal="true"
+          tabIndex={-1}
+          className="pointer-events-auto relative z-[10000] flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+        >
           <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
             <div>
               <div className="text-base font-semibold text-slate-900">{title}</div>
@@ -283,16 +303,13 @@ function Modal({
             </div>
             <button
               className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 hover:bg-slate-50"
-              onClick={() => {
-                if (typeof document !== "undefined") document.body.style.overflow = "";
-                onClose();
-              }}
+              onClick={onClose}
             >
               Close
             </button>
           </div>
 
-          <div className="p-4 max-h-[70vh] overflow-auto">{children}</div>
+          <div className="max-h-[80vh] overflow-y-auto overscroll-contain p-4 pr-1">{children}</div>
         </div>
       </div>
     </div>
