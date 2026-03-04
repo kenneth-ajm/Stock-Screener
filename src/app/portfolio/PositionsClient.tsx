@@ -47,6 +47,8 @@ type GroupedOpenRow = {
   openedAt: string | null; // earliest created_at across lots
   last: number | null;
   unrealUsd: number | null;
+  feesUsd: number;
+  netUsd: number | null;
   unrealPct: number | null;
   lotIds: string[];
   tpPlanSummary: string | null;
@@ -657,6 +659,7 @@ export default function PositionsClient({
       const symbol = (lots[0]?.symbol ?? "").toUpperCase();
       let totalQty = 0;
       let costSum = 0;
+      let feesSum = 0;
 
       let earliest: string | null = null;
 
@@ -667,6 +670,9 @@ export default function PositionsClient({
           totalQty += q;
           costSum += entry * q;
         }
+        feesSum +=
+          (typeof l.entry_fee === "number" && Number.isFinite(l.entry_fee) ? l.entry_fee : 0) +
+          (typeof l.exit_fee === "number" && Number.isFinite(l.exit_fee) ? l.exit_fee : 0);
 
         const dt = l.created_at ?? null;
         if (dt && (!earliest || new Date(dt).getTime() < new Date(earliest).getTime())) {
@@ -678,10 +684,12 @@ export default function PositionsClient({
       const last = latestPriceBySymbol?.[symbol] ?? null;
 
       let unrealUsd: number | null = null;
+      let netUsd: number | null = null;
       let unrealPct: number | null = null;
 
       if (typeof avgEntry === "number" && avgEntry > 0 && typeof last === "number" && Number.isFinite(last)) {
         unrealUsd = (last - avgEntry) * totalQty;
+        netUsd = unrealUsd - feesSum;
         unrealPct = (last - avgEntry) / avgEntry;
       }
 
@@ -699,6 +707,8 @@ export default function PositionsClient({
         openedAt: earliest,
         last: typeof last === "number" ? last : null,
         unrealUsd,
+        feesUsd: feesSum,
+        netUsd,
         unrealPct,
         lotIds: lots.map((x) => x.id),
         tpPlanSummary,
@@ -830,6 +840,8 @@ export default function PositionsClient({
                     <th className="p-3">Last</th>
                     <th className="p-3">Qty</th>
                     <th className="p-3">Unrealized $</th>
+                    <th className="p-3">Fees</th>
+                    <th className="p-3">Net $</th>
                     <th className="p-3">Unrealized %</th>
                     <th className="p-3">Time-stop exit</th>
                     <th className="p-3 text-right">Action</th>
@@ -838,18 +850,27 @@ export default function PositionsClient({
                 <tbody>
                   {groupedOpen.length === 0 ? (
                     <tr>
-                      <td className="p-3 text-slate-500" colSpan={10}>
+                      <td className="p-3 text-slate-500" colSpan={12}>
                         No open positions.
                       </td>
                     </tr>
                   ) : (
                     groupedOpen.map((g) => {
-                      const pnl = g.unrealUsd ?? null;
-                      const pnlClass =
-                        typeof pnl === "number"
-                          ? pnl > 0
+                      const gross = g.unrealUsd ?? null;
+                      const grossClass =
+                        typeof gross === "number"
+                          ? gross > 0
                             ? "text-emerald-600"
-                            : pnl < 0
+                            : gross < 0
+                              ? "text-rose-600"
+                              : "text-slate-600"
+                          : "text-slate-500";
+                      const net = g.netUsd ?? null;
+                      const netClass =
+                        typeof net === "number"
+                          ? net > 0
+                            ? "text-emerald-600"
+                            : net < 0
                               ? "text-rose-600"
                               : "text-slate-600"
                           : "text-slate-500";
@@ -874,8 +895,10 @@ export default function PositionsClient({
                           <td className="p-3 text-slate-800">{formatMoney(g.avgEntry)}</td>
                           <td className="p-3 text-slate-800">{formatMoney(g.last)}</td>
                           <td className="p-3 text-slate-800">{formatInt(g.qty)}</td>
-                          <td className={clsx("p-3 font-semibold", pnlClass)}>{formatMoneySigned(g.unrealUsd)}</td>
-                          <td className={clsx("p-3 font-semibold", pnlClass)}>
+                          <td className={clsx("p-3 font-semibold", grossClass)}>{formatMoneySigned(g.unrealUsd)}</td>
+                          <td className="p-3 text-slate-700">{formatMoney(g.feesUsd)}</td>
+                          <td className={clsx("p-3 font-semibold", netClass)}>{formatMoneySigned(g.netUsd)}</td>
+                          <td className={clsx("p-3 font-semibold", grossClass)}>
                             {typeof g.unrealPct === "number" ? formatPct(g.unrealPct) : "—"}
                           </td>
                           <td className="p-3 text-slate-800">
@@ -932,6 +955,8 @@ export default function PositionsClient({
                     <th className="p-3">Last</th>
                     <th className="p-3">Qty</th>
                     <th className="p-3">Unrealized $</th>
+                    <th className="p-3">Fees</th>
+                    <th className="p-3">Net $</th>
                     <th className="p-3">Unrealized %</th>
                     <th className="p-3">Time-stop exit</th>
                     <th className="p-3 text-right">Action</th>
@@ -940,7 +965,7 @@ export default function PositionsClient({
                 <tbody>
                   {openFiltered.length === 0 ? (
                     <tr>
-                      <td className="p-3 text-slate-500" colSpan={10}>
+                      <td className="p-3 text-slate-500" colSpan={12}>
                         No open positions.
                       </td>
                     </tr>
@@ -954,7 +979,11 @@ export default function PositionsClient({
                       const timeStop = buildTimeStopView(heldFrom, maxHold);
 
                       let unrealUsd: number | null = null;
+                      let netUsd: number | null = null;
                       let unrealPct: number | null = null;
+                      const feesUsd =
+                        (typeof p.entry_fee === "number" && Number.isFinite(p.entry_fee) ? p.entry_fee : 0) +
+                        (typeof p.exit_fee === "number" && Number.isFinite(p.exit_fee) ? p.exit_fee : 0);
 
                       if (
                         typeof p.entry_price === "number" &&
@@ -964,14 +993,23 @@ export default function PositionsClient({
                         qty > 0
                       ) {
                         unrealUsd = (last - p.entry_price) * qty;
+                        netUsd = unrealUsd - feesUsd;
                         unrealPct = (last - p.entry_price) / p.entry_price;
                       }
 
-                      const pnlClass =
+                      const grossClass =
                         typeof unrealUsd === "number"
                           ? unrealUsd > 0
                             ? "text-emerald-600"
                             : unrealUsd < 0
+                              ? "text-rose-600"
+                              : "text-slate-600"
+                          : "text-slate-500";
+                      const netClass =
+                        typeof netUsd === "number"
+                          ? netUsd > 0
+                            ? "text-emerald-600"
+                            : netUsd < 0
                               ? "text-rose-600"
                               : "text-slate-600"
                           : "text-slate-500";
@@ -994,8 +1032,10 @@ export default function PositionsClient({
                           <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
                           <td className="p-3 text-slate-800">{formatMoney(last)}</td>
                           <td className="p-3 text-slate-800">{qty || "—"}</td>
-                          <td className={clsx("p-3 font-semibold", pnlClass)}>{formatMoneySigned(unrealUsd)}</td>
-                          <td className={clsx("p-3 font-semibold", pnlClass)}>
+                          <td className={clsx("p-3 font-semibold", grossClass)}>{formatMoneySigned(unrealUsd)}</td>
+                          <td className="p-3 text-slate-700">{formatMoney(feesUsd)}</td>
+                          <td className={clsx("p-3 font-semibold", netClass)}>{formatMoneySigned(netUsd)}</td>
+                          <td className={clsx("p-3 font-semibold", grossClass)}>
                             {typeof unrealPct === "number" ? formatPct(unrealPct) : "—"}
                           </td>
                           <td className="p-3 text-slate-800">
