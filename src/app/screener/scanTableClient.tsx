@@ -14,9 +14,16 @@ type Row = {
   reason_json?: any;
 };
 
+type QuoteValue = {
+  price: number;
+  asOf: string;
+  source: "snapshot" | "eod_close";
+} | null;
+
 type DisplayRow = Row & {
   effectiveSignal: "BUY" | "WATCH" | "AVOID";
   livePrice: number | null;
+  liveSource: string | null;
   divergencePct: number | null;
   priceMismatch: boolean;
   atr14: number | null;
@@ -253,7 +260,7 @@ export default function ScanTableClient({
 }) {
   const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY+WATCH");
 
-  const [quotes, setQuotes] = useState<Record<string, number | null>>({});
+  const [quotes, setQuotes] = useState<Record<string, QuoteValue>>({});
   const [quoteBusy, setQuoteBusy] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [auto, setAuto] = useState(false);
@@ -284,7 +291,9 @@ export default function ScanTableClient({
     const r = rows ?? [];
     return r.map((row) => {
       const sym = (row.symbol ?? "").trim().toUpperCase();
-      const live = typeof quotes[sym] === "number" ? (quotes[sym] as number) : null;
+      const quote = quotes[sym];
+      const live = quote && typeof quote.price === "number" ? quote.price : null;
+      const liveSource = quote?.source ?? null;
       const entry = Number(row.entry);
       const divergencePct = computeDivergencePct(Number.isFinite(entry) ? entry : null, live);
       const atr14 = extractAtr14FromReasonJson(row);
@@ -316,6 +325,7 @@ export default function ScanTableClient({
         ...row,
         effectiveSignal,
         livePrice: live,
+        liveSource,
         divergencePct,
         priceMismatch,
         atr14,
@@ -1011,7 +1021,14 @@ export default function ScanTableClient({
                       </td>
                       <td className="p-3 text-slate-800 font-semibold">{r.confidence}</td>
                       <td className="p-3 text-slate-800">{fmt2(Number(r.entry))}</td>
-                      <td className="p-3 text-slate-800">{typeof live === "number" ? fmt2(live) : "—"}</td>
+                      <td className="p-3 text-slate-800">
+                        {typeof live === "number" ? fmt2(live) : "—"}
+                        {typeof live === "number" && r.liveSource === "eod_close" ? (
+                          <span className="ml-2 rounded-full border border-slate-300 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-700">
+                            EOD
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="p-3 text-slate-800">{fmt2(Number(r.stop))}</td>
                       <td className="p-3 text-slate-800">
                         {fmt2(r.execution.tp1)} / {fmt2(r.execution.tp2)}

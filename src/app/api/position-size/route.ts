@@ -11,6 +11,12 @@ type OpenPosition = {
   position_size: number | null;
 };
 
+type QuoteValue = {
+  price: number;
+  asOf: string;
+  source: "snapshot" | "eod_close";
+} | null;
+
 function resolveShares(p: OpenPosition) {
   const raw = p.shares ?? p.quantity ?? p.position_size ?? 0;
   const n = Number(raw);
@@ -110,7 +116,7 @@ export async function POST(req: Request) {
     )
   );
 
-  let quotes: Record<string, number | null> = {};
+  let quotes: Record<string, QuoteValue> = {};
   if (symbols.length > 0) {
     try {
       const qReq = new Request("http://localhost/api/quotes", {
@@ -121,7 +127,7 @@ export async function POST(req: Request) {
       const qRes = await quotesPost(qReq);
       const qJson = await qRes.json().catch(() => null);
       if (qRes.ok && qJson?.ok && qJson?.quotes && typeof qJson.quotes === "object") {
-        quotes = qJson.quotes as Record<string, number | null>;
+        quotes = qJson.quotes as Record<string, QuoteValue>;
       }
     } catch {
       // fallback below uses entry prices when live quotes are unavailable
@@ -136,9 +142,10 @@ export async function POST(req: Request) {
     const entryPrice = Number(p.entry_price);
     const entryPriceSafe = Number.isFinite(entryPrice) && entryPrice > 0 ? entryPrice : 0;
     const liveRaw = quotes[symbol];
+    const liveFromQuote = typeof liveRaw?.price === "number" ? liveRaw.price : null;
     const livePrice =
-      typeof liveRaw === "number" && Number.isFinite(liveRaw) && liveRaw > 0
-        ? liveRaw
+      typeof liveFromQuote === "number" && Number.isFinite(liveFromQuote) && liveFromQuote > 0
+        ? liveFromQuote
         : entryPriceSafe > 0
           ? entryPriceSafe
           : null;
