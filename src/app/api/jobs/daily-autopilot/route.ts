@@ -162,23 +162,32 @@ async function updateSpyRegimeForDate(opts: {
   date: string;
 }) {
   const supa = opts.supabase as any;
+  const { data: latestRows, error: latestErr } = await supa
+    .from("price_bars")
+    .select("symbol,date,open,high,low,close,volume,source")
+    .eq("symbol", "SPY")
+    .order("date", { ascending: false })
+    .limit(1);
+  if (latestErr) throw latestErr;
+  const latestList = (latestRows ?? []) as BarRow[];
+  const latest = latestList[0];
+  if (!latest) {
+    throw new Error("No SPY bars available in price_bars");
+  }
+  const regimeDateUsed = String(latest.date);
+  const spyRegimeStale = regimeDateUsed < opts.date;
+
   const { data: bars, error: barsErr } = await supa
     .from("price_bars")
     .select("symbol,date,open,high,low,close,volume,source")
     .eq("symbol", "SPY")
-    .lte("date", opts.date)
+    .lte("date", regimeDateUsed)
     .order("date", { ascending: false })
     .limit(260);
   if (barsErr) throw barsErr;
   const typedBars = (bars ?? []) as BarRow[];
   if (typedBars.length < 200) {
     throw new Error("Not enough SPY bars to compute regime");
-  }
-
-  const latest = typedBars[0];
-  if (!latest) throw new Error("SPY bar missing");
-  if (String(latest.date) !== opts.date) {
-    throw new Error(`SPY bar missing for ${opts.date}`);
   }
 
   const asc = [...typedBars].reverse();
@@ -193,7 +202,7 @@ async function updateSpyRegimeForDate(opts: {
     .upsert(
       {
         symbol: "SPY",
-        date: opts.date,
+        date: regimeDateUsed,
         close,
         sma200,
         state,
@@ -201,7 +210,7 @@ async function updateSpyRegimeForDate(opts: {
       { onConflict: "symbol,date" }
     );
   if (upErr) throw upErr;
-  return state;
+  return { state, regime_date_used: regimeDateUsed, spy_regime_stale: spyRegimeStale };
 }
 
 async function runAutopilot() {
@@ -232,9 +241,12 @@ async function runAutopilot() {
   const symbols = (members ?? [])
     .map((m: { symbol?: string | null }) => String(m.symbol ?? "").toUpperCase())
     .filter(Boolean);
+  const symbolSet = new Set<string>(symbols);
+  symbolSet.add("SPY");
+  const symbolsWithSpy = Array.from(symbolSet) as string[];
 
-  const barsUpserted = await ingestGroupedForDate({ supabase: supa, date: dateUsed, symbols });
-  const regimeState = await updateSpyRegimeForDate({ supabase: supa, date: dateUsed });
+  const barsUpserted = await ingestGroupedForDate({ supabase: supa, date: dateUsed, symbols: symbolsWithSpy });
+  const regime = await updateSpyRegimeForDate({ supabase: supa, date: dateUsed });
 
   const scanReq = new Request("http://localhost/api/scan", {
     method: "POST",
@@ -269,7 +281,9 @@ async function runAutopilot() {
     ok: true,
     date_used: dateUsed,
     bars_upserted: barsUpserted,
-    regime_state: regimeState,
+    regime_state: regime.state,
+    regime_date_used: regime.regime_date_used,
+    spy_regime_stale: regime.spy_regime_stale,
     scan_written: Number(scanJson?.upserted ?? 0),
     scan_upserted: scanJson?.upserted ?? 0,
     buy_count: buyCount,
@@ -304,6 +318,8 @@ export async function GET() {
       ok: true,
       date_used: result.date_used,
       bars_upserted: result.bars_upserted,
+      regime_date_used: result.regime_date_used,
+      spy_regime_stale: result.spy_regime_stale,
       scan_written: result.scan_written,
       buy_count: result.buy_count,
       watch_count: result.watch_count,
