@@ -70,28 +70,96 @@ export async function POST(req: Request) {
     const date_used = lastCompletedUsTradingDay();
     const regime_state = await refreshSpyRegimeForDate(date_used);
 
-    const scanReq = new Request("http://localhost/api/scan", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        universe_slug,
-        strategy_version,
-        scan_date: date_used,
-        offset: 0,
-        limit: 1200,
-      }),
-    });
+    const supa = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    ) as any;
 
-    const scanRes = await scanPost(scanReq);
-    const scanJson = await scanRes.json().catch(() => null);
-    if (!scanRes.ok || !scanJson?.ok) {
+    const { data: universeRow, error: universeErr } = await supa
+      .from("universes")
+      .select("id")
+      .eq("slug", universe_slug)
+      .maybeSingle();
+    if (universeErr || !universeRow?.id) {
+      return NextResponse.json(
+        { ok: false, error: `Universe not found: ${universe_slug}`, detail: universeErr?.message ?? null },
+        { status: 400 }
+      );
+    }
+
+    const { count: memberCount, error: countErr } = await supa
+      .from("universe_members")
+      .select("symbol", { count: "exact", head: true })
+      .eq("universe_id", universeRow.id)
+      .eq("active", true);
+    if (countErr) {
+      return NextResponse.json({ ok: false, error: countErr.message, detail: null }, { status: 500 });
+    }
+
+    const batchLimit = 100;
+    const totalMembers = Number(memberCount ?? 0);
+    const estimatedBatches = Math.max(1, Math.ceil(totalMembers / batchLimit));
+    const maxBatches = Math.min(estimatedBatches, 16);
+
+    let totalProcessed = 0;
+    let totalScored = 0;
+    let totalUpserted = 0;
+    let batches_ok = 0;
+    let batches_failed = 0;
+    let first_error: unknown = null;
+
+    for (let batch = 0; batch < maxBatches; batch++) {
+      const offset = batch * batchLimit;
+      const scanReq = new Request("http://localhost/api/scan", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          universe_slug,
+          strategy_version,
+          scan_date: date_used,
+          offset,
+          limit: batchLimit,
+        }),
+      });
+
+      const scanRes = await scanPost(scanReq);
+      const scanJson = (await scanRes.json().catch(() => null)) as any;
+      if (!scanRes.ok || !scanJson?.ok) {
+        batches_failed += 1;
+        if (!first_error) {
+          first_error = {
+            batch,
+            offset,
+            status: scanRes.status,
+            error: scanJson?.error ?? `Scan failed with status ${scanRes.status}`,
+            detail: scanJson?.detail ?? null,
+          };
+        }
+        continue;
+      }
+
+      batches_ok += 1;
+      totalProcessed += Number(scanJson?.processed ?? 0);
+      totalScored += Number(scanJson?.scored ?? 0);
+      totalUpserted += Number(scanJson?.upserted ?? 0);
+
+      if (Number(scanJson?.processed ?? 0) < batchLimit) break;
+    }
+
+    if (batches_ok === 0 && batches_failed > 0) {
       return NextResponse.json(
         {
           ok: false,
-          error: scanJson?.error ?? `Scan failed with status ${scanRes.status}`,
-          detail: scanJson?.detail ?? scanJson ?? null,
+          error: "All scan batches failed",
+          detail: first_error,
+          universe_slug,
+          strategy_version,
+          date_used,
+          regime_state,
+          batches_ok,
+          batches_failed,
         },
-        { status: scanRes.status || 500 }
+        { status: 500 }
       );
     }
 
@@ -101,9 +169,14 @@ export async function POST(req: Request) {
       strategy_version,
       date_used,
       regime_state,
-      processed: scanJson?.processed ?? 0,
-      scored: scanJson?.scored ?? 0,
-      upserted: scanJson?.upserted ?? 0,
+      batch_limit: batchLimit,
+      estimated_batches: estimatedBatches,
+      batches_ok,
+      batches_failed,
+      first_error,
+      processed: totalProcessed,
+      scored: totalScored,
+      upserted: totalUpserted,
       duration_ms: Date.now() - startedAt,
     });
   } catch (e: unknown) {

@@ -62,7 +62,12 @@ export default function UtilitiesClient({
     setLog((prev) => (prev ? prev + block : block));
   }
 
-  async function callJson(title: string, url: string, init?: RequestInit, timeoutMs = 60000) {
+  async function callJson(
+    title: string,
+    url: string,
+    init?: RequestInit,
+    timeoutMs: number | null = 60000
+  ) {
     append(`${title} (start)`, {
       url,
       method: init?.method ?? "GET",
@@ -75,12 +80,13 @@ export default function UtilitiesClient({
       })() : null,
     });
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const controller = timeoutMs && timeoutMs > 0 ? new AbortController() : null;
+    const timeoutId =
+      controller && timeoutMs && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
     try {
       setBusy(title);
-      const res = await fetch(url, { ...init, signal: controller.signal });
+      const res = await fetch(url, controller ? { ...init, signal: controller.signal } : init);
       const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
       if (!res.ok) {
         append(`${title} (${res.status})`, {
@@ -99,7 +105,7 @@ export default function UtilitiesClient({
       append(`${title} (error)`, { ok: false, error: message, detail: stack });
       return { res: null, json: null };
     } finally {
-      clearTimeout(timeoutId);
+      if (timeoutId) clearTimeout(timeoutId);
       setBusy(null);
     }
   }
@@ -191,7 +197,8 @@ export default function UtilitiesClient({
           universe_slug: universeSlug,
           strategy_version: strategyVersion,
         }),
-      }
+      },
+      null
     );
   }
 
