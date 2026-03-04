@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { POST as scanPost } from "@/app/api/scan/route";
 
 const UNIVERSE_SLUG = "core_800";
+const STATUS_KEY = "daily_autopilot_core_800";
 
 type BarRow = {
   symbol: string;
@@ -269,6 +270,7 @@ async function runAutopilot() {
     date_used: dateUsed,
     bars_upserted: barsUpserted,
     regime_state: regimeState,
+    scan_written: Number(scanJson?.upserted ?? 0),
     scan_upserted: scanJson?.upserted ?? 0,
     buy_count: buyCount,
     watch_count: watchCount,
@@ -276,13 +278,53 @@ async function runAutopilot() {
   };
 }
 
+async function writeStatus(payload: Record<string, unknown>) {
+  try {
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    ) as any;
+    await supabase.from("system_status").upsert(
+      {
+        key: STATUS_KEY,
+        value: payload,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "key" }
+    );
+  } catch (e) {
+    console.error("daily-autopilot status write failed", e);
+  }
+}
+
 export async function GET() {
   try {
-    return NextResponse.json(await runAutopilot());
+    const result = await runAutopilot();
+    await writeStatus({
+      ok: true,
+      date_used: result.date_used,
+      bars_upserted: result.bars_upserted,
+      scan_written: result.scan_written,
+      buy_count: result.buy_count,
+      watch_count: result.watch_count,
+      duration_ms: result.duration_ms,
+      error: null,
+    });
+    return NextResponse.json(result);
   } catch (e: unknown) {
     console.error("daily-autopilot error", e);
     const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
     const detail = e instanceof Error ? e.stack ?? null : null;
+    await writeStatus({
+      ok: false,
+      date_used: null,
+      bars_upserted: 0,
+      scan_written: 0,
+      buy_count: 0,
+      watch_count: 0,
+      duration_ms: 0,
+      error,
+    });
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }

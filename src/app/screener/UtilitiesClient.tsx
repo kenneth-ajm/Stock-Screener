@@ -23,9 +23,18 @@ function sleep(ms: number) {
 export default function UtilitiesClient({
   strategyVersion = DEFAULT_STRATEGY_VERSION,
   strategyLabel = "Momentum Swing",
+  autopilotStatus = null,
 }: {
   strategyVersion?: string;
   strategyLabel?: string;
+  autopilotStatus?: {
+    updated_at?: string | null;
+    value?: {
+      ok?: boolean;
+      date_used?: string | null;
+      error?: string | null;
+    } | null;
+  } | null;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [log, setLog] = useState<string>("");
@@ -235,6 +244,36 @@ export default function UtilitiesClient({
 
   return (
     <div className="space-y-4">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="text-sm font-semibold text-slate-900">Autopilot status</div>
+          <span
+            className={`rounded-full border px-2 py-1 text-xs font-semibold ${
+              autopilotStatus?.value?.ok === true
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                : autopilotStatus?.value?.ok === false
+                  ? "border-rose-200 bg-rose-50 text-rose-700"
+                  : "border-slate-200 bg-slate-50 text-slate-600"
+            }`}
+          >
+            {autopilotStatus?.value?.ok === true
+              ? "OK"
+              : autopilotStatus?.value?.ok === false
+                ? "FAIL"
+                : "UNKNOWN"}
+          </span>
+        </div>
+        <div className="text-xs text-slate-600">
+          Last autopilot run:{" "}
+          <span className="font-mono">{autopilotStatus?.updated_at ?? "—"}</span>
+          {" • "}For date:{" "}
+          <span className="font-mono">{autopilotStatus?.value?.date_used ?? "—"}</span>
+        </div>
+        {autopilotStatus?.value?.ok === false && autopilotStatus?.value?.error ? (
+          <div className="text-xs text-rose-600">Error: {autopilotStatus.value.error}</div>
+        ) : null}
+      </div>
+
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
         <div className="text-sm font-semibold text-slate-900">Universe: Core 800</div>
         <div className="text-sm text-slate-600">

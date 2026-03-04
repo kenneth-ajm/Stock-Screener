@@ -17,6 +17,17 @@ function strategyLabel(version: string) {
   return version === TREND_STRATEGY_VERSION ? "Trend Hold" : "Momentum Swing";
 }
 
+type AutopilotStatus = {
+  ok?: boolean;
+  date_used?: string | null;
+  bars_upserted?: number;
+  scan_written?: number;
+  buy_count?: number;
+  watch_count?: number;
+  duration_ms?: number;
+  error?: string | null;
+};
+
 export default async function ScreenerPage({
   searchParams,
 }: {
@@ -50,6 +61,23 @@ export default async function ScreenerPage({
     .limit(1);
 
   const regime = regimeRows?.[0] ?? null;
+
+  let autopilotStatus: { updated_at?: string | null; value?: AutopilotStatus | null } | null = null;
+  try {
+    const { data: statusRow } = await supabase
+      .from("system_status")
+      .select("updated_at,value")
+      .eq("key", "daily_autopilot_core_800")
+      .maybeSingle();
+    autopilotStatus = statusRow
+      ? {
+          updated_at: statusRow.updated_at ?? null,
+          value: (statusRow.value ?? null) as AutopilotStatus | null,
+        }
+      : null;
+  } catch {
+    autopilotStatus = null;
+  }
 
   // Latest scan date for the core momentum universe
   const { data: latestScan } = await supabase
@@ -219,7 +247,11 @@ export default async function ScreenerPage({
       <Card>
         <CardHeader title="Utilities" subtitle="Build universe, ingest history, and scan in safe batches" />
         <CardContent>
-          <UtilitiesClient strategyVersion={activeStrategy} strategyLabel={strategyLabel(activeStrategy)} />
+          <UtilitiesClient
+            strategyVersion={activeStrategy}
+            strategyLabel={strategyLabel(activeStrategy)}
+            autopilotStatus={autopilotStatus}
+          />
         </CardContent>
       </Card>
     </div>
