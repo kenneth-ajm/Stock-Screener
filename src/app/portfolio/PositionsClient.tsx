@@ -103,6 +103,42 @@ function dayDiffFromDate(dateStr: string | null | undefined) {
   return Math.max(0, Math.floor((utcStart - utcEntry) / 86_400_000));
 }
 
+function buildTimeStopView(heldFrom: string | null | undefined, maxHoldDays: number | null | undefined) {
+  if (!heldFrom || typeof maxHoldDays !== "number" || !Number.isFinite(maxHoldDays) || maxHoldDays <= 0) {
+    return {
+      date: null as string | null,
+      daysHeld: null as number | null,
+      daysLeft: null as number | null,
+      isDue: false,
+      warnSoon: false,
+      label: "—",
+    };
+  }
+
+  const start = new Date(heldFrom);
+  if (Number.isNaN(start.getTime())) {
+    return {
+      date: null as string | null,
+      daysHeld: null as number | null,
+      daysLeft: null as number | null,
+      isDue: false,
+      warnSoon: false,
+      label: "—",
+    };
+  }
+
+  const daysHeld = dayDiffFromDate(heldFrom);
+  const daysLeft = daysHeld !== null ? maxHoldDays - daysHeld : null;
+  const d = new Date(start);
+  d.setDate(d.getDate() + maxHoldDays);
+  const date = d.toISOString().slice(0, 10);
+  const isDue = daysLeft !== null ? daysLeft <= 0 : false;
+  const warnSoon = daysLeft !== null ? daysLeft > 0 && daysLeft <= 2 : false;
+  const label = isDue ? `TIME STOP — exit today` : `Exit @ market on ${date}`;
+
+  return { date, daysHeld, daysLeft, isDue, warnSoon, label };
+}
+
 function computeClosedPnL(p: PositionRow) {
   const entry = p.entry_price ?? null;
   const exit = p.exit_price ?? null;
@@ -514,7 +550,7 @@ export default function PositionsClient({
                     <th className="p-3">Qty</th>
                     <th className="p-3">Unrealized $</th>
                     <th className="p-3">Unrealized %</th>
-                    <th className="p-3">Time stop</th>
+                    <th className="p-3">Time-stop exit</th>
                     <th className="p-3 text-right">Action</th>
                   </tr>
                 </thead>
@@ -537,21 +573,16 @@ export default function PositionsClient({
                               : "text-slate-600"
                           : "text-slate-500";
 
-                      const daysHeld = dayDiffFromDate(g.openedAt);
-                      const maxHold = g.maxHoldDays;
-                      const daysLeft = daysHeld !== null && maxHold !== null ? maxHold - daysHeld : null;
-                      const timeStopWarn = daysLeft !== null && daysLeft <= 1;
-                      const timeStopDate =
-                        g.openedAt && maxHold !== null
-                          ? (() => {
-                              const d = new Date(g.openedAt);
-                              d.setDate(d.getDate() + maxHold);
-                              return d.toISOString().slice(0, 10);
-                            })()
-                          : "—";
+                      const timeStop = buildTimeStopView(g.openedAt, g.maxHoldDays);
 
                       return (
-                        <tr key={`${g.strategy_version}-${g.symbol}`} className="border-b border-slate-100">
+                        <tr
+                          key={`${g.strategy_version}-${g.symbol}`}
+                          className={clsx(
+                            "border-b border-slate-100",
+                            timeStop.isDue && "bg-amber-50/50"
+                          )}
+                        >
                           <td className="p-3 font-semibold text-slate-900">{g.symbol}</td>
                           <td className="p-3">
                             <span className={clsx("rounded-full border px-2 py-1 text-xs font-semibold", strategyChipClass(g.strategy_version))}>
@@ -566,14 +597,21 @@ export default function PositionsClient({
                             {typeof g.unrealPct === "number" ? formatPct(g.unrealPct) : "—"}
                           </td>
                           <td className="p-3 text-slate-800">
-                            <div>{timeStopDate}</div>
-                            <div className="text-xs text-slate-500">
-                              {daysHeld !== null ? `${daysHeld}d held` : "—"}{" "}
-                              {daysLeft !== null ? `• ${Math.max(daysLeft, 0)}d left` : ""}
+                            <div
+                              className={clsx(
+                                "font-medium",
+                                timeStop.isDue ? "text-rose-700" : "text-slate-900"
+                              )}
+                            >
+                              {timeStop.label}
                             </div>
-                            {timeStopWarn ? (
+                            <div className="text-xs text-slate-500">
+                              {timeStop.daysHeld !== null ? `${timeStop.daysHeld}d held` : "—"}{" "}
+                              {timeStop.daysLeft !== null ? `• ${Math.max(timeStop.daysLeft, 0)}d left` : ""}
+                            </div>
+                            {timeStop.warnSoon ? (
                               <span className="mt-1 inline-block rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                                Time stop tomorrow
+                                TIME STOP SOON
                               </span>
                             ) : null}
                           </td>
@@ -597,7 +635,7 @@ export default function PositionsClient({
                     <th className="p-3">Qty</th>
                     <th className="p-3">Unrealized $</th>
                     <th className="p-3">Unrealized %</th>
-                    <th className="p-3">Time stop</th>
+                    <th className="p-3">Time-stop exit</th>
                     <th className="p-3 text-right">Action</th>
                   </tr>
                 </thead>
@@ -615,17 +653,7 @@ export default function PositionsClient({
                       const strategyVer = p.strategy_version ?? "v2_core_momentum";
                       const maxHold = p.max_hold_days ?? (strategyVer === "v1_trend_hold" ? 45 : 7);
                       const heldFrom = p.entry_date ?? p.created_at ?? null;
-                      const daysHeld = dayDiffFromDate(heldFrom);
-                      const daysLeft = daysHeld !== null ? maxHold - daysHeld : null;
-                      const timeStopWarn = daysLeft !== null && daysLeft <= 1;
-                      const timeStopDate =
-                        heldFrom != null
-                          ? (() => {
-                              const d = new Date(heldFrom);
-                              d.setDate(d.getDate() + maxHold);
-                              return d.toISOString().slice(0, 10);
-                            })()
-                          : "—";
+                      const timeStop = buildTimeStopView(heldFrom, maxHold);
 
                       let unrealUsd: number | null = null;
                       let unrealPct: number | null = null;
@@ -651,7 +679,13 @@ export default function PositionsClient({
                           : "text-slate-500";
 
                       return (
-                        <tr key={p.id} className="border-b border-slate-100">
+                        <tr
+                          key={p.id}
+                          className={clsx(
+                            "border-b border-slate-100",
+                            timeStop.isDue && "bg-amber-50/50"
+                          )}
+                        >
                           <td className="p-3 font-semibold text-slate-900">{p.symbol}</td>
                           <td className="p-3">
                             <span className={clsx("rounded-full border px-2 py-1 text-xs font-semibold", strategyChipClass(strategyVer))}>
@@ -666,14 +700,21 @@ export default function PositionsClient({
                             {typeof unrealPct === "number" ? formatPct(unrealPct) : "—"}
                           </td>
                           <td className="p-3 text-slate-800">
-                            <div>{timeStopDate}</div>
-                            <div className="text-xs text-slate-500">
-                              {daysHeld !== null ? `${daysHeld}d held` : "—"}{" "}
-                              {daysLeft !== null ? `• ${Math.max(daysLeft, 0)}d left` : ""}
+                            <div
+                              className={clsx(
+                                "font-medium",
+                                timeStop.isDue ? "text-rose-700" : "text-slate-900"
+                              )}
+                            >
+                              {timeStop.label}
                             </div>
-                            {timeStopWarn ? (
+                            <div className="text-xs text-slate-500">
+                              {timeStop.daysHeld !== null ? `${timeStop.daysHeld}d held` : "—"}{" "}
+                              {timeStop.daysLeft !== null ? `• ${Math.max(timeStop.daysLeft, 0)}d left` : ""}
+                            </div>
+                            {timeStop.warnSoon ? (
                               <span className="mt-1 inline-block rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                                Time stop tomorrow
+                                TIME STOP SOON
                               </span>
                             ) : null}
                           </td>
