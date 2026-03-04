@@ -41,6 +41,7 @@ export default function UtilitiesClient({
   const [busy, setBusy] = useState<string | null>(null);
   const [log, setLog] = useState<string>("");
   const [backfillDone, setBackfillDone] = useState(false);
+  const [autopilotStatusLive, setAutopilotStatusLive] = useState(autopilotStatus);
 
   // ingest controls
   const [ingestBatchSize, setIngestBatchSize] = useState<number>(20);
@@ -195,15 +196,73 @@ export default function UtilitiesClient({
   }
 
   async function runAutopilotNow() {
-    await callJson(
-      "Run daily autopilot now",
-      "/api/jobs/daily-autopilot",
-      {
+    const title = "Run daily autopilot now";
+    const beforeUpdatedAt = autopilotStatusLive?.updated_at ?? autopilotStatus?.updated_at ?? null;
+    append("Autopilot started", { ok: true, baseline_updated_at: beforeUpdatedAt });
+
+    setBusy(title);
+    try {
+      // Intentionally no AbortController for autopilot kick-off.
+      fetch("/api/jobs/daily-autopilot", {
         method: "POST",
         headers: { "content-type": "application/json" },
-      },
-      120000
-    );
+      })
+        .then(async (res) => {
+          const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+          append(`${title} trigger (${res.status})`, json ?? { ok: res.ok });
+        })
+        .catch((e: unknown) => {
+          const message = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+          const stack = e instanceof Error ? e.stack ?? null : null;
+          append(`${title} trigger (error)`, { ok: false, error: message, detail: stack });
+        });
+
+      let completed = false;
+      for (let i = 0; i < 30; i++) {
+        await sleep(2000);
+        const res = await fetch("/api/system-status?key=daily_autopilot_core_800", {
+          cache: "no-store",
+        });
+        const json = (await res.json().catch(() => null)) as
+          | {
+              ok?: boolean;
+              status?: {
+                updated_at?: string | null;
+                value?: { ok?: boolean; date_used?: string | null; error?: string | null } | null;
+              } | null;
+            }
+          | null;
+        if (!res.ok || !json?.ok || !json?.status) continue;
+        setAutopilotStatusLive(json.status);
+
+        const updatedAt = json.status.updated_at ?? null;
+        const okFlag = json.status.value?.ok;
+        if ((updatedAt && updatedAt !== beforeUpdatedAt) || okFlag === true) {
+          append("Autopilot complete", {
+            ok: true,
+            updated_at: updatedAt,
+            date_used: json.status.value?.date_used ?? null,
+            status_ok: okFlag ?? null,
+            error: json.status.value?.error ?? null,
+          });
+          completed = true;
+          break;
+        }
+      }
+
+      if (!completed) {
+        append("Autopilot polling timeout", {
+          ok: false,
+          error: "No status update detected within 60 seconds.",
+        });
+      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+      const stack = e instanceof Error ? e.stack ?? null : null;
+      append(`${title} (error)`, { ok: false, error: message, detail: stack });
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function runScanAllBatches() {
@@ -279,28 +338,33 @@ export default function UtilitiesClient({
           <div className="text-sm font-semibold text-slate-900">Autopilot status</div>
           <span
             className={`rounded-full border px-2 py-1 text-xs font-semibold ${
-              autopilotStatus?.value?.ok === true
+              (autopilotStatusLive?.value?.ok ?? autopilotStatus?.value?.ok) === true
                 ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                : autopilotStatus?.value?.ok === false
+                : (autopilotStatusLive?.value?.ok ?? autopilotStatus?.value?.ok) === false
                   ? "border-rose-200 bg-rose-50 text-rose-700"
                   : "border-slate-200 bg-slate-50 text-slate-600"
             }`}
           >
-            {autopilotStatus?.value?.ok === true
+            {(autopilotStatusLive?.value?.ok ?? autopilotStatus?.value?.ok) === true
               ? "OK"
-              : autopilotStatus?.value?.ok === false
+              : (autopilotStatusLive?.value?.ok ?? autopilotStatus?.value?.ok) === false
                 ? "FAIL"
                 : "UNKNOWN"}
           </span>
         </div>
         <div className="text-xs text-slate-600">
           Last autopilot run:{" "}
-          <span className="font-mono">{autopilotStatus?.updated_at ?? "—"}</span>
+          <span className="font-mono">{autopilotStatusLive?.updated_at ?? autopilotStatus?.updated_at ?? "—"}</span>
           {" • "}For date:{" "}
-          <span className="font-mono">{autopilotStatus?.value?.date_used ?? "—"}</span>
+          <span className="font-mono">
+            {autopilotStatusLive?.value?.date_used ?? autopilotStatus?.value?.date_used ?? "—"}
+          </span>
         </div>
-        {autopilotStatus?.value?.ok === false && autopilotStatus?.value?.error ? (
-          <div className="text-xs text-rose-600">Error: {autopilotStatus.value.error}</div>
+        {(autopilotStatusLive?.value?.ok ?? autopilotStatus?.value?.ok) === false &&
+        (autopilotStatusLive?.value?.error ?? autopilotStatus?.value?.error) ? (
+          <div className="text-xs text-rose-600">
+            Error: {autopilotStatusLive?.value?.error ?? autopilotStatus?.value?.error}
+          </div>
         ) : null}
       </div>
 
@@ -403,7 +467,7 @@ export default function UtilitiesClient({
         </div>
       </details>
 
-      {autopilotStatus?.value?.ok == null ? (
+      {(autopilotStatusLive?.value?.ok ?? autopilotStatus?.value?.ok) == null ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-600">
             Autopilot status is unknown. Cron will update this after first run.
