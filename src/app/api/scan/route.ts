@@ -153,7 +153,7 @@ export async function POST(req: Request) {
     const limit = Number.isFinite(body.limit as number) ? Number(body.limit) : 200;
     const scanDate = (body.scan_date && String(body.scan_date)) || isoDate();
     const expectedTradingDate = lastCompletedUsTradingDay();
-    const staleScan = scanDate !== expectedTradingDate;
+    const staleScan = scanDate < expectedTradingDate;
 
     const regime = await getRegimeByDate({ supabase, scanDate });
 

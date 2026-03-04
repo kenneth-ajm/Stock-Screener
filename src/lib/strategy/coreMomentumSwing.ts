@@ -12,7 +12,17 @@ export type PriceBar = {
 export type RuleCheck = {
   key: string;
   label: string;
-  category?: "trend" | "momentum" | "volume" | "risk" | "regime" | "execution";
+  category?:
+    | "trend"
+    | "momentum"
+    | "volume"
+    | "risk"
+    | "regime"
+    | "execution"
+    | "volatility"
+    | "pullback"
+    | "liquidity"
+    | "flags";
   ok: boolean;
   detail: string;
 };
@@ -45,6 +55,12 @@ export type RuleEvaluation = {
       distFromSma20: number;
       distInAtr: number;
       marketCap: number | null;
+      [key: string]: number | null;
+    };
+    flags?: {
+      event_risk?: boolean;
+      earnings_within_days?: number | null;
+      [key: string]: unknown;
     };
     checks: RuleCheck[];
     score_breakdown: Array<{ key: string; points: number }>;
@@ -56,7 +72,7 @@ export type RuleEvaluation = {
       tp2: number;
       max_holding_days: number;
       management: string;
-      stop_style: "pct_8";
+      stop_style: string;
     };
     execution_flags?: {
       stale_scan?: boolean;

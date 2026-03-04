@@ -29,6 +29,7 @@ type DisplayRow = Row & {
   atr14: number | null;
   execution: ReturnType<typeof computeExecutionGuidance>;
   staleScan: boolean;
+  eventRisk: boolean;
 };
 
 function chipClass(active: boolean) {
@@ -129,11 +130,25 @@ function extractCalcMetrics(payload: any, fallback?: { entry?: number; stop?: nu
   };
 }
 
-type CheckCategory = "trend" | "momentum" | "volume" | "risk" | "regime" | "execution";
+type CheckCategory =
+  | "trend"
+  | "momentum"
+  | "volatility"
+  | "pullback"
+  | "liquidity"
+  | "flags"
+  | "volume"
+  | "risk"
+  | "regime"
+  | "execution";
 
 const CHECK_CATEGORY_ORDER: CheckCategory[] = [
   "trend",
   "momentum",
+  "volatility",
+  "pullback",
+  "liquidity",
+  "flags",
   "volume",
   "risk",
   "regime",
@@ -147,6 +162,10 @@ function categoryForCheck(c: any): CheckCategory {
   const label = String(c?.label ?? "").toLowerCase();
   const text = `${key} ${label}`;
   if (text.includes("regime")) return "regime";
+  if (text.includes("volatility")) return "volatility";
+  if (text.includes("pullback")) return "pullback";
+  if (text.includes("liquidity")) return "liquidity";
+  if (text.includes("flag") || text.includes("event")) return "flags";
   if (text.includes("volume")) return "volume";
   if (text.includes("rsi") || text.includes("momentum")) return "momentum";
   if (text.includes("stop") || text.includes("risk") || text.includes("extend") || text.includes("atr"))
@@ -158,6 +177,10 @@ function categoryForCheck(c: any): CheckCategory {
 function categoryLabel(c: CheckCategory) {
   if (c === "trend") return "Trend";
   if (c === "momentum") return "Momentum";
+  if (c === "volatility") return "Volatility";
+  if (c === "pullback") return "Pullback";
+  if (c === "liquidity") return "Liquidity";
+  if (c === "flags") return "Flags";
   if (c === "volume") return "Volume";
   if (c === "risk") return "Risk";
   if (c === "regime") return "Regime";
@@ -342,6 +365,7 @@ export default function ScanTableClient({
               confidence: Number(row.confidence),
               strategyVersion,
             });
+      const eventRisk = Boolean(row?.reason_json?.flags?.event_risk);
       return {
         ...row,
         effectiveSignal,
@@ -352,6 +376,7 @@ export default function ScanTableClient({
         atr14,
         execution,
         staleScan,
+        eventRisk,
       };
     });
   }, [rows, quotes, strategyVersion, staleScan]);
@@ -983,6 +1008,7 @@ export default function ScanTableClient({
             <KV k="Risk used" v={riskUsed !== null ? fmtMoney(riskUsed) : "—"} />
             <KV k="Position cost" v={positionCost !== null ? fmtMoney(positionCost) : "—"} />
             <KV k="Cash after open" v={cashRemainingAfter !== null ? fmtMoney(cashRemainingAfter) : "—"} />
+            <KV k="Expected hold" v={strategyVersion === "v1_trend_hold" ? "3-8w" : "3-7d"} />
             <KV k="Max hold (days)" v={String(maxHoldDays)} />
             <KV k="Time-stop date" v={fmtDate(timeStopDate)} />
           </div>
@@ -1281,6 +1307,7 @@ export default function ScanTableClient({
                   if (isExtended) notes.push("Extended");
                   if (r.execution.flags.stopVeryWide && !r.execution.flags.stopTooWide) notes.push("Stop very wide");
                   if (live === null) notes.push("No live");
+                  notes.push(strategyVersion === "v1_trend_hold" ? "Hold: 3-8w" : "Hold: 3-7d");
 
                   return (
                     <tr key={r.symbol} className="border-b border-slate-100">
@@ -1297,6 +1324,11 @@ export default function ScanTableClient({
                         {r.priceMismatch ? (
                           <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
                             PRICE MISMATCH
+                          </span>
+                        ) : null}
+                        {r.eventRisk ? (
+                          <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
+                            EVENT RISK
                           </span>
                         ) : null}
                         <span className={`ml-2 rounded-full border px-2 py-1 text-[10px] font-semibold ${actionPill(r.execution.action)}`}>

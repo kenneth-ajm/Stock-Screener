@@ -1,4 +1,5 @@
 import Link from "next/link";
+import BacktestClient from "./BacktestClient";
 
 export default function StrategyPage() {
   return (
@@ -104,6 +105,8 @@ export default function StrategyPage() {
           A future upgrade can add “capital deployed” guardrails to warn/block over-allocation when your account is heavily deployed.
         </div>
       </section>
+
+      <BacktestClient />
     </div>
   );
 }
