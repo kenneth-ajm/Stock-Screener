@@ -58,6 +58,7 @@ export async function POST(req: Request) {
     body?.tp1_size_pct == null || body?.tp1_size_pct === "" ? null : Math.round(Number(body.tp1_size_pct));
   const tp2SizePct =
     body?.tp2_size_pct == null || body?.tp2_size_pct === "" ? null : Math.round(Number(body.tp2_size_pct));
+  const entryFee = body?.entry_fee == null || body?.entry_fee === "" ? null : Number(body.entry_fee);
 
   if (!symbol || !Number.isFinite(entry) || entry <= 0)
     return NextResponse.json({ ok: false, error: "Invalid symbol or entry price" });
@@ -78,6 +79,9 @@ export async function POST(req: Request) {
   }
   if (tpPlan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || Number(tp2SizePct) < 0 || Number(tp2SizePct) > 100)) {
     return NextResponse.json({ ok: false, error: "Invalid tp2_size_pct" }, { status: 400 });
+  }
+  if (entryFee !== null && (!Number.isFinite(entryFee) || entryFee < 0)) {
+    return NextResponse.json({ ok: false, error: "Invalid entry_fee" }, { status: 400 });
   }
   const finalTp1SizePct =
     tpPlan === "none" ? null : tp1SizePct == null ? (tpPlan === "tp1_only" ? 100 : 50) : tp1SizePct;
@@ -119,6 +123,7 @@ export async function POST(req: Request) {
     tp2_price: tp2Derived.price,
     tp1_size_pct: finalTp1SizePct,
     tp2_size_pct: finalTp2SizePct,
+    entry_fee: entryFee,
     status: "OPEN",
   });
 

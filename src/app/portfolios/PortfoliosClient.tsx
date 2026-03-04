@@ -16,6 +16,7 @@ type Portfolio = {
   account_size: number | null;
   risk_per_trade: number | null;
   max_positions: number | null;
+  default_fee_per_order?: number | null;
   is_default: boolean | null;
   stats?: PortfolioStats;
 };
@@ -90,6 +91,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
   const [accountSize, setAccountSize] = useState("11000");
   const [riskPct, setRiskPct] = useState("2.0");
   const [maxPositions, setMaxPositions] = useState("5");
+  const [defaultFeePerOrder, setDefaultFeePerOrder] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -105,6 +107,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
     setAccountSize("11000");
     setRiskPct("2.0");
     setMaxPositions("5");
+    setDefaultFeePerOrder("");
     setError(null);
     setModalOpen("create");
   }
@@ -116,6 +119,11 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
     setAccountSize(String(p.account_size ?? 0));
     setRiskPct(String(((p.risk_per_trade ?? 0.02) * 100).toFixed(1)));
     setMaxPositions(String(p.max_positions ?? 5));
+    setDefaultFeePerOrder(
+      typeof p.default_fee_per_order === "number" && Number.isFinite(p.default_fee_per_order)
+        ? String(p.default_fee_per_order)
+        : ""
+    );
     setError(null);
     setModalOpen("edit");
   }
@@ -134,6 +142,8 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
       const size = Number(accountSize);
       const riskDec = Number(riskPct) / 100;
       const maxP = Number(maxPositions);
+      const defaultFee =
+        defaultFeePerOrder.trim() === "" ? null : Number(defaultFeePerOrder);
 
       const res = await fetch("/api/portfolios/create", {
         method: "POST",
@@ -144,6 +154,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
           account_size: size,
           risk_per_trade: riskDec,
           max_positions: maxP,
+          default_fee_per_order: defaultFee,
         }),
       });
       const json = await res.json().catch(() => null);
@@ -167,6 +178,8 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
       const size = Number(accountSize);
       const riskDec = Number(riskPct) / 100;
       const maxP = Number(maxPositions);
+      const defaultFee =
+        defaultFeePerOrder.trim() === "" ? null : Number(defaultFeePerOrder);
 
       const res = await fetch("/api/portfolios/update", {
         method: "POST",
@@ -178,6 +191,7 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
           account_size: size,
           risk_per_trade: riskDec,
           max_positions: maxP,
+          default_fee_per_order: defaultFee,
         }),
       });
       const json = await res.json().catch(() => null);
@@ -436,6 +450,18 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
                 value={maxPositions}
                 onChange={(e) => setMaxPositions(e.target.value)}
                 inputMode="numeric"
+                disabled={busy}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs text-slate-500">Default fee per order (optional)</label>
+              <input
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                value={defaultFeePerOrder}
+                onChange={(e) => setDefaultFeePerOrder(e.target.value)}
+                inputMode="decimal"
+                placeholder="e.g. 1.00"
                 disabled={busy}
               />
             </div>

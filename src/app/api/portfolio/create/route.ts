@@ -35,6 +35,11 @@ export async function POST(req: Request) {
   const risk_per_trade = Number(body?.risk_per_trade);
   const max_positions = Number(body?.max_positions);
   const account_currency = String(body?.account_currency ?? "USD").trim() || "USD";
+  const default_fee_per_order_raw = body?.default_fee_per_order;
+  const default_fee_per_order =
+    default_fee_per_order_raw == null || default_fee_per_order_raw === ""
+      ? null
+      : Number(default_fee_per_order_raw);
 
   if (!name) {
     return NextResponse.json({ ok: false, error: "Name is required" }, { status: 400 });
@@ -51,6 +56,12 @@ export async function POST(req: Request) {
   if (!Number.isFinite(max_positions) || max_positions < 1 || max_positions > 20) {
     return NextResponse.json({ ok: false, error: "Max positions must be 1–20" }, { status: 400 });
   }
+  if (
+    default_fee_per_order !== null &&
+    (!Number.isFinite(default_fee_per_order) || default_fee_per_order < 0)
+  ) {
+    return NextResponse.json({ ok: false, error: "Default fee per order must be >= 0" }, { status: 400 });
+  }
 
   const { data, error } = await supabase
     .from("portfolios")
@@ -61,6 +72,7 @@ export async function POST(req: Request) {
       account_size,
       risk_per_trade,
       max_positions,
+      default_fee_per_order,
       is_default: false,
     })
     .select("id, name, is_default")

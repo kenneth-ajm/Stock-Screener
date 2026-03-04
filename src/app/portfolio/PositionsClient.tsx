@@ -299,6 +299,7 @@ export default function PositionsClient({
   const [mTp2Price, setMTp2Price] = useState("");
   const [mTp1SizePct, setMTp1SizePct] = useState("");
   const [mTp2SizePct, setMTp2SizePct] = useState("");
+  const [mEntryFee, setMEntryFee] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
   const [manualBusy, setManualBusy] = useState(false);
 
@@ -313,6 +314,12 @@ export default function PositionsClient({
   const [editTp2SizePct, setEditTp2SizePct] = useState("");
   const [editTpBusy, setEditTpBusy] = useState(false);
   const [editTpError, setEditTpError] = useState<string | null>(null);
+  const [editFeesOpen, setEditFeesOpen] = useState(false);
+  const [editFeesPosition, setEditFeesPosition] = useState<PositionRow | null>(null);
+  const [editEntryFeeInput, setEditEntryFeeInput] = useState("");
+  const [editExitFeeInput, setEditExitFeeInput] = useState("");
+  const [editFeesBusy, setEditFeesBusy] = useState(false);
+  const [editFeesError, setEditFeesError] = useState<string | null>(null);
 
   const openFiltered = useMemo(() => {
     if (strategyFilter === "ALL") return openPositions;
@@ -411,6 +418,11 @@ export default function PositionsClient({
     setMTp2Price("");
     setMTp1SizePct("");
     setMTp2SizePct("");
+    setMEntryFee(
+      typeof defaultFeePerOrder === "number" && Number.isFinite(defaultFeePerOrder)
+        ? defaultFeePerOrder.toFixed(2)
+        : ""
+    );
     setManualError(null);
     setManualOpen(true);
   }
@@ -471,6 +483,7 @@ export default function PositionsClient({
     const tp2Price = Number(mTp2Price);
     const tp1SizePct = Math.round(Number(mTp1SizePct));
     const tp2SizePct = Math.round(Number(mTp2SizePct));
+    const entryFee = Number(mEntryFee);
 
     if (!symbol) return setManualError("Symbol is required (e.g. AAPL).");
     if (!Number.isFinite(entry) || entry <= 0) return setManualError("Entry price must be a positive number.");
@@ -486,6 +499,9 @@ export default function PositionsClient({
       return setManualError("TP1 size % must be between 0 and 100.");
     if (mTpPlan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || tp2SizePct < 0 || tp2SizePct > 100))
       return setManualError("TP2 size % must be between 0 and 100.");
+    if (mEntryFee.trim() && (!Number.isFinite(entryFee) || entryFee < 0)) {
+      return setManualError("Entry fee must be blank or >= 0.");
+    }
 
     try {
       setManualBusy(true);
@@ -506,6 +522,7 @@ export default function PositionsClient({
           tp2_price: mTpPlan === "tp1_tp2" ? (Number.isFinite(tp2Price) ? tp2Price : null) : null,
           tp1_size_pct: mTpPlan === "none" ? null : tp1SizePct,
           tp2_size_pct: mTpPlan === "tp1_tp2" ? tp2SizePct : 0,
+          entry_fee: mEntryFee.trim() ? entryFee : null,
         }),
       });
 
@@ -636,6 +653,67 @@ export default function PositionsClient({
       setEditTpError(e?.message ?? "Update TP plan failed.");
     } finally {
       setEditTpBusy(false);
+    }
+  }
+
+  function openEditFeesModal(p: PositionRow) {
+    setEditFeesPosition(p);
+    setEditEntryFeeInput(
+      typeof p.entry_fee === "number" && Number.isFinite(p.entry_fee) ? String(p.entry_fee) : ""
+    );
+    setEditExitFeeInput(
+      typeof p.exit_fee === "number" && Number.isFinite(p.exit_fee) ? String(p.exit_fee) : ""
+    );
+    setEditFeesError(null);
+    setEditFeesOpen(true);
+  }
+
+  function closeEditFeesModal() {
+    if (editFeesBusy) return;
+    setEditFeesOpen(false);
+    setEditFeesPosition(null);
+    setEditEntryFeeInput("");
+    setEditExitFeeInput("");
+    setEditFeesError(null);
+  }
+
+  async function submitEditFees() {
+    if (!editFeesPosition) return;
+    const entryFee = Number(editEntryFeeInput);
+    const exitFee = Number(editExitFeeInput);
+    if (editEntryFeeInput.trim() && (!Number.isFinite(entryFee) || entryFee < 0)) {
+      setEditFeesError("Entry fee must be blank or >= 0.");
+      return;
+    }
+    if (editExitFeeInput.trim() && (!Number.isFinite(exitFee) || exitFee < 0)) {
+      setEditFeesError("Exit fee must be blank or >= 0.");
+      return;
+    }
+
+    try {
+      setEditFeesBusy(true);
+      setEditFeesError(null);
+      const res = await fetch("/api/positions/update-fees", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          position_id: editFeesPosition.id,
+          entry_fee: editEntryFeeInput.trim() ? entryFee : null,
+          exit_fee: editExitFeeInput.trim() ? exitFee : null,
+        }),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(payload?.error || "Update fees failed.");
+      }
+
+      closeEditFeesModal();
+      showToast("Fees updated ✅");
+      setTimeout(() => window.location.reload(), 500);
+    } catch (e: any) {
+      setEditFeesError(e?.message ?? "Update fees failed.");
+    } finally {
+      setEditFeesBusy(false);
     }
   }
 
@@ -926,6 +1004,17 @@ export default function PositionsClient({
                                 className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
                                 onClick={() => {
                                   const lot = g.lotIds[0] ? openById.get(g.lotIds[0]) : null;
+                                  if (lot) openEditFeesModal(lot);
+                                }}
+                                disabled={g.lotIds.length !== 1}
+                                title={g.lotIds.length !== 1 ? "Switch to Lots mode to edit per-lot fees" : "Edit fees"}
+                              >
+                                Edit fees
+                              </button>
+                              <button
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                                onClick={() => {
+                                  const lot = g.lotIds[0] ? openById.get(g.lotIds[0]) : null;
                                   if (lot) openEditTpModal(lot);
                                 }}
                                 disabled={g.lotIds.length !== 1}
@@ -1061,6 +1150,12 @@ export default function PositionsClient({
                             <div className="flex justify-end gap-2">
                               <button
                                 className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50"
+                                onClick={() => openEditFeesModal(p)}
+                              >
+                                Edit fees
+                              </button>
+                              <button
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50"
                                 onClick={() => openEditTpModal(p)}
                               >
                                 Edit TP plan
@@ -1157,6 +1252,67 @@ export default function PositionsClient({
             </div>
           </Modal>
 
+          <Modal
+            open={editFeesOpen}
+            title={editFeesPosition ? `Edit fees: ${editFeesPosition.symbol}` : "Edit fees"}
+            onClose={closeEditFeesModal}
+          >
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <label className="block text-xs text-slate-500">Entry fee (USD)</label>
+                <input
+                  value={editEntryFeeInput}
+                  onChange={(e) => setEditEntryFeeInput(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="e.g. 1.00"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  disabled={editFeesBusy}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs text-slate-500">Exit fee (USD)</label>
+                <input
+                  value={editExitFeeInput}
+                  onChange={(e) => setEditExitFeeInput(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="e.g. 1.00"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  disabled={editFeesBusy}
+                />
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                Total fees:{" "}
+                <span className="font-semibold text-slate-900">
+                  {formatMoney(
+                    (Number.isFinite(Number(editEntryFeeInput)) ? Number(editEntryFeeInput) : 0) +
+                      (Number.isFinite(Number(editExitFeeInput)) ? Number(editExitFeeInput) : 0)
+                  )}
+                </span>
+              </div>
+
+              {editFeesError ? <div className="text-sm text-rose-600">{editFeesError}</div> : null}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                  onClick={closeEditFeesModal}
+                  disabled={editFeesBusy}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                  onClick={submitEditFees}
+                  disabled={editFeesBusy}
+                >
+                  {editFeesBusy ? "Saving..." : "Save fees"}
+                </button>
+              </div>
+            </div>
+          </Modal>
+
           {/* Manual add modal */}
           <Modal open={manualOpen} title="Add Existing Holding" onClose={closeManual}>
             <div className="space-y-3">
@@ -1207,6 +1363,18 @@ export default function PositionsClient({
                     onChange={(e) => setMQty(e.target.value)}
                     inputMode="decimal"
                     placeholder="e.g. 10"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                    disabled={manualBusy}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs text-slate-500">Entry fee (USD, optional)</label>
+                  <input
+                    value={mEntryFee}
+                    onChange={(e) => setMEntryFee(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="e.g. 1.00"
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                     disabled={manualBusy}
                   />
