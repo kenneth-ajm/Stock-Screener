@@ -22,7 +22,7 @@ export function evaluateTrendHold(opts: {
   spy252Return?: number | null;
 }) {
   const { bars, regime, spy252Return } = opts;
-  if (bars.length < 252) return null;
+  if (bars.length < 260) return null;
 
   const closes = bars.map((b) => b.close);
   const volumes = bars.map((b) => b.volume);
@@ -64,7 +64,7 @@ export function evaluateTrendHold(opts: {
   const c7 = close >= 5;
   const c8 = avgDollarVolume20 >= 5_000_000;
 
-  const leadershipOk = c4 && c5;
+  const leadershipOk = c4 && c5 && c6;
   const rsOk = c6;
   const liquidityOk = c7 && c8;
   const strictBuy = trendStructureOk && leadershipOk && rsOk && liquidityOk;
@@ -74,6 +74,11 @@ export function evaluateTrendHold(opts: {
   if (strictBuy) rawSignal = "BUY";
   else if (watchEligible) rawSignal = "WATCH";
 
+  const trendScore = trendStructureOk ? 50 : 0;
+  const leadershipScore = leadershipOk ? 35 : 0;
+  const liquidityScore = liquidityOk ? 15 : 0;
+  const confidence = trendScore + leadershipScore + liquidityScore;
+
   const rsNorm = rsProxy == null ? 0 : clamp((rsProxy + 0.2) / 0.8, 0, 1);
   const nearHighNorm = clamp((nearHighPct - 0.75) / 0.25, 0, 1);
   const slopeNorm = clamp((sma200Slope + 0.05) / 0.1, 0, 1);
@@ -81,7 +86,6 @@ export function evaluateTrendHold(opts: {
 
   const downgradedBuyToWatch = regime === "DEFENSIVE" && rawSignal === "BUY";
   const signal = downgradedBuyToWatch ? "WATCH" : rawSignal;
-  const confidence = clamp(Math.round(40 + rankScore), 0, 100);
 
   const stop = entry * 0.9;
   const tp1 = entry * 1.1;
@@ -149,13 +153,13 @@ export function evaluateTrendHold(opts: {
       label: "Regime gate",
       ok: !downgradedBuyToWatch,
       detail: `Regime ${regime}${downgradedBuyToWatch ? " (BUY downgraded)" : ""}`,
-      category: "risk",
+      category: "flags",
     },
   ];
 
   const reasonSummaryBits: string[] = [];
-  reasonSummaryBits.push(`${signal} (${confidence}/100)`);
-  reasonSummaryBits.push(trendStructureOk ? "leader trend template passed" : "trend template failed");
+  reasonSummaryBits.push(`${signal}`);
+  reasonSummaryBits.push(trendStructureOk ? "leader trend template" : "trend template failed");
   reasonSummaryBits.push(rsOk ? "RS strong" : "RS weak");
   reasonSummaryBits.push(c4 ? "near highs" : "off highs");
   reasonSummaryBits.push(liquidityOk ? "liquidity ok" : "liquidity weak");
@@ -200,10 +204,9 @@ export function evaluateTrendHold(opts: {
       },
       checks,
       score_breakdown: [
-        { key: "Trend structure", points: trendStructureOk ? 45 : 0 },
-        { key: "Leadership (52w high/low)", points: leadershipOk ? 25 : 0 },
-        { key: "RS proxy", points: rsOk ? 20 : 0 },
-        { key: "Liquidity + price floor", points: liquidityOk ? 10 : 0 },
+        { key: "Trend structure (1-3)", points: trendScore },
+        { key: "Leadership+RS (4-6)", points: leadershipScore },
+        { key: "Liquidity (7-8)", points: liquidityScore },
       ],
       score: confidence,
       rank_score: rankScore,
