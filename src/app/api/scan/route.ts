@@ -65,7 +65,7 @@ async function enforceGlobalCaps(opts: {
 
   const { data, error } = await supabase
     .from("daily_scans")
-    .select("id,symbol,signal,confidence,reason_summary,reason_json")
+    .select("date,universe_slug,strategy_version,symbol,signal,confidence,reason_summary,reason_json")
     .eq("date", date)
     .eq("universe_slug", universe_slug)
     .eq("strategy_version", strategy_version)
@@ -84,7 +84,15 @@ async function enforceGlobalCaps(opts: {
   const buys = byRank.filter((row) => row.signal === "BUY");
   const watches = byRank.filter((row) => row.signal === "WATCH");
 
-  const keepBuy = new Set(buys.slice(0, buyCap).map((row) => row.id));
+  const keyOf = (row: {
+    date: string;
+    universe_slug: string;
+    strategy_version: string;
+    symbol: string;
+  }) =>
+    `${String(row.date)}|${String(row.universe_slug)}|${String(row.strategy_version)}|${String(row.symbol)}`;
+
+  const keepBuy = new Set(buys.slice(0, buyCap).map((row) => keyOf(row as any)));
   const buyOverflow = buys.slice(buyCap);
 
   const watchPool = [...watches, ...buyOverflow].sort((a, b) => {
@@ -94,10 +102,13 @@ async function enforceGlobalCaps(opts: {
     return String(a.symbol ?? "").localeCompare(String(b.symbol ?? ""));
   });
 
-  const keepWatch = new Set(watchPool.slice(0, watchCap).map((row) => row.id));
+  const keepWatch = new Set(watchPool.slice(0, watchCap).map((row) => keyOf(row as any)));
 
   const updates: Array<{
-    id: string;
+    date: string;
+    universe_slug: string;
+    strategy_version: string;
+    symbol: string;
     signal: "BUY" | "WATCH" | "AVOID";
     reason_summary: string;
     reason_json: unknown;
@@ -105,8 +116,9 @@ async function enforceGlobalCaps(opts: {
   }> = [];
 
   for (const row of data) {
-    const shouldBeBuy = keepBuy.has(row.id);
-    const shouldBeWatch = !shouldBeBuy && keepWatch.has(row.id);
+    const key = keyOf(row as any);
+    const shouldBeBuy = keepBuy.has(key);
+    const shouldBeWatch = !shouldBeBuy && keepWatch.has(key);
     const desired: "BUY" | "WATCH" | "AVOID" = shouldBeBuy ? "BUY" : shouldBeWatch ? "WATCH" : "AVOID";
     if (row.signal === desired) continue;
 
@@ -121,7 +133,10 @@ async function enforceGlobalCaps(opts: {
             : "Signal adjusted by global cap finalizer";
 
     updates.push({
-      id: row.id,
+      date: String((row as any).date),
+      universe_slug: String((row as any).universe_slug),
+      strategy_version: String((row as any).strategy_version),
+      symbol: String((row as any).symbol),
       signal: desired,
       reason_summary: `${String(row.reason_summary ?? "").trim()} • ${capAdjustment}`.trim(),
       reason_json: {
@@ -135,7 +150,9 @@ async function enforceGlobalCaps(opts: {
 
   if (updates.length === 0) return;
 
-  const { error: upErr } = await supabase.from("daily_scans").upsert(updates, { onConflict: "id" });
+  const { error: upErr } = await supabase
+    .from("daily_scans")
+    .upsert(updates, { onConflict: "date,universe_slug,strategy_version,symbol" });
   if (upErr) throw upErr;
 }
 

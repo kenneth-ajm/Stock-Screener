@@ -13,6 +13,35 @@ export const dynamic = "force-dynamic";
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY_VERSION = "v2_core_momentum";
 const TREND_STRATEGY_VERSION = "v1_trend_hold";
+const DISPLAY_BUY_CAP = 5;
+const DISPLAY_WATCH_CAP = 10;
+
+type ScanRow = {
+  symbol: string;
+  signal: "BUY" | "WATCH" | "AVOID";
+  confidence: number;
+  entry: number;
+  stop: number;
+  tp1: number;
+  tp2: number;
+  reason_json?: unknown;
+};
+
+function rankRows(rows: ScanRow[]) {
+  return [...rows].sort((a, b) => {
+    const ac = Number(a.confidence ?? 0);
+    const bc = Number(b.confidence ?? 0);
+    if (bc !== ac) return bc - ac;
+    return String(a.symbol ?? "").localeCompare(String(b.symbol ?? ""));
+  });
+}
+
+function applyDisplayCaps(rows: ScanRow[]) {
+  const ranked = rankRows(rows);
+  const buys = ranked.filter((r) => r.signal === "BUY").slice(0, DISPLAY_BUY_CAP);
+  const watches = ranked.filter((r) => r.signal === "WATCH").slice(0, DISPLAY_WATCH_CAP);
+  return rankRows([...buys, ...watches]);
+}
 
 function strategyLabel(version: string) {
   return version === TREND_STRATEGY_VERSION ? "Trend Hold" : "Momentum Swing";
@@ -93,7 +122,7 @@ export default async function ScreenerPage({
 
   const latestScanDate = latestScan?.[0]?.date ?? null;
 
-  let scanRows: any[] = [];
+  let scanRows: ScanRow[] = [];
   if (latestScanDate) {
     const { data: rows } = await supabase
       .from("daily_scans")
@@ -102,9 +131,10 @@ export default async function ScreenerPage({
       .eq("strategy_version", activeStrategy)
       .eq("date", latestScanDate)
       .order("confidence", { ascending: false })
+      .order("symbol", { ascending: true })
       .limit(200);
 
-    scanRows = rows ?? [];
+    scanRows = applyDisplayCaps((rows ?? []) as ScanRow[]);
   }
 
   const regimeBadge =
