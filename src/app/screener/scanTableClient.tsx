@@ -219,6 +219,21 @@ function defaultTpPercents(strategyVersion: string) {
     : { tp1Pct: 5, tp2Pct: 10 };
 }
 
+function round1(n: number) {
+  return Math.round(n * 10) / 10;
+}
+
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
+function parseNullableNumber(input: string): number | null {
+  const v = input.trim();
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 function Toast({ msg }: { msg: string }) {
   return (
     <div className="fixed bottom-5 right-5 z-[10001]">
@@ -628,36 +643,98 @@ export default function ScanTableClient({
       setTicketError("Stop must be positive and strictly below entry.");
       return;
     }
-    const tp1Pct = Number(ticketTp1Pct);
-    const tp2Pct = Number(ticketTp2Pct);
-    const tp1Price = Number(ticketTp1Price);
-    const tp2Price = Number(ticketTp2Price);
-    const tp1SizePct = Math.round(Number(ticketTp1SizePct));
-    const tp2SizePct = Math.round(Number(ticketTp2SizePct));
+    const tp1PctInput = parseNullableNumber(ticketTp1Pct);
+    const tp2PctInput = parseNullableNumber(ticketTp2Pct);
+    const tp1PriceInput = parseNullableNumber(ticketTp1Price);
+    const tp2PriceInput = parseNullableNumber(ticketTp2Price);
+    const tp1SizeInput = parseNullableNumber(ticketTp1SizePct);
+    const tp2SizeInput = parseNullableNumber(ticketTp2SizePct);
+    const tp1SizePct =
+      tp1SizeInput === null ? null : Math.round(tp1SizeInput);
+    const tp2SizePct =
+      tp2SizeInput === null ? null : Math.round(tp2SizeInput);
     const plan = ticketTpPlan;
     const entryFee = Number(ticketEntryFee);
-    if (
-      (plan === "tp1_only" || plan === "tp1_tp2") &&
-      (!Number.isFinite(tp1Pct) || tp1Pct <= 0) &&
-      (!Number.isFinite(tp1Price) || tp1Price <= 0)
-    ) {
-      setTicketError("TP1 % or TP1 price must be provided.");
-      return;
+    let finalTp1Pct: number | null = null;
+    let finalTp2Pct: number | null = null;
+    let finalTp1Price: number | null = null;
+    let finalTp2Price: number | null = null;
+    let finalTp1SizePct: number | null = null;
+    let finalTp2SizePct: number | null = null;
+
+    if (plan === "none") {
+      finalTp1Pct = null;
+      finalTp2Pct = null;
+      finalTp1Price = null;
+      finalTp2Price = null;
+      finalTp1SizePct = null;
+      finalTp2SizePct = null;
+    } else {
+      if (tp1PriceInput !== null) {
+        const derivedPct = round1(((tp1PriceInput / entryPrice) - 1) * 100);
+        if (derivedPct <= 0 || tp1PriceInput <= entryPrice) {
+          setTicketError("TP1 must be above entry.");
+          return;
+        }
+        finalTp1Pct = derivedPct;
+        finalTp1Price = round2(tp1PriceInput);
+      } else if (tp1PctInput !== null) {
+        if (tp1PctInput <= 0) {
+          setTicketError("TP1 must be above entry.");
+          return;
+        }
+        finalTp1Pct = round1(tp1PctInput);
+        finalTp1Price = round2(entryPrice * (1 + finalTp1Pct / 100));
+      } else {
+        setTicketError("TP1 % or TP1 price must be provided.");
+        return;
+      }
     }
-    if (
-      plan === "tp1_tp2" &&
-      (!Number.isFinite(tp2Pct) || tp2Pct <= 0) &&
-      (!Number.isFinite(tp2Price) || tp2Price <= 0)
-    ) {
-      setTicketError("TP2 % or TP2 price must be provided.");
-      return;
+
+    if (plan === "tp1_only") {
+      finalTp1SizePct = tp1SizePct ?? 100;
+      finalTp2SizePct = 0;
     }
-    if ((plan === "tp1_only" || plan === "tp1_tp2") && (!Number.isFinite(tp1SizePct) || tp1SizePct < 0 || tp1SizePct > 100)) {
+
+    if (plan === "tp1_tp2") {
+      if (tp2PriceInput !== null) {
+        const derivedPct = round1(((tp2PriceInput / entryPrice) - 1) * 100);
+        if (derivedPct <= 0 || tp2PriceInput <= entryPrice) {
+          setTicketError("TP2 must be above entry.");
+          return;
+        }
+        finalTp2Pct = derivedPct;
+        finalTp2Price = round2(tp2PriceInput);
+      } else if (tp2PctInput !== null) {
+        if (tp2PctInput <= 0) {
+          setTicketError("TP2 must be above entry.");
+          return;
+        }
+        finalTp2Pct = round1(tp2PctInput);
+        finalTp2Price = round2(entryPrice * (1 + finalTp2Pct / 100));
+      } else {
+        setTicketError("TP2 % or TP2 price must be provided.");
+        return;
+      }
+
+      if (tp1SizePct === null || tp1SizePct < 0 || tp1SizePct > 100) {
+        setTicketError("TP1 size % must be between 0 and 100.");
+        return;
+      }
+      if (tp2SizePct === null || tp2SizePct < 0 || tp2SizePct > 100) {
+        setTicketError("TP2 size % must be between 0 and 100.");
+        return;
+      }
+      if (tp1SizePct + tp2SizePct !== 100) {
+        setTicketError("TP1 size % + TP2 size % must sum to 100.");
+        return;
+      }
+      finalTp1SizePct = tp1SizePct;
+      finalTp2SizePct = tp2SizePct;
+    }
+
+    if ((plan === "tp1_only" || plan === "tp1_tp2") && (finalTp1SizePct === null || finalTp1SizePct < 0 || finalTp1SizePct > 100)) {
       setTicketError("TP1 size % must be between 0 and 100.");
-      return;
-    }
-    if (plan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || tp2SizePct < 0 || tp2SizePct > 100)) {
-      setTicketError("TP2 size % must be between 0 and 100.");
       return;
     }
     if (ticketEntryFee.trim() && (!Number.isFinite(entryFee) || entryFee < 0)) {
@@ -695,12 +772,12 @@ export default function ScanTableClient({
           max_hold_days: maxHoldDays,
           tp_model: tpModel,
           tp_plan: plan,
-          tp1_pct: plan === "none" ? null : tp1Pct,
-          tp2_pct: plan === "tp1_tp2" ? tp2Pct : null,
-          tp1_price: plan === "none" ? null : (Number.isFinite(tp1Price) ? tp1Price : null),
-          tp2_price: plan === "tp1_tp2" ? (Number.isFinite(tp2Price) ? tp2Price : null) : null,
-          tp1_size_pct: plan === "none" ? null : tp1SizePct,
-          tp2_size_pct: plan === "tp1_tp2" ? tp2SizePct : 0,
+          tp1_pct: finalTp1Pct,
+          tp2_pct: finalTp2Pct,
+          tp1_price: finalTp1Price,
+          tp2_price: finalTp2Price,
+          tp1_size_pct: finalTp1SizePct,
+          tp2_size_pct: finalTp2SizePct,
           entry_fee: ticketEntryFee.trim() ? entryFee : null,
           equity_snapshot: equitySnapshot,
         }),
@@ -948,7 +1025,7 @@ export default function ScanTableClient({
                         const entry = Number(ticketEntry);
                         const price = Number(v);
                         if (Number.isFinite(entry) && entry > 0 && Number.isFinite(price) && price > 0) {
-                          setTicketTp1Pct((((price - entry) / entry) * 100).toFixed(2));
+                          setTicketTp1Pct(round1(((price / entry) - 1) * 100).toFixed(1));
                         }
                       }}
                       inputMode="decimal"
@@ -999,7 +1076,7 @@ export default function ScanTableClient({
                         const entry = Number(ticketEntry);
                         const price = Number(v);
                         if (Number.isFinite(entry) && entry > 0 && Number.isFinite(price) && price > 0) {
-                          setTicketTp2Pct((((price - entry) / entry) * 100).toFixed(2));
+                          setTicketTp2Pct(round1(((price / entry) - 1) * 100).toFixed(1));
                         }
                       }}
                       inputMode="decimal"

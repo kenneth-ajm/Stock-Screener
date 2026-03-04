@@ -159,14 +159,7 @@ export async function POST(req: Request) {
   }
   if (tp1_pct !== null && (!Number.isFinite(tp1_pct) || tp1_pct <= 0)) {
     return NextResponse.json(
-      {
-        ok: false,
-        error: "tp1_pct invalid",
-        detail: {
-          received: { tp1_pct: tp1_pct_raw },
-          rule: "tp1_pct must be > 0 when provided",
-        },
-      },
+      { ok: false, error: "TP1 must be above entry (percent > 0)" },
       { status: 400 }
     );
   }
@@ -295,6 +288,12 @@ export async function POST(req: Request) {
           rule: "tp1_pct or tp1_price is required for tp1_only or tp1_tp2",
         },
       },
+      { status: 400 }
+    );
+  }
+  if ((normalizedTpPlan === "tp1_only" || normalizedTpPlan === "tp1_tp2") && finalTp1Pct !== null && finalTp1Pct <= 0) {
+    return NextResponse.json(
+      { ok: false, error: "TP1 must be above entry (percent > 0)" },
       { status: 400 }
     );
   }
