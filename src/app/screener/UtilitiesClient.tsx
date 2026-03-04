@@ -61,7 +61,7 @@ export default function UtilitiesClient({
     setLog((prev) => (prev ? prev + block : block));
   }
 
-  async function callJson(title: string, url: string, init?: RequestInit) {
+  async function callJson(title: string, url: string, init?: RequestInit, timeoutMs = 60000) {
     append(`${title} (start)`, {
       url,
       method: init?.method ?? "GET",
@@ -74,7 +74,6 @@ export default function UtilitiesClient({
       })() : null,
     });
 
-    const timeoutMs = 60000;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -196,10 +195,15 @@ export default function UtilitiesClient({
   }
 
   async function runAutopilotNow() {
-    await callJson("Run daily autopilot now", "/api/jobs/daily-autopilot", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-    });
+    await callJson(
+      "Run daily autopilot now",
+      "/api/jobs/daily-autopilot",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      },
+      120000
+    );
   }
 
   async function runScanAllBatches() {
