@@ -67,6 +67,7 @@ export async function POST(req: Request) {
   const tp2_size_pct_raw = body?.tp2_size_pct;
   const tp1_price_raw = body?.tp1_price;
   const tp2_price_raw = body?.tp2_price;
+  const entry_fee_raw = body?.entry_fee;
   const tp1_pct = tp1_pct_raw == null || tp1_pct_raw === "" ? null : Number(tp1_pct_raw);
   const tp2_pct = tp2_pct_raw == null || tp2_pct_raw === "" ? null : Number(tp2_pct_raw);
   const tp1_size_pct =
@@ -75,6 +76,7 @@ export async function POST(req: Request) {
     tp2_size_pct_raw == null || tp2_size_pct_raw === "" ? null : Math.round(Number(tp2_size_pct_raw));
   const tp1_price = tp1_price_raw == null || tp1_price_raw === "" ? null : Number(tp1_price_raw);
   const tp2_price = tp2_price_raw == null || tp2_price_raw === "" ? null : Number(tp2_price_raw);
+  const entry_fee = entry_fee_raw == null || entry_fee_raw === "" ? null : Number(entry_fee_raw);
 
   if (!symbol) return NextResponse.json({ ok: false, error: "symbol required" }, { status: 400 });
   if (!Number.isFinite(entry_price) || entry_price <= 0) {
@@ -202,6 +204,19 @@ export async function POST(req: Request) {
         detail: {
           received: { tp2_price: tp2_price_raw },
           rule: "tp2_price must be > 0 when provided",
+        },
+      },
+      { status: 400 }
+    );
+  }
+  if (entry_fee !== null && (!Number.isFinite(entry_fee) || entry_fee < 0)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "entry_fee invalid",
+        detail: {
+          received: { entry_fee: entry_fee_raw },
+          rule: "entry_fee must be >= 0 when provided",
         },
       },
       { status: 400 }
@@ -348,6 +363,7 @@ export async function POST(req: Request) {
       tp2_price: finalTp2Price,
       tp1_size_pct: finalTp1SizePct,
       tp2_size_pct: finalTp2SizePct,
+      entry_fee,
       status: "OPEN",
     })
     .select("id")

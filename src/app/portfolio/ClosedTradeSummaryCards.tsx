@@ -51,7 +51,7 @@ export default function ClosedTradeSummaryCards({ summary }: { summary: ClosedTr
         <StatCard
           label="Profit factor"
           value={pf}
-          subValue={`GP ${formatUsd(summary.grossProfit)} / GL $${summary.grossLossAbs.toFixed(2)}`}
+          subValue={`Net GP ${formatUsd(summary.grossProfit)} / Net GL $${summary.grossLossAbs.toFixed(2)}`}
         />
         <StatCard label="Expectancy" value={formatUsd(summary.expectancyUsd)} subValue="Avg $ per trade" />
       </div>

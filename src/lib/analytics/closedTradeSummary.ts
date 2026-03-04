@@ -2,6 +2,8 @@ export type ClosedPositionLike = {
   symbol: string | null;
   entry_price: number | null;
   exit_price: number | null;
+  entry_fee?: number | null;
+  exit_fee?: number | null;
   // shares field could be named differently in your schema
   shares?: number | null;
   quantity?: number | null;
@@ -70,11 +72,11 @@ export function computeClosedTradeSummary(rows: ClosedPositionLike[]): ClosedTra
       safeNum(r.position_size) ??
       0;
 
-    // pct P/L (independent of position sizing)
-    const pct = (exit - entry) / entry;
-
-    // dollars P/L (uses qty, if you store it)
-    const usd = (exit - entry) * (qty ?? 0);
+    const fees = (safeNum(r.entry_fee) ?? 0) + (safeNum(r.exit_fee) ?? 0);
+    const grossUsd = (exit - entry) * (qty ?? 0);
+    const usd = grossUsd - fees;
+    const positionCost = entry * (qty ?? 0);
+    const pct = positionCost > 0 ? usd / positionCost : (exit - entry) / entry;
 
     totalPnL += usd;
 

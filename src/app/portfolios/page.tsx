@@ -30,6 +30,8 @@ type PositionRow = {
   status: "OPEN" | "CLOSED" | string;
   entry_price: number | null;
   exit_price: number | null;
+  entry_fee?: number | null;
+  exit_fee?: number | null;
   quantity?: number | null;
   shares?: number | null;
 };
@@ -63,7 +65,7 @@ export default async function PortfoliosPage() {
   if (portfolioIds.length > 0) {
     const { data: pos } = await supabase
       .from("portfolio_positions")
-      .select("portfolio_id,status,entry_price,exit_price,quantity,shares")
+      .select("portfolio_id,status,entry_price,exit_price,entry_fee,exit_fee,quantity,shares")
       .in("portfolio_id", portfolioIds);
 
     positions = (pos ?? []) as any;
@@ -86,7 +88,8 @@ export default async function PortfoliosPage() {
         const qty = resolveQty(r);
         const entry = typeof r.entry_price === "number" ? r.entry_price : 0;
         const exit = typeof r.exit_price === "number" ? r.exit_price : 0;
-        return sum + (exit - entry) * qty;
+        const fees = (typeof r.entry_fee === "number" ? r.entry_fee : 0) + (typeof r.exit_fee === "number" ? r.exit_fee : 0);
+        return sum + (exit - entry) * qty - fees;
       }, 0);
 
       return {

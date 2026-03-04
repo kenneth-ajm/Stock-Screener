@@ -21,6 +21,7 @@ type PositionRow = {
   entry_date?: string | null;
 
   entry_price: number | null;
+  entry_fee?: number | null;
   stop_price?: number | null;
 
   shares?: number | null;
@@ -28,6 +29,7 @@ type PositionRow = {
   position_size?: number | null;
 
   exit_price: number | null;
+  exit_fee?: number | null;
   closed_at: string | null;
   exit_reason?: "TP1" | "TP2" | "STOP" | "MANUAL" | "TIME" | string | null;
   exit_date?: string | null;
@@ -195,9 +197,12 @@ function computeClosedPnL(p: PositionRow) {
   if (typeof entry !== "number" || typeof exit !== "number" || entry <= 0) return null;
 
   const qty = resolveQty(p);
-  const pnlPct = (exit - entry) / entry;
-  const pnlUsd = (exit - entry) * qty;
-  return { pnlUsd, pnlPct };
+  const grossUsd = (exit - entry) * qty;
+  const feesUsd = (typeof p.entry_fee === "number" ? p.entry_fee : 0) + (typeof p.exit_fee === "number" ? p.exit_fee : 0);
+  const netUsd = grossUsd - feesUsd;
+  const positionCost = entry * qty;
+  const netPct = positionCost > 0 ? netUsd / positionCost : null;
+  return { grossUsd, feesUsd, netUsd, netPct };
 }
 
 function Modal({
@@ -249,11 +254,13 @@ export default function PositionsClient({
   closedPositions,
   closedSummary,
   latestPriceBySymbol,
+  defaultFeePerOrder = null,
 }: {
   openPositions: PositionRow[];
   closedPositions: PositionRow[];
   closedSummary: ClosedTradeSummary;
   latestPriceBySymbol: Record<string, number | null>;
+  defaultFeePerOrder?: number | null;
 }) {
   const [tab, setTab] = useState<"OPEN" | "CLOSED">("OPEN");
   const [strategyFilter, setStrategyFilter] = useState<"ALL" | "MOMENTUM" | "TREND">("ALL");
@@ -272,6 +279,7 @@ export default function PositionsClient({
   const [closeModalOpen, setCloseModalOpen] = useState(false);
   const [activePosition, setActivePosition] = useState<PositionRow | null>(null);
   const [exitPriceInput, setExitPriceInput] = useState("");
+  const [exitFeeInput, setExitFeeInput] = useState("");
   const [exitReasonInput, setExitReasonInput] = useState<"TP1" | "TP2" | "STOP" | "MANUAL" | "TIME">("MANUAL");
   const [closeError, setCloseError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
@@ -325,6 +333,11 @@ export default function PositionsClient({
   function openCloseModal(p: PositionRow) {
     setActivePosition(p);
     setExitPriceInput("");
+    setExitFeeInput(
+      typeof defaultFeePerOrder === "number" && Number.isFinite(defaultFeePerOrder)
+        ? defaultFeePerOrder.toFixed(2)
+        : ""
+    );
     setExitReasonInput("MANUAL");
     setCloseError(null);
     setCloseModalOpen(true);
@@ -335,6 +348,7 @@ export default function PositionsClient({
     setCloseModalOpen(false);
     setActivePosition(null);
     setExitPriceInput("");
+    setExitFeeInput("");
     setExitReasonInput("MANUAL");
     setCloseError(null);
   }
@@ -343,8 +357,13 @@ export default function PositionsClient({
     if (!activePosition) return;
 
     const exitPrice = Number(exitPriceInput);
+    const exitFee = Number(exitFeeInput);
     if (!Number.isFinite(exitPrice) || exitPrice <= 0) {
       setCloseError("Please enter a valid positive exit price.");
+      return;
+    }
+    if (exitFeeInput.trim() && (!Number.isFinite(exitFee) || exitFee < 0)) {
+      setCloseError("Exit fee must be blank or >= 0.");
       return;
     }
 
@@ -358,6 +377,7 @@ export default function PositionsClient({
         body: JSON.stringify({
           position_id: activePosition.id,
           exit_price: exitPrice,
+          exit_fee: exitFeeInput.trim() ? exitFee : null,
           exit_reason: exitReasonInput,
         }),
       });
@@ -1046,6 +1066,18 @@ export default function PositionsClient({
               </div>
 
               <div className="space-y-2">
+                <label className="block text-xs text-slate-500">Exit fee (USD, optional)</label>
+                <input
+                  value={exitFeeInput}
+                  onChange={(e) => setExitFeeInput(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="e.g. 1.00"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  disabled={closing}
+                />
+              </div>
+
+              <div className="space-y-2">
                 <label className="block text-xs text-slate-500">Exit reason</label>
                 <select
                   value={exitReasonInput}
@@ -1489,13 +1521,19 @@ export default function PositionsClient({
                         <th className="p-3">Entry</th>
                         <th className="p-3">Exit</th>
                         <th className="p-3">Reason</th>
-                        <th className="p-3">P/L %</th>
+                        <th className="p-3">Gross P&L</th>
+                        <th className="p-3">Fees</th>
+                        <th className="p-3">Net P&L</th>
+                        <th className="p-3">Net %</th>
                         <th className="p-3">Closed</th>
                       </tr>
                     </thead>
                     <tbody>
                       {closedWithPnL.map((p) => {
-                        const pnlPct = p.pnl?.pnlPct ?? null;
+                        const grossUsd = p.pnl?.grossUsd ?? null;
+                        const feesUsd = p.pnl?.feesUsd ?? null;
+                        const netUsd = p.pnl?.netUsd ?? null;
+                        const pnlPct = p.pnl?.netPct ?? null;
                         const pnlClass =
                           typeof pnlPct === "number"
                             ? pnlPct > 0
@@ -1516,6 +1554,13 @@ export default function PositionsClient({
                             <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
                             <td className="p-3 text-slate-800">{formatMoney(p.exit_price)}</td>
                             <td className="p-3 text-slate-700">{p.exit_reason ?? "—"}</td>
+                            <td className={clsx("p-3 font-medium", typeof grossUsd === "number" && grossUsd > 0 ? "text-emerald-600" : typeof grossUsd === "number" && grossUsd < 0 ? "text-rose-600" : "text-slate-500")}>
+                              {formatMoneySigned(grossUsd)}
+                            </td>
+                            <td className="p-3 text-slate-700">{formatMoney(feesUsd)}</td>
+                            <td className={clsx("p-3 font-medium", typeof netUsd === "number" && netUsd > 0 ? "text-emerald-600" : typeof netUsd === "number" && netUsd < 0 ? "text-rose-600" : "text-slate-500")}>
+                              {formatMoneySigned(netUsd)}
+                            </td>
                             <td className={clsx("p-3 font-semibold", pnlClass)}>
                               {typeof pnlPct === "number" ? formatPct(pnlPct) : "—"}
                             </td>

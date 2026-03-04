@@ -77,7 +77,7 @@ export async function POST(req: Request) {
   // Get the user's default portfolio (active journey)
   const { data: portfolio, error: pErr } = await supabase
     .from("portfolios")
-    .select("id, account_currency, account_size, risk_per_trade, max_positions")
+    .select("id, account_currency, account_size, risk_per_trade, max_positions, default_fee_per_order")
     .eq("user_id", user.id)
     .eq("is_default", true)
     .limit(1)
@@ -185,6 +185,11 @@ export async function POST(req: Request) {
     open_positions: openPositionRows,
     risk_per_trade: riskPerTrade,
     risk_per_trade_pct: riskPerTrade * 100,
+    default_fee_per_order:
+      typeof portfolio.default_fee_per_order === "number" &&
+      Number.isFinite(Number(portfolio.default_fee_per_order))
+        ? Number(portfolio.default_fee_per_order)
+        : null,
     risk_amount: riskAmount,
     entry,
     stop,

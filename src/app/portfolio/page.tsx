@@ -17,6 +17,7 @@ type Portfolio = {
   account_size?: number | null;
   risk_per_trade?: number | null;
   max_positions?: number | null;
+  default_fee_per_order?: number | null;
   is_default?: boolean | null;
 };
 
@@ -36,6 +37,7 @@ type PositionRow = {
   entry_date?: string | null;
 
   entry_price: number | null;
+  entry_fee?: number | null;
   stop_price: number | null;
 
   shares?: number | null;
@@ -46,6 +48,7 @@ type PositionRow = {
 
   closed_at: string | null;
   exit_price: number | null;
+  exit_fee?: number | null;
   exit_reason?: string | null;
   exit_date?: string | null;
 };
@@ -242,6 +245,8 @@ export default async function PortfolioPage() {
       symbol: p.symbol,
       entry_price: p.entry_price,
       exit_price: p.exit_price,
+      entry_fee: p.entry_fee ?? null,
+      exit_fee: p.exit_fee ?? null,
       shares: (p as any).shares ?? null,
       quantity: (p as any).quantity ?? null,
       position_size: (p as any).position_size ?? null,
@@ -257,7 +262,8 @@ export default async function PortfolioPage() {
   for (const p of closed) {
     if (typeof p.entry_price !== "number" || typeof p.exit_price !== "number") continue;
     const qty = resolveQty(p);
-    const pnl = (p.exit_price - p.entry_price) * qty;
+    const fees = (typeof p.entry_fee === "number" ? p.entry_fee : 0) + (typeof p.exit_fee === "number" ? p.exit_fee : 0);
+    const pnl = (p.exit_price - p.entry_price) * qty - fees;
     realizedPnL += pnl;
     if (pnl > 0) realizedWins += 1;
     if (pnl < 0) realizedLosses += 1;
@@ -331,7 +337,7 @@ export default async function PortfolioPage() {
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">Realized performance</div>
           <div className="mt-1 text-sm text-slate-800">
-            Realized P/L: <span className="font-semibold">{formatMoney(realizedPnL)}</span>
+            Realized Net P/L: <span className="font-semibold">{formatMoney(realizedPnL)}</span>
           </div>
           <div className="mt-1 text-sm text-slate-800">
             Win rate: <span className="font-semibold">{(winRate * 100).toFixed(0)}%</span>
@@ -353,6 +359,7 @@ export default async function PortfolioPage() {
         closedPositions={closed as any}
         closedSummary={closedSummary}
         latestPriceBySymbol={latestPriceBySymbol}
+        defaultFeePerOrder={typeof portfolio.default_fee_per_order === "number" ? portfolio.default_fee_per_order : null}
       />
     </div>
   );

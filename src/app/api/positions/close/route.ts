@@ -36,6 +36,8 @@ export async function POST(req: Request) {
   // ✅ Require exit_price for proper closed-history + P/L
   const exitPriceRaw = body?.exit_price;
   const exitPrice = Number(exitPriceRaw);
+  const exitFeeRaw = body?.exit_fee;
+  const exitFee = exitFeeRaw == null || exitFeeRaw === "" ? null : Number(exitFeeRaw);
 
   if (!positionId) {
     return NextResponse.json({ ok: false, error: "position_id is required" }, { status: 400 });
@@ -44,6 +46,12 @@ export async function POST(req: Request) {
   if (!Number.isFinite(exitPrice) || exitPrice <= 0) {
     return NextResponse.json(
       { ok: false, error: "exit_price is required and must be a positive number" },
+      { status: 400 }
+    );
+  }
+  if (exitFee !== null && (!Number.isFinite(exitFee) || exitFee < 0)) {
+    return NextResponse.json(
+      { ok: false, error: "exit_fee is invalid (must be >= 0)" },
       { status: 400 }
     );
   }
@@ -94,6 +102,7 @@ export async function POST(req: Request) {
     if (withNewColumns) {
       patch.exit_reason = exitReason;
       patch.exit_date = exitDate;
+      patch.exit_fee = exitFee;
     }
     const query = supabase
       .from("portfolio_positions")
@@ -101,14 +110,14 @@ export async function POST(req: Request) {
       .eq("id", positionId)
       .eq("user_id", user.id);
     return withNewColumns
-      ? query.select("id, status, closed_at, exit_price, exit_reason, exit_date").maybeSingle()
+      ? query.select("id, status, closed_at, exit_price, exit_fee, exit_reason, exit_date").maybeSingle()
       : query.select("id, status, closed_at, exit_price").maybeSingle();
   };
 
   let { data: updated, error } = await attempt(true);
 
-  // Backward compatibility: if DB migration not yet applied, write legacy fields only.
-  if (error && /exit_reason|exit_date/i.test(error.message ?? "")) {
+  // Backward compatibility: if DB migration not yet applied, retry without new columns.
+  if (error && /exit_reason|exit_date|exit_fee/i.test(error.message ?? "")) {
     const legacy = await attempt(false);
     updated = legacy.data;
     error = legacy.error;

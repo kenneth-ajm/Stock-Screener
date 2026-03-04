@@ -95,6 +95,7 @@ function extractCalcMetrics(payload: any, fallback?: { entry?: number; stop?: nu
   const cashAvailable = asNumber(payload?.cash_available ?? payload?.cashAvailable);
   const investedValue = asNumber(payload?.invested_value ?? payload?.investedValue);
   const equity = asNumber(payload?.equity ?? payload?.portfolio_equity);
+  const defaultFeePerOrder = asNumber(payload?.default_fee_per_order ?? payload?.defaultFeePerOrder);
   const riskPerTrade = asNumber(
     payload?.risk_per_trade ??
       payload?.risk_per_trade_pct ??
@@ -124,6 +125,7 @@ function extractCalcMetrics(payload: any, fallback?: { entry?: number; stop?: nu
     cashAvailable,
     investedValue,
     equity,
+    defaultFeePerOrder,
     riskPct,
     riskPerShare,
     maxRiskUsd,
@@ -328,6 +330,7 @@ export default function ScanTableClient({
   const [ticketTp2Price, setTicketTp2Price] = useState<string>("");
   const [ticketTp1SizePct, setTicketTp1SizePct] = useState<string>("");
   const [ticketTp2SizePct, setTicketTp2SizePct] = useState<string>("");
+  const [ticketEntryFee, setTicketEntryFee] = useState<string>("");
   const [staleOpenConfirmed, setStaleOpenConfirmed] = useState(false);
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [ticketSubmitting, setTicketSubmitting] = useState(false);
@@ -528,6 +531,11 @@ export default function ScanTableClient({
       setTicketTp2Price(Number.isFinite(entryForTp) ? (entryForTp * (1 + defaults.tp2Pct / 100)).toFixed(2) : "");
       setTicketTp1SizePct("50");
       setTicketTp2SizePct("50");
+      setTicketEntryFee(
+        calc.defaultFeePerOrder !== null && Number.isFinite(calc.defaultFeePerOrder)
+          ? calc.defaultFeePerOrder.toFixed(2)
+          : ""
+      );
       setStaleOpenConfirmed(false);
       setTicketError(null);
       if (json?.ok) {
@@ -627,6 +635,7 @@ export default function ScanTableClient({
     const tp1SizePct = Math.round(Number(ticketTp1SizePct));
     const tp2SizePct = Math.round(Number(ticketTp2SizePct));
     const plan = ticketTpPlan;
+    const entryFee = Number(ticketEntryFee);
     if (
       (plan === "tp1_only" || plan === "tp1_tp2") &&
       (!Number.isFinite(tp1Pct) || tp1Pct <= 0) &&
@@ -649,6 +658,10 @@ export default function ScanTableClient({
     }
     if (plan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || tp2SizePct < 0 || tp2SizePct > 100)) {
       setTicketError("TP2 size % must be between 0 and 100.");
+      return;
+    }
+    if (ticketEntryFee.trim() && (!Number.isFinite(entryFee) || entryFee < 0)) {
+      setTicketError("Entry fee must be blank or >= 0.");
       return;
     }
     if (staleScan && !staleOpenConfirmed) {
@@ -688,6 +701,7 @@ export default function ScanTableClient({
           tp2_price: plan === "tp1_tp2" ? (Number.isFinite(tp2Price) ? tp2Price : null) : null,
           tp1_size_pct: plan === "none" ? null : tp1SizePct,
           tp2_size_pct: plan === "tp1_tp2" ? tp2SizePct : 0,
+          entry_fee: ticketEntryFee.trim() ? entryFee : null,
           equity_snapshot: equitySnapshot,
         }),
       });
@@ -803,7 +817,7 @@ export default function ScanTableClient({
             </div>
           </div>
 
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-4">
             <div className="space-y-1">
               <label className="text-xs text-slate-500">Shares</label>
               <input
@@ -831,6 +845,17 @@ export default function ScanTableClient({
                 value={ticketStop}
                 onChange={(e) => setTicketStop(e.target.value)}
                 inputMode="decimal"
+                disabled={ticketSubmitting}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-slate-500">Entry fee (USD)</label>
+              <input
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                value={ticketEntryFee}
+                onChange={(e) => setTicketEntryFee(e.target.value)}
+                inputMode="decimal"
+                placeholder="optional"
                 disabled={ticketSubmitting}
               />
             </div>
