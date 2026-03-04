@@ -280,9 +280,11 @@ export default async function PortfolioPage() {
     const entry = p.entry_price;
     const stop = p.stop_price;
     const qty = resolveQty(p);
+    const symbol = (p.symbol ?? "").toUpperCase();
+    const last = symbol ? latestPriceBySymbol[symbol] : null;
 
-    if (typeof entry === "number" && entry > 0 && qty > 0) {
-      capitalDeployed += entry * qty;
+    if (typeof last === "number" && Number.isFinite(last) && last > 0 && qty > 0) {
+      capitalDeployed += last * qty;
     }
 
     if (typeof entry === "number" && entry > 0 && typeof stop === "number" && stop > 0 && qty > 0) {
@@ -325,6 +327,9 @@ export default async function PortfolioPage() {
           <div className="text-xs text-slate-500">Open exposure</div>
           <div className="mt-1 text-sm text-slate-800">
             Capital deployed: <span className="font-semibold">{formatMoney(capitalDeployed)}</span>
+          </div>
+          <div className="mt-1 text-sm text-slate-800">
+            Open count: <span className="font-semibold">{open.length}</span>
           </div>
           <div className="mt-1 text-sm text-slate-800">
             Risk deployed: <span className="font-semibold">{formatMoney(riskDeployed)}</span>
