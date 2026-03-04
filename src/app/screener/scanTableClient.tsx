@@ -306,7 +306,7 @@ export default function ScanTableClient({
     setTimeout(() => setToast(null), 1400);
   }
 
-  const staleScan = !!lastCompletedTradingDay && scanDate !== lastCompletedTradingDay;
+  const staleScan = !!lastCompletedTradingDay && scanDate < lastCompletedTradingDay;
 
   const effectiveRows = useMemo<DisplayRow[]>(() => {
     const r = rows ?? [];
@@ -995,7 +995,7 @@ export default function ScanTableClient({
 
           {staleScan ? (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-              <div className="font-semibold">STALE scan</div>
+              <div className="font-semibold">STALE (run rescan)</div>
               <div className="mt-1">
                 Scan date {scanDate} is behind last completed trading day {lastCompletedTradingDay ?? "—"}.
               </div>
@@ -1291,7 +1291,7 @@ export default function ScanTableClient({
                         </span>
                         {r.staleScan ? (
                           <span className="ml-2 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">
-                            STALE
+                            STALE (run rescan)
                           </span>
                         ) : null}
                         {r.priceMismatch ? (

@@ -6,53 +6,13 @@ import ScreenerSearchClient from "./ScreenerSearchClient";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { lastCompletedUsTradingDay } from "@/lib/tradingDay";
 
 export const dynamic = "force-dynamic";
 
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY_VERSION = "v2_core_momentum";
 const TREND_STRATEGY_VERSION = "v1_trend_hold";
-
-function ymd(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function getNyParts(date: Date) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hour12: false,
-    weekday: "short",
-  }).formatToParts(date);
-
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  return {
-    year: Number(get("year")),
-    month: Number(get("month")),
-    day: Number(get("day")),
-    hour: Number(get("hour")),
-    weekday: get("weekday"),
-  };
-}
-
-function prevWeekday(date: Date) {
-  const d = new Date(date);
-  d.setUTCDate(d.getUTCDate() - 1);
-  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() - 1);
-  return d;
-}
-
-function lastCompletedUsTradingDay(now = new Date()) {
-  const ny = getNyParts(now);
-  const utcDateFromNy = new Date(Date.UTC(ny.year, ny.month - 1, ny.day));
-  if (ny.weekday === "Sat") return ymd(prevWeekday(utcDateFromNy));
-  if (ny.weekday === "Sun") return ymd(prevWeekday(prevWeekday(utcDateFromNy)));
-  if (ny.hour < 18) return ymd(prevWeekday(utcDateFromNy));
-  return ymd(utcDateFromNy);
-}
 
 function strategyLabel(version: string) {
   return version === TREND_STRATEGY_VERSION ? "Trend Hold" : "Momentum Swing";
@@ -273,7 +233,7 @@ export default async function ScreenerPage({
                         Date: <span className="font-mono">{regime.date}</span>
                         {regimeIsStale ? (
                           <span className="ml-2 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">
-                            STALE
+                            STALE (run rescan)
                           </span>
                         ) : null}
                       </div>
