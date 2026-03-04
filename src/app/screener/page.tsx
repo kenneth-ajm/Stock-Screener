@@ -102,6 +102,8 @@ export default async function ScreenerPage({
     .limit(1);
 
   const regime = regimeRows?.[0] ?? null;
+  const lastCompletedTradingDay = lastCompletedUsTradingDay();
+  const regimeIsStale = !!regime?.date && String(regime.date) < lastCompletedTradingDay;
 
   let autopilotStatus: { updated_at?: string | null; value?: AutopilotStatus | null } | null = null;
   try {
@@ -130,7 +132,6 @@ export default async function ScreenerPage({
     .limit(1);
 
   const latestScanDate = latestScan?.[0]?.date ?? null;
-  const lastCompletedTradingDay = lastCompletedUsTradingDay();
 
   let scanRows: any[] = [];
   if (latestScanDate) {
@@ -270,6 +271,11 @@ export default async function ScreenerPage({
                     <div className="text-sm">
                       <div className="muted">
                         Date: <span className="font-mono">{regime.date}</span>
+                        {regimeIsStale ? (
+                          <span className="ml-2 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">
+                            STALE
+                          </span>
+                        ) : null}
                       </div>
                       <div className="mt-1">
                         State: <span className="font-semibold">{regime.state}</span>
@@ -292,7 +298,7 @@ export default async function ScreenerPage({
       </div>
 
       <Card>
-        <CardHeader title="Utilities" subtitle="Build universe, ingest history, and scan in safe batches" />
+        <CardHeader title="Utilities" subtitle="Autopilot-first workflow with optional manual controls" />
         <CardContent>
           <UtilitiesClient
             universeSlug={DEFAULT_UNIVERSE}

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { POST as scanPost } from "@/app/api/scan/route";
 
 type Body = {
@@ -50,6 +51,55 @@ function lastCompletedUsTradingDay(now = new Date()) {
   return ymd(utcDateFromNy);
 }
 
+function sma(values: number[], period: number) {
+  if (values.length < period) return null;
+  const slice = values.slice(-period);
+  const sum = slice.reduce((a, b) => a + b, 0);
+  return sum / period;
+}
+
+async function refreshSpyRegimeForDate(dateUsed: string) {
+  const supa = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  ) as any;
+
+  const { data: bars, error } = await supa
+    .from("price_bars")
+    .select("date,close")
+    .eq("symbol", "SPY")
+    .lte("date", dateUsed)
+    .order("date", { ascending: false })
+    .limit(260);
+  if (error) throw new Error(error.message ?? "Failed to read SPY bars");
+  if (!Array.isArray(bars) || bars.length < 200) throw new Error("Not enough SPY bars to compute regime");
+
+  const latest = bars[0];
+  if (!latest || String(latest.date) !== dateUsed) {
+    throw new Error(`SPY bar missing for ${dateUsed}`);
+  }
+
+  const asc = [...bars].reverse();
+  const closes = asc.map((b: any) => Number(b.close));
+  const sma200 = sma(closes, 200);
+  if (!sma200) throw new Error("Unable to compute SPY SMA200");
+  const close = Number(latest.close);
+  const state = close > sma200 ? "FAVORABLE" : "DEFENSIVE";
+
+  const { error: upErr } = await supa.from("market_regime").upsert(
+    {
+      symbol: "SPY",
+      date: dateUsed,
+      close,
+      sma200,
+      state,
+    },
+    { onConflict: "symbol,date" }
+  );
+  if (upErr) throw new Error(upErr.message ?? "Failed to upsert market regime");
+  return state;
+}
+
 export async function POST(req: Request) {
   const startedAt = Date.now();
   try {
@@ -58,6 +108,7 @@ export async function POST(req: Request) {
     const strategy_version =
       String(body?.strategy_version ?? DEFAULT_STRATEGY_VERSION).trim() || DEFAULT_STRATEGY_VERSION;
     const date_used = lastCompletedUsTradingDay();
+    const regime_state = await refreshSpyRegimeForDate(date_used);
 
     const scanReq = new Request("http://localhost/api/scan", {
       method: "POST",
@@ -89,6 +140,7 @@ export async function POST(req: Request) {
       universe_slug,
       strategy_version,
       date_used,
+      regime_state,
       processed: scanJson?.processed ?? 0,
       scored: scanJson?.scored ?? 0,
       upserted: scanJson?.upserted ?? 0,
@@ -101,4 +153,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }
-

@@ -40,6 +40,7 @@ export default function UtilitiesClient({
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [log, setLog] = useState<string>("");
+  const [backfillDone, setBackfillDone] = useState(false);
 
   // ingest controls
   const [ingestBatchSize, setIngestBatchSize] = useState<number>(20);
@@ -158,6 +159,7 @@ export default function UtilitiesClient({
 
     if (res?.ok && json?.ok && typeof json.next_offset === "number") {
       setBackfillOffset(json.next_offset);
+      setBackfillDone(Boolean(json.done));
     }
   }
 
@@ -191,6 +193,13 @@ export default function UtilitiesClient({
         }),
       }
     );
+  }
+
+  async function runAutopilotNow() {
+    await callJson("Run daily autopilot now", "/api/jobs/daily-autopilot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    });
   }
 
   async function runScanAllBatches() {
@@ -292,96 +301,116 @@ export default function UtilitiesClient({
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-        <div className="text-sm font-semibold text-slate-900">Universe: Core 800</div>
+        <div className="text-sm font-semibold text-slate-900">Daily workflow</div>
         <div className="text-sm text-slate-600">
-          These utilities help you (1) build the universe, (2) ingest daily history, then (3) scan in safe batches.
+          Daily: you typically do nothing. Autopilot runs each weekday ~7am SG. Use "Rescan now" if you want to refresh manually.
         </div>
 
         <div className="flex flex-wrap gap-2">
+          <Button onClick={runRescanNow} disabled={!!busy}>
+            {busy?.startsWith("Rescan latest completed day") ? "Rescanning..." : "Rescan now"}
+          </Button>
+          <Button variant="secondary" onClick={runBackfillAuto} disabled={!!busy || backfillDone}>
+            {backfillDone
+              ? "Backfill complete"
+              : busy?.startsWith(`Backfill ${universeSlug} auto`)
+                ? "Backfilling..."
+                : "Backfill core_800 (auto)"}
+          </Button>
           <Button variant="secondary" onClick={buildCore800} disabled={!!busy}>
             {busy === "Build Core 800 universe" ? "Building..." : "Build / Refresh Core 800"}
           </Button>
-          <Button variant="secondary" onClick={runBackfillAuto} disabled={!!busy}>
-            {busy?.startsWith(`Backfill ${universeSlug} auto`) ? "Backfilling..." : "Backfill core_800 (auto)"}
-          </Button>
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-        <div className="text-sm font-semibold text-slate-900">Ingest history</div>
-        <div className="text-sm text-slate-600">
-          Fills <span className="font-mono">price_bars</span> so symbols become scan-ready (≥220 bars).
+      <details className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <summary className="cursor-pointer text-sm font-semibold text-slate-900">
+          Advanced (rare): manual ingest / batch scan
+        </summary>
+
+        <div className="mt-3 space-y-4">
+          <div className="space-y-3">
+            <div className="text-sm font-semibold text-slate-900">Ingest history</div>
+            <div className="text-sm text-slate-600">
+              Fills <span className="font-mono">price_bars</span> so symbols become scan-ready (≥220 bars).
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-xs text-slate-500">Batch size</label>
+              <input
+                className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                value={ingestBatchSize}
+                onChange={(e) => setIngestBatchSize(Number(e.target.value) || 20)}
+                inputMode="numeric"
+                disabled={!!busy}
+              />
+              <label className="text-xs text-slate-500">Offset</label>
+              <input
+                className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                value={ingestOffset}
+                onChange={(e) => setIngestOffset(Number(e.target.value) || 0)}
+                inputMode="numeric"
+                disabled={!!busy}
+              />
+              <Button onClick={ingestCoreUniverse} disabled={!!busy}>
+                {busy?.startsWith(`Ingest ${universeSlug} history`) ? "Ingesting..." : "Ingest next batch"}
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="text-sm font-semibold text-slate-900">Run scan</div>
+            <div className="text-sm text-slate-600">
+              Runs the daily scan on <span className="font-mono">{universeSlug}</span> for{" "}
+              <span className="font-semibold">{strategyLabel}</span>. Use batches to avoid timeouts.
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-xs text-slate-500">Limit</label>
+              <input
+                className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                value={scanLimit}
+                onChange={(e) => setScanLimit(Number(e.target.value) || 200)}
+                inputMode="numeric"
+                disabled={!!busy}
+              />
+              <label className="text-xs text-slate-500">Offset</label>
+              <input
+                className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                value={scanOffset}
+                onChange={(e) => setScanOffset(Number(e.target.value) || 0)}
+                inputMode="numeric"
+                disabled={!!busy}
+              />
+
+              <Button
+                variant="secondary"
+                onClick={() => runScanBatch(scanOffset, scanLimit)}
+                disabled={!!busy}
+              >
+                Run scan batch
+              </Button>
+
+              <Button onClick={runScanAllBatches} disabled={!!busy}>
+                {busy === "Scan ALL batches" ? "Scanning..." : "Run scan (all batches)"}
+              </Button>
+            </div>
+          </div>
         </div>
+      </details>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="text-xs text-slate-500">Batch size</label>
-          <input
-            className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-            value={ingestBatchSize}
-            onChange={(e) => setIngestBatchSize(Number(e.target.value) || 20)}
-            inputMode="numeric"
-            disabled={!!busy}
-          />
-          <label className="text-xs text-slate-500">Offset</label>
-          <input
-            className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-            value={ingestOffset}
-            onChange={(e) => setIngestOffset(Number(e.target.value) || 0)}
-            inputMode="numeric"
-            disabled={!!busy}
-          />
-          <Button onClick={ingestCoreUniverse} disabled={!!busy}>
-            {busy?.startsWith(`Ingest ${universeSlug} history`) ? "Ingesting..." : "Ingest next batch"}
-          </Button>
+      {autopilotStatus?.value?.ok == null ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="text-xs text-slate-600">
+            Autopilot status is unknown. Cron will update this after first run.
+          </div>
+          <div className="mt-2">
+            <Button variant="secondary" onClick={runAutopilotNow} disabled={!!busy}>
+              {busy === "Run daily autopilot now" ? "Running..." : "Run autopilot now"}
+            </Button>
+          </div>
         </div>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-        <div className="text-sm font-semibold text-slate-900">Run scan</div>
-        <div className="text-sm text-slate-600">
-          Runs the daily scan on <span className="font-mono">{universeSlug}</span> for{" "}
-          <span className="font-semibold">{strategyLabel}</span>. Use batches to avoid timeouts.
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="text-xs text-slate-500">Limit</label>
-          <input
-            className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-            value={scanLimit}
-            onChange={(e) => setScanLimit(Number(e.target.value) || 200)}
-            inputMode="numeric"
-            disabled={!!busy}
-          />
-          <label className="text-xs text-slate-500">Offset</label>
-          <input
-            className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-            value={scanOffset}
-            onChange={(e) => setScanOffset(Number(e.target.value) || 0)}
-            inputMode="numeric"
-            disabled={!!busy}
-          />
-
-          <Button
-            variant="secondary"
-            onClick={() => runScanBatch(scanOffset, scanLimit)}
-            disabled={!!busy}
-          >
-            Run scan batch
-          </Button>
-
-          <Button onClick={runScanAllBatches} disabled={!!busy}>
-            {busy === "Scan ALL batches" ? "Scanning..." : "Run scan (all batches)"}
-          </Button>
-
-          <Button variant="secondary" onClick={runRescanNow} disabled={!!busy}>
-            {busy?.startsWith("Rescan latest completed day") ? "Rescanning..." : "Rescan now"}
-          </Button>
-        </div>
-
-        <div className="text-xs text-slate-500">
-          Suggested: keep ingesting until 500+ symbols are scan-ready, then run scan (all batches).
-        </div>
-      </div>
+      ) : null}
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex items-center justify-between">
