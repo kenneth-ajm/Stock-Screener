@@ -2,6 +2,19 @@ import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
+function deriveTp(entry: number, pctRaw: number | null, priceRaw: number | null) {
+  const pct = pctRaw !== null && Number.isFinite(pctRaw) && pctRaw > 0 ? pctRaw : null;
+  const price = priceRaw !== null && Number.isFinite(priceRaw) && priceRaw > 0 ? priceRaw : null;
+  if (pct !== null && price !== null) return { pct: round2(pct), price: round2(price) };
+  if (pct !== null) return { pct: round2(pct), price: round2(entry * (1 + pct / 100)) };
+  if (price !== null) return { pct: round2(((price - entry) / entry) * 100), price: round2(price) };
+  return { pct: null, price: null };
+}
+
 export async function POST(req: Request) {
   const cookieStore = await cookies();
 
@@ -52,12 +65,16 @@ export async function POST(req: Request) {
   const tp2_pct_raw = body?.tp2_pct;
   const tp1_size_pct_raw = body?.tp1_size_pct;
   const tp2_size_pct_raw = body?.tp2_size_pct;
+  const tp1_price_raw = body?.tp1_price;
+  const tp2_price_raw = body?.tp2_price;
   const tp1_pct = tp1_pct_raw == null || tp1_pct_raw === "" ? null : Number(tp1_pct_raw);
   const tp2_pct = tp2_pct_raw == null || tp2_pct_raw === "" ? null : Number(tp2_pct_raw);
   const tp1_size_pct =
     tp1_size_pct_raw == null || tp1_size_pct_raw === "" ? null : Math.round(Number(tp1_size_pct_raw));
   const tp2_size_pct =
     tp2_size_pct_raw == null || tp2_size_pct_raw === "" ? null : Math.round(Number(tp2_size_pct_raw));
+  const tp1_price = tp1_price_raw == null || tp1_price_raw === "" ? null : Number(tp1_price_raw);
+  const tp2_price = tp2_price_raw == null || tp2_price_raw === "" ? null : Number(tp2_price_raw);
 
   if (!symbol) return NextResponse.json({ ok: false, error: "symbol required" }, { status: 400 });
   if (!Number.isFinite(entry_price) || entry_price <= 0) {
@@ -164,6 +181,32 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
+  if (tp1_price !== null && (!Number.isFinite(tp1_price) || tp1_price <= 0)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "tp1_price invalid",
+        detail: {
+          received: { tp1_price: tp1_price_raw },
+          rule: "tp1_price must be > 0 when provided",
+        },
+      },
+      { status: 400 }
+    );
+  }
+  if (tp2_price !== null && (!Number.isFinite(tp2_price) || tp2_price <= 0)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "tp2_price invalid",
+        detail: {
+          received: { tp2_price: tp2_price_raw },
+          rule: "tp2_price must be > 0 when provided",
+        },
+      },
+      { status: 400 }
+    );
+  }
   if (
     tp1_size_pct !== null &&
     (!Number.isFinite(tp1_size_pct) || tp1_size_pct < 0 || tp1_size_pct > 100)
@@ -202,8 +245,16 @@ export async function POST(req: Request) {
       : tp_plan === "tp1_tp2"
         ? "tp1_tp2"
       : "none";
-  const finalTp1Pct = normalizedTpPlan === "none" ? null : tp1_pct;
-  const finalTp2Pct = normalizedTpPlan === "tp1_tp2" ? tp2_pct : null;
+  const tp1Derived =
+    normalizedTpPlan === "none" ? { pct: null as number | null, price: null as number | null } : deriveTp(entry_price, tp1_pct, tp1_price);
+  const tp2Derived =
+    normalizedTpPlan === "tp1_tp2"
+      ? deriveTp(entry_price, tp2_pct, tp2_price)
+      : { pct: null as number | null, price: null as number | null };
+  const finalTp1Pct = tp1Derived.pct;
+  const finalTp2Pct = tp2Derived.pct;
+  const finalTp1Price = tp1Derived.price;
+  const finalTp2Price = tp2Derived.price;
   const finalTp1SizePct =
     normalizedTpPlan === "none"
       ? null
@@ -219,27 +270,27 @@ export async function POST(req: Request) {
         : tp2_size_pct
       : 0;
 
-  if ((normalizedTpPlan === "tp1_only" || normalizedTpPlan === "tp1_tp2") && tp1_pct === null) {
+  if ((normalizedTpPlan === "tp1_only" || normalizedTpPlan === "tp1_tp2") && finalTp1Pct === null) {
     return NextResponse.json(
       {
         ok: false,
         error: "tp1_pct required",
         detail: {
-          received: { tp_plan, tp1_pct: tp1_pct_raw },
-          rule: "tp1_pct is required for tp1_only or tp1_tp2",
+          received: { tp_plan, tp1_pct: tp1_pct_raw, tp1_price: tp1_price_raw },
+          rule: "tp1_pct or tp1_price is required for tp1_only or tp1_tp2",
         },
       },
       { status: 400 }
     );
   }
-  if (normalizedTpPlan === "tp1_tp2" && tp2_pct === null) {
+  if (normalizedTpPlan === "tp1_tp2" && finalTp2Pct === null) {
     return NextResponse.json(
       {
         ok: false,
         error: "tp2_pct required",
         detail: {
-          received: { tp_plan, tp2_pct: tp2_pct_raw },
-          rule: "tp2_pct is required for tp1_tp2",
+          received: { tp_plan, tp2_pct: tp2_pct_raw, tp2_price: tp2_price_raw },
+          rule: "tp2_pct or tp2_price is required for tp1_tp2",
         },
       },
       { status: 400 }
@@ -293,6 +344,8 @@ export async function POST(req: Request) {
       tp_plan: normalizedTpPlan,
       tp1_pct: finalTp1Pct,
       tp2_pct: finalTp2Pct,
+      tp1_price: finalTp1Price,
+      tp2_price: finalTp2Price,
       tp1_size_pct: finalTp1SizePct,
       tp2_size_pct: finalTp2SizePct,
       status: "OPEN",

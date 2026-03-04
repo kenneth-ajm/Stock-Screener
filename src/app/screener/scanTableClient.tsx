@@ -291,6 +291,8 @@ export default function ScanTableClient({
   const [ticketTpPlan, setTicketTpPlan] = useState<TpPlan>("tp1_tp2");
   const [ticketTp1Pct, setTicketTp1Pct] = useState<string>("");
   const [ticketTp2Pct, setTicketTp2Pct] = useState<string>("");
+  const [ticketTp1Price, setTicketTp1Price] = useState<string>("");
+  const [ticketTp2Price, setTicketTp2Price] = useState<string>("");
   const [ticketTp1SizePct, setTicketTp1SizePct] = useState<string>("");
   const [ticketTp2SizePct, setTicketTp2SizePct] = useState<string>("");
   const [staleOpenConfirmed, setStaleOpenConfirmed] = useState(false);
@@ -475,9 +477,18 @@ export default function ScanTableClient({
       );
       setTicketStop(calc.stop !== null ? calc.stop.toFixed(2) : Number(row.stop).toFixed(2));
       const defaults = defaultTpPercents(strategyVersion);
+      const entryForTp = Number(
+        liveForTicket !== null
+          ? liveForTicket
+          : calc.entry !== null
+            ? calc.entry
+            : Number(row.entry)
+      );
       setTicketTpPlan("tp1_tp2");
       setTicketTp1Pct(String(defaults.tp1Pct));
       setTicketTp2Pct(String(defaults.tp2Pct));
+      setTicketTp1Price(Number.isFinite(entryForTp) ? (entryForTp * (1 + defaults.tp1Pct / 100)).toFixed(2) : "");
+      setTicketTp2Price(Number.isFinite(entryForTp) ? (entryForTp * (1 + defaults.tp2Pct / 100)).toFixed(2) : "");
       setTicketTp1SizePct("50");
       setTicketTp2SizePct("50");
       setStaleOpenConfirmed(false);
@@ -574,15 +585,25 @@ export default function ScanTableClient({
     }
     const tp1Pct = Number(ticketTp1Pct);
     const tp2Pct = Number(ticketTp2Pct);
+    const tp1Price = Number(ticketTp1Price);
+    const tp2Price = Number(ticketTp2Price);
     const tp1SizePct = Math.round(Number(ticketTp1SizePct));
     const tp2SizePct = Math.round(Number(ticketTp2SizePct));
     const plan = ticketTpPlan;
-    if ((plan === "tp1_only" || plan === "tp1_tp2") && (!Number.isFinite(tp1Pct) || tp1Pct <= 0)) {
-      setTicketError("TP1 % must be a positive number.");
+    if (
+      (plan === "tp1_only" || plan === "tp1_tp2") &&
+      (!Number.isFinite(tp1Pct) || tp1Pct <= 0) &&
+      (!Number.isFinite(tp1Price) || tp1Price <= 0)
+    ) {
+      setTicketError("TP1 % or TP1 price must be provided.");
       return;
     }
-    if (plan === "tp1_tp2" && (!Number.isFinite(tp2Pct) || tp2Pct <= 0)) {
-      setTicketError("TP2 % must be a positive number.");
+    if (
+      plan === "tp1_tp2" &&
+      (!Number.isFinite(tp2Pct) || tp2Pct <= 0) &&
+      (!Number.isFinite(tp2Price) || tp2Price <= 0)
+    ) {
+      setTicketError("TP2 % or TP2 price must be provided.");
       return;
     }
     if ((plan === "tp1_only" || plan === "tp1_tp2") && (!Number.isFinite(tp1SizePct) || tp1SizePct < 0 || tp1SizePct > 100)) {
@@ -626,6 +647,8 @@ export default function ScanTableClient({
           tp_plan: plan,
           tp1_pct: plan === "none" ? null : tp1Pct,
           tp2_pct: plan === "tp1_tp2" ? tp2Pct : null,
+          tp1_price: plan === "none" ? null : (Number.isFinite(tp1Price) ? tp1Price : null),
+          tp2_price: plan === "tp1_tp2" ? (Number.isFinite(tp2Price) ? tp2Price : null) : null,
           tp1_size_pct: plan === "none" ? null : tp1SizePct,
           tp2_size_pct: plan === "tp1_tp2" ? tp2SizePct : 0,
           equity_snapshot: equitySnapshot,
@@ -778,6 +801,7 @@ export default function ScanTableClient({
 
           <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Take Profit Plan</div>
+            <div className="text-[11px] text-slate-500">Based on entry: {Number.isFinite(Number(ticketEntry)) ? fmt2(Number(ticketEntry)) : "—"}</div>
             <div className="grid gap-2 sm:grid-cols-3">
               <div className="space-y-1 sm:col-span-3">
                 <label className="text-xs text-slate-500">Plan</label>
@@ -790,17 +814,35 @@ export default function ScanTableClient({
                     setTicketTpPlan(next);
                     if (next === "tp1_only") {
                       setTicketTp1Pct(String(defaults.tp1Pct));
+                      setTicketTp1Price(
+                        Number.isFinite(Number(ticketEntry))
+                          ? (Number(ticketEntry) * (1 + defaults.tp1Pct / 100)).toFixed(2)
+                          : ""
+                      );
                       setTicketTp1SizePct("100");
                       setTicketTp2Pct("");
+                      setTicketTp2Price("");
                       setTicketTp2SizePct("0");
                     } else if (next === "tp1_tp2") {
                       setTicketTp1Pct(String(defaults.tp1Pct));
                       setTicketTp2Pct(String(defaults.tp2Pct));
+                      setTicketTp1Price(
+                        Number.isFinite(Number(ticketEntry))
+                          ? (Number(ticketEntry) * (1 + defaults.tp1Pct / 100)).toFixed(2)
+                          : ""
+                      );
+                      setTicketTp2Price(
+                        Number.isFinite(Number(ticketEntry))
+                          ? (Number(ticketEntry) * (1 + defaults.tp2Pct / 100)).toFixed(2)
+                          : ""
+                      );
                       setTicketTp1SizePct("50");
                       setTicketTp2SizePct("50");
                     } else {
                       setTicketTp1Pct("");
                       setTicketTp2Pct("");
+                      setTicketTp1Price("");
+                      setTicketTp2Price("");
                       setTicketTp1SizePct("");
                       setTicketTp2SizePct("");
                     }
@@ -820,7 +862,33 @@ export default function ScanTableClient({
                     <input
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                       value={ticketTp1Pct}
-                      onChange={(e) => setTicketTp1Pct(e.target.value)}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setTicketTp1Pct(v);
+                        const entry = Number(ticketEntry);
+                        const pct = Number(v);
+                        if (Number.isFinite(entry) && entry > 0 && Number.isFinite(pct) && pct > 0) {
+                          setTicketTp1Price((entry * (1 + pct / 100)).toFixed(2));
+                        }
+                      }}
+                      inputMode="decimal"
+                      disabled={ticketSubmitting}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-500">TP1 price</label>
+                    <input
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                      value={ticketTp1Price}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setTicketTp1Price(v);
+                        const entry = Number(ticketEntry);
+                        const price = Number(v);
+                        if (Number.isFinite(entry) && entry > 0 && Number.isFinite(price) && price > 0) {
+                          setTicketTp1Pct((((price - entry) / entry) * 100).toFixed(2));
+                        }
+                      }}
                       inputMode="decimal"
                       disabled={ticketSubmitting}
                     />
@@ -845,7 +913,33 @@ export default function ScanTableClient({
                     <input
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                       value={ticketTp2Pct}
-                      onChange={(e) => setTicketTp2Pct(e.target.value)}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setTicketTp2Pct(v);
+                        const entry = Number(ticketEntry);
+                        const pct = Number(v);
+                        if (Number.isFinite(entry) && entry > 0 && Number.isFinite(pct) && pct > 0) {
+                          setTicketTp2Price((entry * (1 + pct / 100)).toFixed(2));
+                        }
+                      }}
+                      inputMode="decimal"
+                      disabled={ticketSubmitting}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-500">TP2 price</label>
+                    <input
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                      value={ticketTp2Price}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setTicketTp2Price(v);
+                        const entry = Number(ticketEntry);
+                        const price = Number(v);
+                        if (Number.isFinite(entry) && entry > 0 && Number.isFinite(price) && price > 0) {
+                          setTicketTp2Pct((((price - entry) / entry) * 100).toFixed(2));
+                        }
+                      }}
                       inputMode="decimal"
                       disabled={ticketSubmitting}
                     />

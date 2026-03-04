@@ -8,6 +8,8 @@ alter table public.portfolio_positions
   add column if not exists tp_plan text,
   add column if not exists tp1_pct numeric,
   add column if not exists tp2_pct numeric,
+  add column if not exists tp1_price numeric,
+  add column if not exists tp2_price numeric,
   add column if not exists tp1_size_pct integer,
   add column if not exists tp2_size_pct integer;
 

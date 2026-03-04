@@ -14,6 +14,8 @@ type PositionRow = {
   tp_plan?: string | null;
   tp1_pct?: number | null;
   tp2_pct?: number | null;
+  tp1_price?: number | null;
+  tp2_price?: number | null;
   tp1_size_pct?: number | null;
   tp2_size_pct?: number | null;
   entry_date?: string | null;
@@ -111,9 +113,12 @@ function tpPlanSummaryFor(p: {
   tp_plan?: string | null;
   tp1_pct?: number | null;
   tp2_pct?: number | null;
+  tp1_price?: number | null;
+  tp2_price?: number | null;
   tp1_size_pct?: number | null;
   tp2_size_pct?: number | null;
   strategy_version?: string | null;
+  entry_price?: number | null;
 }) {
   const plan = String(p.tp_plan ?? "").toLowerCase();
   const isTrend = (p.strategy_version ?? "") === "v1_trend_hold";
@@ -126,9 +131,11 @@ function tpPlanSummaryFor(p: {
   const tp1Size = typeof p.tp1_size_pct === "number" ? p.tp1_size_pct : plan === "tp1_only" ? 100 : 50;
   const tp2Size = typeof p.tp2_size_pct === "number" ? p.tp2_size_pct : 50;
 
+  const tp1PriceLabel = formatMoney(typeof p.tp1_price === "number" ? p.tp1_price : p.entry_price != null ? p.entry_price * (1 + tp1 / 100) : null);
+  const tp2PriceLabel = formatMoney(typeof p.tp2_price === "number" ? p.tp2_price : p.entry_price != null ? p.entry_price * (1 + tp2 / 100) : null);
   if (plan === "" || plan === "none") return "No TP";
-  if (plan === "tp1_only") return `TP1 ${tp1Label} (${Math.round(tp1Size)}%)`;
-  if (plan === "tp1_tp2") return `TP1 ${tp1Label} (${Math.round(tp1Size)}%) + TP2 ${tp2Label} (${Math.round(tp2Size)}%)`;
+  if (plan === "tp1_only") return `TP1: ${tp1PriceLabel} (${tp1Label}, ${Math.round(tp1Size)}%)`;
+  if (plan === "tp1_tp2") return `TP1: ${tp1PriceLabel} (${tp1Label}, ${Math.round(tp1Size)}%) + TP2: ${tp2PriceLabel} (${tp2Label}, ${Math.round(tp2Size)}%)`;
   return "No TP";
 }
 
@@ -278,6 +285,8 @@ export default function PositionsClient({
   const [mTpPlan, setMTpPlan] = useState<TpPlan>("none");
   const [mTp1Pct, setMTp1Pct] = useState("");
   const [mTp2Pct, setMTp2Pct] = useState("");
+  const [mTp1Price, setMTp1Price] = useState("");
+  const [mTp2Price, setMTp2Price] = useState("");
   const [mTp1SizePct, setMTp1SizePct] = useState("");
   const [mTp2SizePct, setMTp2SizePct] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
@@ -288,6 +297,8 @@ export default function PositionsClient({
   const [editTpPlan, setEditTpPlan] = useState<TpPlan>("none");
   const [editTp1Pct, setEditTp1Pct] = useState("");
   const [editTp2Pct, setEditTp2Pct] = useState("");
+  const [editTp1Price, setEditTp1Price] = useState("");
+  const [editTp2Price, setEditTp2Price] = useState("");
   const [editTp1SizePct, setEditTp1SizePct] = useState("");
   const [editTp2SizePct, setEditTp2SizePct] = useState("");
   const [editTpBusy, setEditTpBusy] = useState(false);
@@ -374,6 +385,8 @@ export default function PositionsClient({
     setMTpPlan("none");
     setMTp1Pct("");
     setMTp2Pct("");
+    setMTp1Price("");
+    setMTp2Price("");
     setMTp1SizePct("");
     setMTp2SizePct("");
     setManualError(null);
@@ -389,15 +402,21 @@ export default function PositionsClient({
   function applyTpPlanDefaults(
     plan: TpPlan,
     strategyVersion: string | null | undefined,
+    entryPrice: number | null | undefined,
     setTp1Pct: (v: string) => void,
     setTp2Pct: (v: string) => void,
+    setTp1Price: (v: string) => void,
+    setTp2Price: (v: string) => void,
     setTp1SizePct: (v: string) => void,
     setTp2SizePct: (v: string) => void
   ) {
     const defaults = defaultTpPercentsForStrategy(strategyVersion);
+    const entry = typeof entryPrice === "number" && Number.isFinite(entryPrice) && entryPrice > 0 ? entryPrice : null;
     if (plan === "none") {
       setTp1Pct("");
       setTp2Pct("");
+      setTp1Price("");
+      setTp2Price("");
       setTp1SizePct("");
       setTp2SizePct("");
       return;
@@ -405,12 +424,16 @@ export default function PositionsClient({
     if (plan === "tp1_only") {
       setTp1Pct(String(defaults.tp1Pct));
       setTp2Pct("");
+      setTp1Price(entry !== null ? (entry * (1 + defaults.tp1Pct / 100)).toFixed(2) : "");
+      setTp2Price("");
       setTp1SizePct("100");
       setTp2SizePct("0");
       return;
     }
     setTp1Pct(String(defaults.tp1Pct));
     setTp2Pct(String(defaults.tp2Pct));
+    setTp1Price(entry !== null ? (entry * (1 + defaults.tp1Pct / 100)).toFixed(2) : "");
+    setTp2Price(entry !== null ? (entry * (1 + defaults.tp2Pct / 100)).toFixed(2) : "");
     setTp1SizePct("50");
     setTp2SizePct("50");
   }
@@ -422,6 +445,8 @@ export default function PositionsClient({
     const qty = Number(mQty);
     const tp1Pct = Number(mTp1Pct);
     const tp2Pct = Number(mTp2Pct);
+    const tp1Price = Number(mTp1Price);
+    const tp2Price = Number(mTp2Price);
     const tp1SizePct = Math.round(Number(mTp1SizePct));
     const tp2SizePct = Math.round(Number(mTp2SizePct));
 
@@ -431,10 +456,10 @@ export default function PositionsClient({
       return setManualError("Stop must be blank or a positive number.");
     if (mQty.trim() && (!Number.isFinite(qty) || qty <= 0))
       return setManualError("Quantity must be blank or a positive number.");
-    if (mTpPlan !== "none" && (!Number.isFinite(tp1Pct) || tp1Pct <= 0))
-      return setManualError("TP1 % must be a positive number.");
-    if (mTpPlan === "tp1_tp2" && (!Number.isFinite(tp2Pct) || tp2Pct <= 0))
-      return setManualError("TP2 % must be a positive number.");
+    if (mTpPlan !== "none" && (!Number.isFinite(tp1Pct) || tp1Pct <= 0) && (!Number.isFinite(tp1Price) || tp1Price <= 0))
+      return setManualError("TP1 % or TP1 price must be provided.");
+    if (mTpPlan === "tp1_tp2" && (!Number.isFinite(tp2Pct) || tp2Pct <= 0) && (!Number.isFinite(tp2Price) || tp2Price <= 0))
+      return setManualError("TP2 % or TP2 price must be provided.");
     if (mTpPlan !== "none" && (!Number.isFinite(tp1SizePct) || tp1SizePct < 0 || tp1SizePct > 100))
       return setManualError("TP1 size % must be between 0 and 100.");
     if (mTpPlan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || tp2SizePct < 0 || tp2SizePct > 100))
@@ -455,6 +480,8 @@ export default function PositionsClient({
           tp_plan: mTpPlan,
           tp1_pct: mTpPlan === "none" ? null : tp1Pct,
           tp2_pct: mTpPlan === "tp1_tp2" ? tp2Pct : null,
+          tp1_price: mTpPlan === "none" ? null : (Number.isFinite(tp1Price) ? tp1Price : null),
+          tp2_price: mTpPlan === "tp1_tp2" ? (Number.isFinite(tp2Price) ? tp2Price : null) : null,
           tp1_size_pct: mTpPlan === "none" ? null : tp1SizePct,
           tp2_size_pct: mTpPlan === "tp1_tp2" ? tp2SizePct : 0,
         }),
@@ -487,11 +514,28 @@ export default function PositionsClient({
     const defaults = defaultTpPercentsForStrategy(p.strategy_version);
     setEditTp1Pct(String(p.tp1_pct ?? defaults.tp1Pct));
     setEditTp2Pct(String(p.tp2_pct ?? defaults.tp2Pct));
+    const entry = typeof p.entry_price === "number" && Number.isFinite(p.entry_price) && p.entry_price > 0 ? p.entry_price : null;
+    setEditTp1Price(
+      p.tp1_price != null
+        ? String(p.tp1_price)
+        : entry !== null
+          ? (entry * (1 + Number(p.tp1_pct ?? defaults.tp1Pct) / 100)).toFixed(2)
+          : ""
+    );
+    setEditTp2Price(
+      p.tp2_price != null
+        ? String(p.tp2_price)
+        : entry !== null
+          ? (entry * (1 + Number(p.tp2_pct ?? defaults.tp2Pct) / 100)).toFixed(2)
+          : ""
+    );
     setEditTp1SizePct(String(p.tp1_size_pct ?? (plan === "tp1_only" ? 100 : 50)));
     setEditTp2SizePct(String(p.tp2_size_pct ?? (plan === "tp1_tp2" ? 50 : 0)));
     if (plan === "none") {
       setEditTp1Pct("");
       setEditTp2Pct("");
+      setEditTp1Price("");
+      setEditTp2Price("");
       setEditTp1SizePct("");
       setEditTp2SizePct("");
     }
@@ -510,15 +554,25 @@ export default function PositionsClient({
     if (!editTpPosition) return;
     const tp1Pct = Number(editTp1Pct);
     const tp2Pct = Number(editTp2Pct);
+    const tp1Price = Number(editTp1Price);
+    const tp2Price = Number(editTp2Price);
     const tp1SizePct = Math.round(Number(editTp1SizePct));
     const tp2SizePct = Math.round(Number(editTp2SizePct));
 
-    if (editTpPlan !== "none" && (!Number.isFinite(tp1Pct) || tp1Pct <= 0)) {
-      setEditTpError("TP1 % must be a positive number.");
+    if (
+      editTpPlan !== "none" &&
+      (!Number.isFinite(tp1Pct) || tp1Pct <= 0) &&
+      (!Number.isFinite(tp1Price) || tp1Price <= 0)
+    ) {
+      setEditTpError("TP1 % or TP1 price must be provided.");
       return;
     }
-    if (editTpPlan === "tp1_tp2" && (!Number.isFinite(tp2Pct) || tp2Pct <= 0)) {
-      setEditTpError("TP2 % must be a positive number.");
+    if (
+      editTpPlan === "tp1_tp2" &&
+      (!Number.isFinite(tp2Pct) || tp2Pct <= 0) &&
+      (!Number.isFinite(tp2Price) || tp2Price <= 0)
+    ) {
+      setEditTpError("TP2 % or TP2 price must be provided.");
       return;
     }
     if (editTpPlan !== "none" && (!Number.isFinite(tp1SizePct) || tp1SizePct < 0 || tp1SizePct > 100)) {
@@ -542,6 +596,8 @@ export default function PositionsClient({
           tp_plan: editTpPlan,
           tp1_pct: editTpPlan === "none" ? null : tp1Pct,
           tp2_pct: editTpPlan === "tp1_tp2" ? tp2Pct : null,
+          tp1_price: editTpPlan === "none" ? null : (Number.isFinite(tp1Price) ? tp1Price : null),
+          tp2_price: editTpPlan === "tp1_tp2" ? (Number.isFinite(tp2Price) ? tp2Price : null) : null,
           tp1_size_pct: editTpPlan === "none" ? null : tp1SizePct,
           tp2_size_pct: editTpPlan === "tp1_tp2" ? tp2SizePct : 0,
         }),
@@ -1091,14 +1147,17 @@ export default function PositionsClient({
                     onChange={(e) => {
                       const next = e.target.value as TpPlan;
                       setMTpPlan(next);
-                      applyTpPlanDefaults(
-                        next,
-                        "v2_core_momentum",
-                        setMTp1Pct,
-                        setMTp2Pct,
-                        setMTp1SizePct,
-                        setMTp2SizePct
-                      );
+                    applyTpPlanDefaults(
+                      next,
+                      "v2_core_momentum",
+                      Number(mEntry),
+                      setMTp1Pct,
+                      setMTp2Pct,
+                      setMTp1Price,
+                      setMTp2Price,
+                      setMTp1SizePct,
+                      setMTp2SizePct
+                    );
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                     disabled={manualBusy}
@@ -1111,13 +1170,43 @@ export default function PositionsClient({
 
                 {mTpPlan !== "none" ? (
                   <>
+                    <div className="text-[11px] text-slate-500">
+                      Based on entry: {Number.isFinite(Number(mEntry)) ? `$${Number(mEntry).toFixed(2)}` : "—"}
+                    </div>
                     <div className="space-y-1">
                       <label className="text-xs text-slate-500">TP1 %</label>
                       <input
                         value={mTp1Pct}
-                        onChange={(e) => setMTp1Pct(e.target.value)}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setMTp1Pct(v);
+                          const entry = Number(mEntry);
+                          const pct = Number(v);
+                          if (Number.isFinite(entry) && entry > 0 && Number.isFinite(pct) && pct > 0) {
+                            setMTp1Price((entry * (1 + pct / 100)).toFixed(2));
+                          }
+                        }}
                         inputMode="decimal"
                         placeholder="e.g. 5"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        disabled={manualBusy}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">TP1 price</label>
+                      <input
+                        value={mTp1Price}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setMTp1Price(v);
+                          const entry = Number(mEntry);
+                          const price = Number(v);
+                          if (Number.isFinite(entry) && entry > 0 && Number.isFinite(price) && price > 0) {
+                            setMTp1Pct((((price - entry) / entry) * 100).toFixed(2));
+                          }
+                        }}
+                        inputMode="decimal"
+                        placeholder="e.g. 105.00"
                         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                         disabled={manualBusy}
                       />
@@ -1143,9 +1232,36 @@ export default function PositionsClient({
                       <label className="text-xs text-slate-500">TP2 %</label>
                       <input
                         value={mTp2Pct}
-                        onChange={(e) => setMTp2Pct(e.target.value)}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setMTp2Pct(v);
+                          const entry = Number(mEntry);
+                          const pct = Number(v);
+                          if (Number.isFinite(entry) && entry > 0 && Number.isFinite(pct) && pct > 0) {
+                            setMTp2Price((entry * (1 + pct / 100)).toFixed(2));
+                          }
+                        }}
                         inputMode="decimal"
                         placeholder="e.g. 10"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        disabled={manualBusy}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">TP2 price</label>
+                      <input
+                        value={mTp2Price}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setMTp2Price(v);
+                          const entry = Number(mEntry);
+                          const price = Number(v);
+                          if (Number.isFinite(entry) && entry > 0 && Number.isFinite(price) && price > 0) {
+                            setMTp2Pct((((price - entry) / entry) * 100).toFixed(2));
+                          }
+                        }}
+                        inputMode="decimal"
+                        placeholder="e.g. 110.00"
                         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                         disabled={manualBusy}
                       />
@@ -1203,8 +1319,11 @@ export default function PositionsClient({
                     applyTpPlanDefaults(
                       next,
                       editTpPosition?.strategy_version ?? "v2_core_momentum",
+                      editTpPosition?.entry_price ?? null,
                       setEditTp1Pct,
                       setEditTp2Pct,
+                      setEditTp1Price,
+                      setEditTp2Price,
                       setEditTp1SizePct,
                       setEditTp2SizePct
                     );
@@ -1220,17 +1339,48 @@ export default function PositionsClient({
 
               {editTpPlan !== "none" ? (
                 <>
+                  <div className="text-[11px] text-slate-500">
+                    Based on entry: {editTpPosition?.entry_price != null ? `$${Number(editTpPosition.entry_price).toFixed(2)}` : "—"}
+                  </div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <div className="space-y-1">
                       <label className="text-xs text-slate-500">TP1 %</label>
                       <input
                         value={editTp1Pct}
-                        onChange={(e) => setEditTp1Pct(e.target.value)}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setEditTp1Pct(v);
+                          const entry = Number(editTpPosition?.entry_price);
+                          const pct = Number(v);
+                          if (Number.isFinite(entry) && entry > 0 && Number.isFinite(pct) && pct > 0) {
+                            setEditTp1Price((entry * (1 + pct / 100)).toFixed(2));
+                          }
+                        }}
                         inputMode="decimal"
                         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                         disabled={editTpBusy}
                       />
                     </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">TP1 price</label>
+                      <input
+                        value={editTp1Price}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setEditTp1Price(v);
+                          const entry = Number(editTpPosition?.entry_price);
+                          const price = Number(v);
+                          if (Number.isFinite(entry) && entry > 0 && Number.isFinite(price) && price > 0) {
+                            setEditTp1Pct((((price - entry) / entry) * 100).toFixed(2));
+                          }
+                        }}
+                        inputMode="decimal"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                        disabled={editTpBusy}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
                     <div className="space-y-1">
                       <label className="text-xs text-slate-500">TP1 size %</label>
                       <input
@@ -1251,12 +1401,43 @@ export default function PositionsClient({
                     <label className="text-xs text-slate-500">TP2 %</label>
                     <input
                       value={editTp2Pct}
-                      onChange={(e) => setEditTp2Pct(e.target.value)}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setEditTp2Pct(v);
+                        const entry = Number(editTpPosition?.entry_price);
+                        const pct = Number(v);
+                        if (Number.isFinite(entry) && entry > 0 && Number.isFinite(pct) && pct > 0) {
+                          setEditTp2Price((entry * (1 + pct / 100)).toFixed(2));
+                        }
+                      }}
                       inputMode="decimal"
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                       disabled={editTpBusy}
                     />
                   </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-500">TP2 price</label>
+                    <input
+                      value={editTp2Price}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setEditTp2Price(v);
+                        const entry = Number(editTpPosition?.entry_price);
+                        const price = Number(v);
+                        if (Number.isFinite(entry) && entry > 0 && Number.isFinite(price) && price > 0) {
+                          setEditTp2Pct((((price - entry) / entry) * 100).toFixed(2));
+                        }
+                      }}
+                      inputMode="decimal"
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                      disabled={editTpBusy}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {editTpPlan === "tp1_tp2" ? (
+                <div className="grid gap-2 sm:grid-cols-2">
                   <div className="space-y-1">
                     <label className="text-xs text-slate-500">TP2 size %</label>
                     <input
