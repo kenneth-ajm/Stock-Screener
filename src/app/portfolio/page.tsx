@@ -28,6 +28,11 @@ type PositionRow = {
   strategy_version?: string | null;
   max_hold_days?: number | null;
   tp_model?: string | null;
+  tp_plan?: string | null;
+  tp1_pct?: number | null;
+  tp2_pct?: number | null;
+  tp1_size_pct?: number | null;
+  tp2_size_pct?: number | null;
   entry_date?: string | null;
 
   entry_price: number | null;

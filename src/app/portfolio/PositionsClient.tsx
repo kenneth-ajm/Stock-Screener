@@ -11,6 +11,11 @@ type PositionRow = {
   strategy_version?: string | null;
   max_hold_days?: number | null;
   tp_model?: string | null;
+  tp_plan?: string | null;
+  tp1_pct?: number | null;
+  tp2_pct?: number | null;
+  tp1_size_pct?: number | null;
+  tp2_size_pct?: number | null;
   entry_date?: string | null;
 
   entry_price: number | null;
@@ -40,6 +45,7 @@ type GroupedOpenRow = {
   unrealUsd: number | null;
   unrealPct: number | null;
   lotIds: string[];
+  tpPlanSummary: string | null;
 };
 
 function clsx(...xs: Array<string | false | null | undefined>) {
@@ -91,6 +97,37 @@ function strategyChipClass(version: string | null | undefined) {
   return version === "v1_trend_hold"
     ? "border-sky-200 bg-sky-50 text-sky-700"
     : "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function fmtPctShort(v: number | null | undefined) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  const n = Math.round(v * 100) / 100;
+  return Number.isInteger(n) ? `${n.toFixed(0)}%` : `${n.toFixed(2)}%`;
+}
+
+function tpPlanSummaryFor(p: {
+  tp_plan?: string | null;
+  tp1_pct?: number | null;
+  tp2_pct?: number | null;
+  tp1_size_pct?: number | null;
+  tp2_size_pct?: number | null;
+  strategy_version?: string | null;
+}) {
+  const plan = String(p.tp_plan ?? "").toUpperCase();
+  const isTrend = (p.strategy_version ?? "") === "v1_trend_hold";
+  const defaultTp1 = isTrend ? 10 : 5;
+  const defaultTp2 = isTrend ? 20 : 10;
+  const tp1 = typeof p.tp1_pct === "number" ? p.tp1_pct : defaultTp1;
+  const tp2 = typeof p.tp2_pct === "number" ? p.tp2_pct : defaultTp2;
+  const tp1Label = fmtPctShort(tp1) ?? `${tp1}%`;
+  const tp2Label = fmtPctShort(tp2) ?? `${tp2}%`;
+  const tp1Size = typeof p.tp1_size_pct === "number" ? p.tp1_size_pct : plan === "TP1_ONLY" ? 100 : 50;
+  const tp2Size = typeof p.tp2_size_pct === "number" ? p.tp2_size_pct : 50;
+
+  if (plan === "TRAIL_ONLY") return "Trail only";
+  if (plan === "MANUAL") return "Manual";
+  if (plan === "TP1_ONLY") return `TP1 ${tp1Label} (${Math.round(tp1Size)}%)`;
+  return `TP1 ${tp1Label} (${Math.round(tp1Size)}%) + TP2 ${tp2Label} (${Math.round(tp2Size)}%)`;
 }
 
 function dayDiffFromDate(dateStr: string | null | undefined) {
@@ -415,6 +452,8 @@ export default function PositionsClient({
       }
 
       const defaultMaxHold = (lots[0]?.strategy_version ?? "v2_core_momentum") === "v1_trend_hold" ? 45 : 7;
+      const planSet = new Set(lots.map((l) => tpPlanSummaryFor(l)));
+      const tpPlanSummary = planSet.size === 1 ? (Array.from(planSet)[0] ?? null) : "Mixed";
 
       rows.push({
         symbol,
@@ -428,6 +467,7 @@ export default function PositionsClient({
         unrealUsd,
         unrealPct,
         lotIds: lots.map((x) => x.id),
+        tpPlanSummary,
       });
     }
 
@@ -545,6 +585,7 @@ export default function PositionsClient({
                   <tr className="border-b border-slate-200">
                     <th className="p-3">Symbol</th>
                     <th className="p-3">Strategy</th>
+                    <th className="p-3">TP Plan</th>
                     <th className="p-3">Avg cost</th>
                     <th className="p-3">Last</th>
                     <th className="p-3">Qty</th>
@@ -557,7 +598,7 @@ export default function PositionsClient({
                 <tbody>
                   {groupedOpen.length === 0 ? (
                     <tr>
-                      <td className="p-3 text-slate-500" colSpan={9}>
+                      <td className="p-3 text-slate-500" colSpan={10}>
                         No open positions.
                       </td>
                     </tr>
@@ -589,6 +630,7 @@ export default function PositionsClient({
                               {strategyLabel(g.strategy_version)}
                             </span>
                           </td>
+                          <td className="p-3 text-slate-700">{g.tpPlanSummary ?? "—"}</td>
                           <td className="p-3 text-slate-800">{formatMoney(g.avgEntry)}</td>
                           <td className="p-3 text-slate-800">{formatMoney(g.last)}</td>
                           <td className="p-3 text-slate-800">{formatInt(g.qty)}</td>
@@ -630,6 +672,7 @@ export default function PositionsClient({
                   <tr className="border-b border-slate-200">
                     <th className="p-3">Symbol</th>
                     <th className="p-3">Strategy</th>
+                    <th className="p-3">TP Plan</th>
                     <th className="p-3">Entry</th>
                     <th className="p-3">Last</th>
                     <th className="p-3">Qty</th>
@@ -642,7 +685,7 @@ export default function PositionsClient({
                 <tbody>
                   {openFiltered.length === 0 ? (
                     <tr>
-                      <td className="p-3 text-slate-500" colSpan={9}>
+                      <td className="p-3 text-slate-500" colSpan={10}>
                         No open positions.
                       </td>
                     </tr>
@@ -692,6 +735,7 @@ export default function PositionsClient({
                               {strategyLabel(strategyVer)}
                             </span>
                           </td>
+                          <td className="p-3 text-slate-700">{tpPlanSummaryFor(p)}</td>
                           <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
                           <td className="p-3 text-slate-800">{formatMoney(last)}</td>
                           <td className="p-3 text-slate-800">{qty || "—"}</td>

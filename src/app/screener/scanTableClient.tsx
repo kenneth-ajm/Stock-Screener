@@ -176,6 +176,14 @@ function strategyName(strategyVersion: string) {
   return strategyVersion === "v1_trend_hold" ? "Trend Hold" : "Momentum Swing";
 }
 
+type TpPlan = "TP1_ONLY" | "TP1_TP2" | "TRAIL_ONLY" | "MANUAL";
+
+function defaultTpPercents(strategyVersion: string) {
+  return strategyVersion === "v1_trend_hold"
+    ? { tp1Pct: 10, tp2Pct: 20 }
+    : { tp1Pct: 5, tp2Pct: 10 };
+}
+
 function Toast({ msg }: { msg: string }) {
   return (
     <div className="fixed bottom-5 right-5 z-[10001]">
@@ -280,6 +288,11 @@ export default function ScanTableClient({
   const [ticketShares, setTicketShares] = useState<string>("");
   const [ticketEntry, setTicketEntry] = useState<string>("");
   const [ticketStop, setTicketStop] = useState<string>("");
+  const [ticketTpPlan, setTicketTpPlan] = useState<TpPlan>("TP1_TP2");
+  const [ticketTp1Pct, setTicketTp1Pct] = useState<string>("");
+  const [ticketTp2Pct, setTicketTp2Pct] = useState<string>("");
+  const [ticketTp1SizePct, setTicketTp1SizePct] = useState<string>("");
+  const [ticketTp2SizePct, setTicketTp2SizePct] = useState<string>("");
   const [staleOpenConfirmed, setStaleOpenConfirmed] = useState(false);
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [ticketSubmitting, setTicketSubmitting] = useState(false);
@@ -461,6 +474,12 @@ export default function ScanTableClient({
             : Number(row.entry).toFixed(2)
       );
       setTicketStop(calc.stop !== null ? calc.stop.toFixed(2) : Number(row.stop).toFixed(2));
+      const defaults = defaultTpPercents(strategyVersion);
+      setTicketTpPlan("TP1_TP2");
+      setTicketTp1Pct(String(defaults.tp1Pct));
+      setTicketTp2Pct(String(defaults.tp2Pct));
+      setTicketTp1SizePct("50");
+      setTicketTp2SizePct("50");
       setStaleOpenConfirmed(false);
       setTicketError(null);
       if (json?.ok) {
@@ -553,6 +572,27 @@ export default function ScanTableClient({
       setTicketError("Stop must be positive and strictly below entry.");
       return;
     }
+    const tp1Pct = Number(ticketTp1Pct);
+    const tp2Pct = Number(ticketTp2Pct);
+    const tp1SizePct = Math.round(Number(ticketTp1SizePct));
+    const tp2SizePct = Math.round(Number(ticketTp2SizePct));
+    const plan = ticketTpPlan;
+    if ((plan === "TP1_ONLY" || plan === "TP1_TP2") && (!Number.isFinite(tp1Pct) || tp1Pct <= 0)) {
+      setTicketError("TP1 % must be a positive number.");
+      return;
+    }
+    if (plan === "TP1_TP2" && (!Number.isFinite(tp2Pct) || tp2Pct <= 0)) {
+      setTicketError("TP2 % must be a positive number.");
+      return;
+    }
+    if ((plan === "TP1_ONLY" || plan === "TP1_TP2") && (!Number.isFinite(tp1SizePct) || tp1SizePct < 0 || tp1SizePct > 100)) {
+      setTicketError("TP1 size % must be between 0 and 100.");
+      return;
+    }
+    if (plan === "TP1_TP2" && (!Number.isFinite(tp2SizePct) || tp2SizePct < 0 || tp2SizePct > 100)) {
+      setTicketError("TP2 size % must be between 0 and 100.");
+      return;
+    }
     if (staleScan && !staleOpenConfirmed) {
       setTicketError("Scan is stale. Confirm stale open before submitting.");
       return;
@@ -583,6 +623,11 @@ export default function ScanTableClient({
           strategy_version: strategyVersion,
           max_hold_days: maxHoldDays,
           tp_model: tpModel,
+          tp_plan: plan,
+          tp1_pct: plan === "TRAIL_ONLY" || plan === "MANUAL" ? null : tp1Pct,
+          tp2_pct: plan === "TP1_TP2" ? tp2Pct : null,
+          tp1_size_pct: plan === "TRAIL_ONLY" || plan === "MANUAL" ? null : tp1SizePct,
+          tp2_size_pct: plan === "TP1_TP2" ? tp2SizePct : null,
           equity_snapshot: equitySnapshot,
         }),
       });
@@ -728,6 +773,96 @@ export default function ScanTableClient({
                 inputMode="decimal"
                 disabled={ticketSubmitting}
               />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Take Profit Plan</div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <div className="space-y-1 sm:col-span-3">
+                <label className="text-xs text-slate-500">Plan</label>
+                <select
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  value={ticketTpPlan}
+                  onChange={(e) => {
+                    const next = e.target.value as TpPlan;
+                    const defaults = defaultTpPercents(strategyVersion);
+                    setTicketTpPlan(next);
+                    if (next === "TP1_ONLY") {
+                      setTicketTp1Pct(String(defaults.tp1Pct));
+                      setTicketTp1SizePct("100");
+                      setTicketTp2Pct("");
+                      setTicketTp2SizePct("");
+                    } else if (next === "TP1_TP2") {
+                      setTicketTp1Pct(String(defaults.tp1Pct));
+                      setTicketTp2Pct(String(defaults.tp2Pct));
+                      setTicketTp1SizePct("50");
+                      setTicketTp2SizePct("50");
+                    } else {
+                      setTicketTp1Pct("");
+                      setTicketTp2Pct("");
+                      setTicketTp1SizePct("");
+                      setTicketTp2SizePct("");
+                    }
+                  }}
+                  disabled={ticketSubmitting}
+                >
+                  <option value="TP1_ONLY">TP1 only</option>
+                  <option value="TP1_TP2">TP1+TP2</option>
+                  <option value="TRAIL_ONLY">Trail only</option>
+                  <option value="MANUAL">Manual</option>
+                </select>
+              </div>
+
+              {ticketTpPlan === "TP1_ONLY" || ticketTpPlan === "TP1_TP2" ? (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-500">TP1 %</label>
+                    <input
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                      value={ticketTp1Pct}
+                      onChange={(e) => setTicketTp1Pct(e.target.value)}
+                      inputMode="decimal"
+                      disabled={ticketSubmitting}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-500">TP1 size %</label>
+                    <input
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                      value={ticketTp1SizePct}
+                      onChange={(e) => setTicketTp1SizePct(e.target.value)}
+                      inputMode="numeric"
+                      disabled={ticketSubmitting}
+                    />
+                  </div>
+                </>
+              ) : null}
+
+              {ticketTpPlan === "TP1_TP2" ? (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-500">TP2 %</label>
+                    <input
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                      value={ticketTp2Pct}
+                      onChange={(e) => setTicketTp2Pct(e.target.value)}
+                      inputMode="decimal"
+                      disabled={ticketSubmitting}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-500">TP2 size %</label>
+                    <input
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                      value={ticketTp2SizePct}
+                      onChange={(e) => setTicketTp2SizePct(e.target.value)}
+                      inputMode="numeric"
+                      disabled={ticketSubmitting}
+                    />
+                  </div>
+                </>
+              ) : null}
             </div>
           </div>
 

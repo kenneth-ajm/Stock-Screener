@@ -41,6 +41,24 @@ export async function POST(req: Request) {
       ? null
       : Math.max(1, Math.floor(Number(max_hold_days_raw)));
   const tp_model = body?.tp_model == null ? null : String(body.tp_model);
+  const tp_plan_raw = body?.tp_plan == null ? "" : String(body.tp_plan).trim().toUpperCase();
+  const tp_plan =
+    tp_plan_raw === "TP1_ONLY" ||
+    tp_plan_raw === "TP1_TP2" ||
+    tp_plan_raw === "TRAIL_ONLY" ||
+    tp_plan_raw === "MANUAL"
+      ? tp_plan_raw
+      : null;
+  const tp1_pct_raw = body?.tp1_pct;
+  const tp2_pct_raw = body?.tp2_pct;
+  const tp1_size_pct_raw = body?.tp1_size_pct;
+  const tp2_size_pct_raw = body?.tp2_size_pct;
+  const tp1_pct = tp1_pct_raw == null || tp1_pct_raw === "" ? null : Number(tp1_pct_raw);
+  const tp2_pct = tp2_pct_raw == null || tp2_pct_raw === "" ? null : Number(tp2_pct_raw);
+  const tp1_size_pct =
+    tp1_size_pct_raw == null || tp1_size_pct_raw === "" ? null : Math.round(Number(tp1_size_pct_raw));
+  const tp2_size_pct =
+    tp2_size_pct_raw == null || tp2_size_pct_raw === "" ? null : Math.round(Number(tp2_size_pct_raw));
 
   if (!symbol) return NextResponse.json({ ok: false, error: "symbol required" }, { status: 400 });
   if (!Number.isFinite(entry_price) || entry_price <= 0) {
@@ -108,6 +126,103 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
+  if (tp_plan_raw && !tp_plan) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "tp_plan invalid",
+        detail: {
+          received: { tp_plan: tp_plan_raw },
+          rule: "tp_plan must be TP1_ONLY | TP1_TP2 | TRAIL_ONLY | MANUAL",
+        },
+      },
+      { status: 400 }
+    );
+  }
+  if (tp1_pct !== null && (!Number.isFinite(tp1_pct) || tp1_pct <= 0)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "tp1_pct invalid",
+        detail: {
+          received: { tp1_pct: tp1_pct_raw },
+          rule: "tp1_pct must be > 0 when provided",
+        },
+      },
+      { status: 400 }
+    );
+  }
+  if (tp2_pct !== null && (!Number.isFinite(tp2_pct) || tp2_pct <= 0)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "tp2_pct invalid",
+        detail: {
+          received: { tp2_pct: tp2_pct_raw },
+          rule: "tp2_pct must be > 0 when provided",
+        },
+      },
+      { status: 400 }
+    );
+  }
+  if (
+    tp1_size_pct !== null &&
+    (!Number.isFinite(tp1_size_pct) || tp1_size_pct < 0 || tp1_size_pct > 100)
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "tp1_size_pct invalid",
+        detail: {
+          received: { tp1_size_pct: tp1_size_pct_raw },
+          rule: "tp1_size_pct must be between 0 and 100",
+        },
+      },
+      { status: 400 }
+    );
+  }
+  if (
+    tp2_size_pct !== null &&
+    (!Number.isFinite(tp2_size_pct) || tp2_size_pct < 0 || tp2_size_pct > 100)
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "tp2_size_pct invalid",
+        detail: {
+          received: { tp2_size_pct: tp2_size_pct_raw },
+          rule: "tp2_size_pct must be between 0 and 100",
+        },
+      },
+      { status: 400 }
+    );
+  }
+  if ((tp_plan === "TP1_ONLY" || tp_plan === "TP1_TP2") && tp1_pct === null) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "tp1_pct required",
+        detail: {
+          received: { tp_plan, tp1_pct: tp1_pct_raw },
+          rule: "tp1_pct is required for TP1_ONLY or TP1_TP2",
+        },
+      },
+      { status: 400 }
+    );
+  }
+  if (tp_plan === "TP1_TP2" && tp2_pct === null) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "tp2_pct required",
+        detail: {
+          received: { tp_plan, tp2_pct: tp2_pct_raw },
+          rule: "tp2_pct is required for TP1_TP2",
+        },
+      },
+      { status: 400 }
+    );
+  }
 
   // default portfolio
   const { data: portfolio, error: pErr } = await supabase
@@ -153,6 +268,11 @@ export async function POST(req: Request) {
       strategy_version,
       max_hold_days,
       tp_model,
+      tp_plan,
+      tp1_pct,
+      tp2_pct,
+      tp1_size_pct,
+      tp2_size_pct,
       status: "OPEN",
     })
     .select("id")
