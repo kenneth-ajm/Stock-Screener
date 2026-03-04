@@ -41,6 +41,8 @@ type PositionRow = {
 
   closed_at: string | null;
   exit_price: number | null;
+  exit_reason?: string | null;
+  exit_date?: string | null;
 };
 
 function formatMoney(x: number | null | undefined) {

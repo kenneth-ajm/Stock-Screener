@@ -30,6 +30,8 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
   const positionId = String(body?.position_id ?? "").trim();
+  const exitReason = String(body?.exit_reason ?? "MANUAL").trim().toUpperCase();
+  const allowedReasons = new Set(["TP1", "TP2", "STOP", "MANUAL", "TIME"]);
 
   // ✅ Require exit_price for proper closed-history + P/L
   const exitPriceRaw = body?.exit_price;
@@ -42,6 +44,17 @@ export async function POST(req: Request) {
   if (!Number.isFinite(exitPrice) || exitPrice <= 0) {
     return NextResponse.json(
       { ok: false, error: "exit_price is required and must be a positive number" },
+      { status: 400 }
+    );
+  }
+
+  if (!allowedReasons.has(exitReason)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "exit_reason must be one of TP1, TP2, STOP, MANUAL, TIME",
+        received: exitReason || null,
+      },
       { status: 400 }
     );
   }
@@ -70,22 +83,40 @@ export async function POST(req: Request) {
   }
 
   const closedAt = new Date().toISOString();
+  const exitDate = closedAt.slice(0, 10);
 
-  const { data: updated, error } = await supabase
-    .from("portfolio_positions")
-    .update({
+  const attempt = async (withNewColumns: boolean) => {
+    const patch: Record<string, unknown> = {
       status: "CLOSED",
       closed_at: closedAt,
       exit_price: exitPrice,
-    })
-    .eq("id", positionId)
-    .eq("user_id", user.id)
-    .select("id, status, closed_at, exit_price")
-    .maybeSingle();
+    };
+    if (withNewColumns) {
+      patch.exit_reason = exitReason;
+      patch.exit_date = exitDate;
+    }
+    const query = supabase
+      .from("portfolio_positions")
+      .update(patch)
+      .eq("id", positionId)
+      .eq("user_id", user.id);
+    return withNewColumns
+      ? query.select("id, status, closed_at, exit_price, exit_reason, exit_date").maybeSingle()
+      : query.select("id, status, closed_at, exit_price").maybeSingle();
+  };
+
+  let { data: updated, error } = await attempt(true);
+
+  // Backward compatibility: if DB migration not yet applied, write legacy fields only.
+  if (error && /exit_reason|exit_date/i.test(error.message ?? "")) {
+    const legacy = await attempt(false);
+    updated = legacy.data;
+    error = legacy.error;
+  }
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true, position: updated });
+  return NextResponse.json({ ok: true, position: updated, exit_reason: exitReason, exit_date: exitDate });
 }

@@ -22,6 +22,8 @@ type PositionRow = {
 
   exit_price: number | null;
   closed_at: string | null;
+  exit_reason?: "TP1" | "TP2" | "STOP" | "MANUAL" | "TIME" | string | null;
+  exit_date?: string | null;
 
   created_at?: string | null;
 };
@@ -184,6 +186,7 @@ export default function PositionsClient({
   const [closeModalOpen, setCloseModalOpen] = useState(false);
   const [activePosition, setActivePosition] = useState<PositionRow | null>(null);
   const [exitPriceInput, setExitPriceInput] = useState("");
+  const [exitReasonInput, setExitReasonInput] = useState<"TP1" | "TP2" | "STOP" | "MANUAL" | "TIME">("MANUAL");
   const [closeError, setCloseError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
 
@@ -217,6 +220,7 @@ export default function PositionsClient({
   function openCloseModal(p: PositionRow) {
     setActivePosition(p);
     setExitPriceInput("");
+    setExitReasonInput("MANUAL");
     setCloseError(null);
     setCloseModalOpen(true);
   }
@@ -226,6 +230,7 @@ export default function PositionsClient({
     setCloseModalOpen(false);
     setActivePosition(null);
     setExitPriceInput("");
+    setExitReasonInput("MANUAL");
     setCloseError(null);
   }
 
@@ -245,7 +250,11 @@ export default function PositionsClient({
       const res = await fetch("/api/positions/close", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ position_id: activePosition.id, exit_price: exitPrice }),
+        body: JSON.stringify({
+          position_id: activePosition.id,
+          exit_price: exitPrice,
+          exit_reason: exitReasonInput,
+        }),
       });
 
       const payload = await res.json().catch(() => null);
@@ -706,6 +715,26 @@ export default function PositionsClient({
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
                   disabled={closing}
                 />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs text-slate-500">Exit reason</label>
+                <select
+                  value={exitReasonInput}
+                  onChange={(e) =>
+                    setExitReasonInput(
+                      (e.target.value as "TP1" | "TP2" | "STOP" | "MANUAL" | "TIME") ?? "MANUAL"
+                    )
+                  }
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  disabled={closing}
+                >
+                  <option value="MANUAL">Manual</option>
+                  <option value="TP1">TP1</option>
+                  <option value="TP2">TP2</option>
+                  <option value="STOP">Stop</option>
+                  <option value="TIME">Time stop</option>
+                </select>
                 {closeError ? <div className="text-xs text-rose-600">{closeError}</div> : null}
               </div>
 
@@ -821,6 +850,7 @@ export default function PositionsClient({
                         <th className="p-3">Strategy</th>
                         <th className="p-3">Entry</th>
                         <th className="p-3">Exit</th>
+                        <th className="p-3">Reason</th>
                         <th className="p-3">P/L %</th>
                         <th className="p-3">Closed</th>
                       </tr>
@@ -847,6 +877,7 @@ export default function PositionsClient({
                             </td>
                             <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
                             <td className="p-3 text-slate-800">{formatMoney(p.exit_price)}</td>
+                            <td className="p-3 text-slate-700">{p.exit_reason ?? "—"}</td>
                             <td className={clsx("p-3 font-semibold", pnlClass)}>
                               {typeof pnlPct === "number" ? formatPct(pnlPct) : "—"}
                             </td>
