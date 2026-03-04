@@ -1,4 +1,5 @@
 import {
+  atr,
   isoDate,
   sma,
   type PriceBar,
@@ -33,8 +34,16 @@ export function evaluateTrendHold(opts: {
   const sma200 = sma(closes, 200);
   const sma200Ago30 = sma(closes.slice(0, closes.length - 30), 200);
   const avgVolume20 = sma(volumes, 20);
+  const atr14 = atr(bars, 14);
 
-  if (sma50 == null || sma150 == null || sma200 == null || sma200Ago30 == null || avgVolume20 == null) {
+  if (
+    sma50 == null ||
+    sma150 == null ||
+    sma200 == null ||
+    sma200Ago30 == null ||
+    avgVolume20 == null ||
+    atr14 == null
+  ) {
     return null;
   }
 
@@ -63,12 +72,18 @@ export function evaluateTrendHold(opts: {
   const c6 = stock252Return != null && spyRet != null ? stock252Return >= spyRet : false;
   const c7 = close >= 5;
   const c8 = avgDollarVolume20 >= 5_000_000;
+  const rsOutperformance = rsProxy ?? -Infinity;
+  const atrRatio = close > 0 ? atr14 / close : Infinity;
+  const c9 = rsOutperformance >= 0.05;
+  const c10 = close >= 0.8 * high52w;
+  const c11 = atrRatio <= 0.06;
 
   const leadershipOk = c4 && c5 && c6;
-  const rsOk = c6;
+  const rsOk = c9;
   const liquidityOk = c7 && c8;
-  const strictBuy = trendStructureOk && leadershipOk && rsOk && liquidityOk;
-  const watchEligible = trendStructureOk;
+  const templatePassed = trendStructureOk && leadershipOk && liquidityOk;
+  const strictBuy = templatePassed && c9 && c10 && c11;
+  const watchEligible = templatePassed;
 
   let rawSignal: "BUY" | "WATCH" | "AVOID" = "AVOID";
   if (strictBuy) rawSignal = "BUY";
@@ -77,7 +92,9 @@ export function evaluateTrendHold(opts: {
   const trendScore = trendStructureOk ? 50 : 0;
   const leadershipScore = leadershipOk ? 35 : 0;
   const liquidityScore = liquidityOk ? 15 : 0;
-  const confidence = trendScore + leadershipScore + liquidityScore;
+  let confidence = trendScore + leadershipScore + liquidityScore;
+  if (rawSignal === "WATCH") confidence = Math.min(confidence, 79);
+  if (rawSignal === "AVOID") confidence = Math.min(confidence, 49);
 
   const rsNorm = rsProxy == null ? 0 : clamp((rsProxy + 0.2) / 0.8, 0, 1);
   const nearHighNorm = clamp((nearHighPct - 0.75) / 0.25, 0, 1);
@@ -128,11 +145,25 @@ export function evaluateTrendHold(opts: {
       category: "leadership",
     },
     {
-      key: "rs_proxy_vs_spy",
-      label: "RS proxy >= SPY",
-      ok: c6,
-      detail: `stock ${(100 * (stock252Return ?? 0)).toFixed(1)}% vs SPY ${(100 * (spyRet ?? 0)).toFixed(1)}% (proxy ${(100 * (rsProxy ?? 0)).toFixed(1)}%)`,
+      key: "rs_outperformance",
+      label: "RS outperformance >= 5%",
+      ok: c9,
+      detail: `stock ${(100 * (stock252Return ?? 0)).toFixed(1)}% vs SPY ${(100 * (spyRet ?? 0)).toFixed(1)}% (outperformance ${(100 * (rsOutperformance || 0)).toFixed(1)}%)`,
       category: "rs",
+    },
+    {
+      key: "near_52w_high_buy",
+      label: "Close >= 80% of 52w high",
+      ok: c10,
+      detail: `close ${entry.toFixed(2)} vs 80%*high ${(0.8 * high52w).toFixed(2)}`,
+      category: "leadership",
+    },
+    {
+      key: "atr_ratio",
+      label: "ATR14/close <= 6%",
+      ok: c11,
+      detail: `ATR ratio ${(atrRatio * 100).toFixed(2)}%`,
+      category: "risk",
     },
     {
       key: "price_floor",
@@ -159,9 +190,10 @@ export function evaluateTrendHold(opts: {
 
   const reasonSummaryBits: string[] = [];
   reasonSummaryBits.push(`${signal}`);
-  reasonSummaryBits.push(trendStructureOk ? "leader trend template" : "trend template failed");
+  reasonSummaryBits.push(templatePassed ? "leader trend template" : "trend template failed");
   reasonSummaryBits.push(rsOk ? "RS strong" : "RS weak");
-  reasonSummaryBits.push(c4 ? "near highs" : "off highs");
+  reasonSummaryBits.push(c10 ? "near highs" : "off highs");
+  reasonSummaryBits.push(c11 ? "volatility controlled" : "volatility high");
   reasonSummaryBits.push(liquidityOk ? "liquidity ok" : "liquidity weak");
   if (downgradedBuyToWatch) reasonSummaryBits.push("defensive regime downgrade");
 
@@ -190,7 +222,11 @@ export function evaluateTrendHold(opts: {
         stock252Return: stock252Return ?? 0,
         spy252Return: spyRet ?? 0,
         rsProxy: rsProxy ?? 0,
+        rsOutperformance: Number.isFinite(rsOutperformance) ? rsOutperformance : -1,
         nearHighPct,
+        nearHigh80Pct: high52w > 0 ? close / (0.8 * high52w) : 0,
+        atr14,
+        atrRatio,
         aboveLowRatio,
         sma200Slope,
         avgVolume20,
