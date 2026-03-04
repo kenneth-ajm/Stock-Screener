@@ -12,6 +12,7 @@ export type PriceBar = {
 export type RuleCheck = {
   key: string;
   label: string;
+  category?: "trend" | "momentum" | "volume" | "risk" | "regime" | "execution";
   ok: boolean;
   detail: string;
 };
@@ -352,7 +353,19 @@ export function evaluateCoreMomentumSwing(opts: {
     },
   ];
 
-  const passCount = checks.filter((c) => c.ok).length;
+  const checksWithCategory: RuleCheck[] = checks.map((c) => {
+    const k = String(c.key ?? "").toLowerCase();
+    let category: RuleCheck["category"] = "trend";
+    if (k.includes("regime")) category = "regime";
+    else if (k.includes("volume")) category = "volume";
+    else if (k.includes("rsi") || k.includes("momentum")) category = "momentum";
+    else if (k.includes("extension") || k.includes("atr") || k.includes("liquidity") || k.includes("market_cap"))
+      category = "risk";
+    else if (k.includes("execution")) category = "execution";
+    return { ...c, category };
+  });
+
+  const passCount = checksWithCategory.filter((c) => c.ok).length;
   const reasonSummary = [
     `${signal} (${score}/100)`,
     `trend ${trendCore ? "strong" : "mixed"}`,
@@ -393,7 +406,7 @@ export function evaluateCoreMomentumSwing(opts: {
         distInAtr,
         marketCap,
       },
-      checks,
+      checks: checksWithCategory,
       score_breakdown: scoreBreakdown,
       score: Math.round(score),
       trade_plan: {

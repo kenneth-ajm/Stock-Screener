@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { computeExecutionGuidance, type ExecutionAction } from "@/lib/execution";
+import { fmt2, fmtCompact, fmtDate, fmtInt, fmtMoney } from "@/lib/format";
 
 type Row = {
   symbol: string;
@@ -21,23 +22,6 @@ type DisplayRow = Row & {
   atr14: number | null;
   execution: ReturnType<typeof computeExecutionGuidance>;
 };
-
-function fmt2(n: number | null | undefined) {
-  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
-  return n.toFixed(2);
-}
-
-function fmtMoney(n: number | null | undefined) {
-  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
-  const sign = n > 0 ? "+" : "";
-  return `${sign}$${n.toFixed(2)}`;
-}
-
-function fmtPct(p: number | null | undefined) {
-  if (typeof p !== "number" || !Number.isFinite(p)) return "—";
-  const sign = p > 0 ? "+" : "";
-  return `${sign}${(p * 100).toFixed(1)}%`;
-}
 
 function chipClass(active: boolean) {
   return [
@@ -137,15 +121,39 @@ function extractCalcMetrics(payload: any, fallback?: { entry?: number; stop?: nu
   };
 }
 
-function categoryForCheck(c: any): "Trend" | "Momentum" | "Volume" | "Extension" | "Regime" {
+type CheckCategory = "trend" | "momentum" | "volume" | "risk" | "regime" | "execution";
+
+const CHECK_CATEGORY_ORDER: CheckCategory[] = [
+  "trend",
+  "momentum",
+  "volume",
+  "risk",
+  "regime",
+  "execution",
+];
+
+function categoryForCheck(c: any): CheckCategory {
+  const explicit = String(c?.category ?? "").toLowerCase();
+  if (CHECK_CATEGORY_ORDER.includes(explicit as CheckCategory)) return explicit as CheckCategory;
   const key = String(c?.key ?? "").toLowerCase();
   const label = String(c?.label ?? "").toLowerCase();
   const text = `${key} ${label}`;
-  if (text.includes("regime")) return "Regime";
-  if (text.includes("volume")) return "Volume";
-  if (text.includes("rsi") || text.includes("momentum")) return "Momentum";
-  if (text.includes("extend") || text.includes("atr")) return "Extension";
-  return "Trend";
+  if (text.includes("regime")) return "regime";
+  if (text.includes("volume")) return "volume";
+  if (text.includes("rsi") || text.includes("momentum")) return "momentum";
+  if (text.includes("stop") || text.includes("risk") || text.includes("extend") || text.includes("atr"))
+    return "risk";
+  if (text.includes("execution")) return "execution";
+  return "trend";
+}
+
+function categoryLabel(c: CheckCategory) {
+  if (c === "trend") return "Trend";
+  if (c === "momentum") return "Momentum";
+  if (c === "volume") return "Volume";
+  if (c === "risk") return "Risk";
+  if (c === "regime") return "Regime";
+  return "Execution";
 }
 
 function maxHoldDaysForStrategy(strategyVersion: string) {
@@ -264,6 +272,7 @@ export default function ScanTableClient({
   const [ticketStop, setTicketStop] = useState<string>("");
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [ticketSubmitting, setTicketSubmitting] = useState(false);
+  const [whyFailuresOnly, setWhyFailuresOnly] = useState(false);
 
   const [toast, setToast] = useState<string | null>(null);
   function showToast(msg: string) {
@@ -453,6 +462,7 @@ export default function ScanTableClient({
 
   async function doDetails(row: DisplayRow | Row) {
     setModalBusy(true);
+    setWhyFailuresOnly(false);
     showToast(`Details: ${row.symbol}`);
     try {
       const res = await fetch("/api/why", {
@@ -695,7 +705,7 @@ export default function ScanTableClient({
             <KV k="Position cost" v={positionCost !== null ? fmtMoney(positionCost) : "—"} />
             <KV k="Cash after open" v={cashRemainingAfter !== null ? fmtMoney(cashRemainingAfter) : "—"} />
             <KV k="Max hold (days)" v={String(maxHoldDays)} />
-            <KV k="Time-stop date" v={timeStopDate.toISOString().slice(0, 10)} />
+            <KV k="Time-stop date" v={fmtDate(timeStopDate)} />
           </div>
 
           {stopTooWide ? (
@@ -746,44 +756,92 @@ export default function ScanTableClient({
       const why = j?.row ?? j;
       const summary = why?.reason_summary ?? why?.summary ?? null;
       const checks = why?.reason_json?.checks ?? why?.checks ?? null;
-      const groupedChecks: Record<string, any[]> = Array.isArray(checks)
-        ? checks.reduce((acc: Record<string, any[]>, c: any) => {
-            const cat = categoryForCheck(c);
-            if (!acc[cat]) acc[cat] = [];
-            acc[cat].push(c);
-            return acc;
-          }, {})
-        : {};
+      const indicators = why?.reason_json?.indicators ?? {};
+      const groupedChecks: Record<CheckCategory, any[]> = CHECK_CATEGORY_ORDER.reduce(
+        (acc, k) => ({ ...acc, [k]: [] }),
+        {} as Record<CheckCategory, any[]>
+      );
+      if (Array.isArray(checks)) {
+        for (const c of checks) {
+          const cat = categoryForCheck(c);
+          groupedChecks[cat].push(c);
+        }
+      }
+      const visibleByCategory = CHECK_CATEGORY_ORDER.map((cat) => ({
+        cat,
+        items: whyFailuresOnly ? groupedChecks[cat].filter((x) => !x?.ok) : groupedChecks[cat],
+      })).filter((x) => x.items.length > 0);
+
+      const volSpike = asNumber(indicators?.volumeSpike);
+      const metricChips = [
+        { label: "RSI", value: fmt2(asNumber(indicators?.rsi14)) },
+        { label: "ATR", value: fmt2(asNumber(indicators?.atr14)) },
+        { label: "Vol", value: volSpike !== null ? `${fmt2(volSpike)}x` : "—" },
+        { label: "Dist SMA20", value: fmt2(asNumber(indicators?.distFromSma20)) },
+        { label: "Dist ATR", value: fmt2(asNumber(indicators?.distInAtr)) },
+        { label: "Dollar Vol", value: fmtCompact(asNumber(indicators?.avgDollarVolume20)) },
+      ];
 
       return (
         <div className="space-y-3">
           {summary ? (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
-              <div className="text-xs text-slate-500">Summary</div>
+              <div className="text-xs text-slate-500">Why summary</div>
               <div className="mt-1 font-semibold">{String(summary)}</div>
             </div>
           ) : null}
 
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-semibold text-slate-900">Checks</div>
+            <label className="inline-flex items-center gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={whyFailuresOnly}
+                onChange={(e) => setWhyFailuresOnly(e.target.checked)}
+              />
+              Only show failures
+            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {metricChips.map((m) => (
+              <span
+                key={m.label}
+                className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700"
+              >
+                {m.label}: {m.value}
+              </span>
+            ))}
+          </div>
+
           {Array.isArray(checks) ? (
             <div className="rounded-xl border border-slate-200 bg-white p-3">
-              <div className="text-sm font-semibold text-slate-900">Checks</div>
               <div className="mt-2 space-y-3">
-                {Object.entries(groupedChecks).map(([group, groupItems]) => (
-                  <div key={group} className="space-y-2">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{group}</div>
-                    <div className="space-y-2">
-                      {groupItems.map((c: any, idx: number) => (
-                        <div key={`${group}-${idx}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                {visibleByCategory.map(({ cat, items }) => (
+                  <div key={cat} className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      {categoryLabel(cat)}
+                    </div>
+                    <ul className="space-y-2 pl-4 list-disc">
+                      {items.map((c: any, idx: number) => (
+                        <li key={`${cat}-${idx}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
                           <div className="flex items-start justify-between gap-3">
-                            <div className="text-sm font-medium text-slate-900">{c?.label ?? "Check"}</div>
-                            <div className={clsx("text-xs font-semibold", c?.ok ? "text-emerald-600" : "text-rose-600")}>
+                            <div className="text-sm font-medium text-slate-900">
+                              {c?.label ?? "Check"}
+                              {c?.detail ? <span className="ml-1 text-xs text-slate-500">({String(c.detail)})</span> : null}
+                            </div>
+                            <div
+                              className={clsx(
+                                "text-xs font-semibold",
+                                c?.ok ? "text-emerald-600" : "text-rose-600"
+                              )}
+                            >
                               {c?.ok ? "✓ PASS" : "✕ FAIL"}
                             </div>
                           </div>
-                          {c?.detail ? <div className="mt-1 text-xs text-slate-500">{String(c.detail)}</div> : null}
-                        </div>
+                        </li>
                       ))}
-                    </div>
+                    </ul>
                   </div>
                 ))}
               </div>
@@ -847,19 +905,19 @@ export default function ScanTableClient({
       <div className="grid gap-3 sm:grid-cols-4">
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">SHOWING</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{countsShown.showing}</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{fmtInt(countsShown.showing)}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">BUY</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{countsShown.buy}</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{fmtInt(countsShown.buy)}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">WATCH</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{countsShown.watch}</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{fmtInt(countsShown.watch)}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">AVOID</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{countsShown.avoid}</div>
+          <div className="mt-1 text-2xl font-semibold text-slate-900">{fmtInt(countsShown.avoid)}</div>
         </div>
       </div>
 
@@ -899,9 +957,9 @@ export default function ScanTableClient({
                 <th className="p-3">SIGNAL</th>
                 <th className="p-3">CONF</th>
                 <th className="p-3">ENTRY</th>
-                <th className="p-3">STOP</th>
                 <th className="p-3">LIVE</th>
-                <th className="p-3">Δ vs ENTRY</th>
+                <th className="p-3">STOP</th>
+                <th className="p-3">TP1 / TP2</th>
                 <th className="p-3 text-right">ACTIONS</th>
               </tr>
             </thead>
@@ -917,8 +975,6 @@ export default function ScanTableClient({
                 filtered.map((r) => {
                   const live = r.livePrice;
 
-                  const entry = Number(r.entry);
-                  const dEntry = typeof live === "number" && Number.isFinite(live) ? (live - entry) / entry : null;
                   const lateByPct = r.execution.flags.late ? r.execution.extensionPct * 100 : 0;
                   const isExtended =
                     (r.execution.extensionAtr !== null && r.execution.extensionAtr > 1.5) ||
@@ -928,15 +984,6 @@ export default function ScanTableClient({
                   if (isExtended) notes.push("Extended");
                   if (r.execution.flags.stopVeryWide && !r.execution.flags.stopTooWide) notes.push("Stop very wide");
                   if (live === null) notes.push("No live");
-
-                  const dEntryClass =
-                    typeof dEntry === "number"
-                      ? dEntry > 0
-                        ? "text-emerald-600"
-                        : dEntry < 0
-                          ? "text-rose-600"
-                          : "text-slate-600"
-                      : "text-slate-500";
 
                   return (
                     <tr key={r.symbol} className="border-b border-slate-100">
@@ -963,12 +1010,11 @@ export default function ScanTableClient({
                         ) : null}
                       </td>
                       <td className="p-3 text-slate-800 font-semibold">{r.confidence}</td>
-                      <td className="p-3 text-slate-800">{Number(r.entry).toFixed(2)}</td>
-                      <td className="p-3 text-slate-800">{Number(r.stop).toFixed(2)}</td>
-
+                      <td className="p-3 text-slate-800">{fmt2(Number(r.entry))}</td>
                       <td className="p-3 text-slate-800">{typeof live === "number" ? fmt2(live) : "—"}</td>
-                      <td className={clsx("p-3 font-semibold", dEntryClass)}>
-                        {typeof dEntry === "number" ? fmtPct(dEntry) : "—"}
+                      <td className="p-3 text-slate-800">{fmt2(Number(r.stop))}</td>
+                      <td className="p-3 text-slate-800">
+                        {fmt2(r.execution.tp1)} / {fmt2(r.execution.tp2)}
                       </td>
 
                       <td className="p-3">

@@ -104,6 +104,14 @@ export function evaluateTrendHold(opts: { bars: PriceBar[]; regime: RegimeState 
       detail: `Regime ${regime}${downgradedBuyToWatch ? " (BUY downgraded)" : ""}`,
     },
   ];
+  const checksWithCategory: RuleCheck[] = checks.map((c) => {
+    const k = String(c.key ?? "").toLowerCase();
+    let category: RuleCheck["category"] = "trend";
+    if (k.includes("regime")) category = "regime";
+    else if (k.includes("rsi")) category = "momentum";
+    else if (k.includes("extension")) category = "risk";
+    return { ...c, category };
+  });
 
   const reasonSummary = [
     `${signal} (${Math.round(score)}/100)`,
@@ -143,7 +151,7 @@ export function evaluateTrendHold(opts: { bars: PriceBar[]; regime: RegimeState 
         distInAtr: 0,
         marketCap: null,
       },
-      checks,
+      checks: checksWithCategory,
       score_breakdown: [
         { key: "Close > SMA200", points: above200 ? 30 : 0 },
         { key: "SMA50 > SMA200", points: sma50Above200 ? 25 : 0 },
@@ -168,4 +176,3 @@ export function evaluateTrendHold(opts: { bars: PriceBar[]; regime: RegimeState 
 export function trendHoldScanDate() {
   return isoDate();
 }
-
