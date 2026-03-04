@@ -26,6 +26,46 @@ type ScanBody = {
   scan_date?: string;
 };
 
+function ymd(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getNyParts(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+    weekday: "short",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return {
+    year: Number(get("year")),
+    month: Number(get("month")),
+    day: Number(get("day")),
+    hour: Number(get("hour")),
+    weekday: get("weekday"),
+  };
+}
+
+function prevWeekday(date: Date) {
+  const d = new Date(date);
+  d.setUTCDate(d.getUTCDate() - 1);
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() - 1);
+  return d;
+}
+
+function lastCompletedUsTradingDay(now = new Date()) {
+  const ny = getNyParts(now);
+  const utcDateFromNy = new Date(Date.UTC(ny.year, ny.month - 1, ny.day));
+  if (ny.weekday === "Sat") return ymd(prevWeekday(utcDateFromNy));
+  if (ny.weekday === "Sun") return ymd(prevWeekday(prevWeekday(utcDateFromNy)));
+  if (ny.hour < 18) return ymd(prevWeekday(utcDateFromNy));
+  return ymd(utcDateFromNy);
+}
+
 function admin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -151,6 +191,8 @@ export async function POST(req: Request) {
     const offset = Number.isFinite(body.offset as number) ? Number(body.offset) : 0;
     const limit = Number.isFinite(body.limit as number) ? Number(body.limit) : 200;
     const scanDate = (body.scan_date && String(body.scan_date)) || isoDate();
+    const expectedTradingDate = lastCompletedUsTradingDay();
+    const staleScan = scanDate !== expectedTradingDate;
 
     const regime = await getRegimeByDate({ supabase, scanDate });
 
@@ -252,6 +294,17 @@ export async function POST(req: Request) {
           });
       if (!computed) continue;
       scored += 1;
+      const reasonJsonWithFlags = {
+        ...computed.reason_json,
+        execution_flags: {
+          ...(((computed.reason_json as any)?.execution_flags ?? {}) as Record<string, unknown>),
+          stale_scan: staleScan,
+          scan_date: scanDate,
+          last_completed_trading_day: expectedTradingDate,
+          price_mismatch: null,
+          divergence_pct: null,
+        },
+      } as RuleEvaluation["reason_json"];
 
       upserts.push({
         date: scanDate,
@@ -265,7 +318,7 @@ export async function POST(req: Request) {
         tp1: computed.tp1,
         tp2: computed.tp2,
         reason_summary: computed.reason_summary,
-        reason_json: computed.reason_json,
+        reason_json: reasonJsonWithFlags,
         updated_at: new Date().toISOString(),
       });
     }
@@ -294,6 +347,8 @@ export async function POST(req: Request) {
       universe_slug,
       strategy_version: strategyVersion,
       date: scanDate,
+      stale_scan: staleScan,
+      last_completed_trading_day: expectedTradingDate,
       regime,
       offset,
       limit,

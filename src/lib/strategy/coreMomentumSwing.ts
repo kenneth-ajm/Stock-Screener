@@ -58,6 +58,14 @@ export type RuleEvaluation = {
       management: string;
       stop_style: "pct_8";
     };
+    execution_flags?: {
+      stale_scan?: boolean;
+      scan_date?: string;
+      last_completed_trading_day?: string;
+      price_mismatch?: boolean | null;
+      divergence_pct?: number | null;
+      [key: string]: unknown;
+    };
   };
 };
 

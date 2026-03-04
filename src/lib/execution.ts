@@ -88,6 +88,7 @@ export function computeExecutionGuidance(input: ExecutionInput): ExecutionOutput
     : stopTooWide;
 
   if (input.signal === "AVOID") reasons.push("Signal is AVOID");
+  if (priceMismatch) reasons.push("Price mismatch >20%");
   if (live === null) reasons.push("No live price; use entry zone");
   if (stopTooWide) {
     reasons.push(
@@ -108,6 +109,7 @@ export function computeExecutionGuidance(input: ExecutionInput): ExecutionOutput
     extensionPct > EXECUTION_LIMITS.SKIP_EXT_PCT;
 
   if (input.signal === "AVOID") action = "SKIP";
+  else if (priceMismatch) action = input.signal === "BUY" ? "SKIP" : "WAIT";
   else if (stopTooWide) action = "SKIP";
   else if (extremeExtension) action = "SKIP";
   else if (live === null) action = "WAIT";

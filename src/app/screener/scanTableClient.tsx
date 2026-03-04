@@ -28,6 +28,7 @@ type DisplayRow = Row & {
   priceMismatch: boolean;
   atr14: number | null;
   execution: ReturnType<typeof computeExecutionGuidance>;
+  staleScan: boolean;
 };
 
 function chipClass(active: boolean) {
@@ -253,10 +254,12 @@ export default function ScanTableClient({
   rows,
   scanDate,
   strategyVersion = "v2_core_momentum",
+  lastCompletedTradingDay,
 }: {
   rows: Row[];
   scanDate: string;
   strategyVersion?: string;
+  lastCompletedTradingDay?: string;
 }) {
   const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY+WATCH");
 
@@ -277,6 +280,7 @@ export default function ScanTableClient({
   const [ticketShares, setTicketShares] = useState<string>("");
   const [ticketEntry, setTicketEntry] = useState<string>("");
   const [ticketStop, setTicketStop] = useState<string>("");
+  const [staleOpenConfirmed, setStaleOpenConfirmed] = useState(false);
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [ticketSubmitting, setTicketSubmitting] = useState(false);
   const [whyFailuresOnly, setWhyFailuresOnly] = useState(false);
@@ -286,6 +290,8 @@ export default function ScanTableClient({
     setToast(msg);
     setTimeout(() => setToast(null), 1400);
   }
+
+  const staleScan = !!lastCompletedTradingDay && scanDate !== lastCompletedTradingDay;
 
   const effectiveRows = useMemo<DisplayRow[]>(() => {
     const r = rows ?? [];
@@ -330,9 +336,10 @@ export default function ScanTableClient({
         priceMismatch,
         atr14,
         execution,
+        staleScan,
       };
     });
-  }, [rows, quotes, strategyVersion]);
+  }, [rows, quotes, strategyVersion, staleScan]);
 
   const counts = useMemo(() => {
     const r = effectiveRows ?? [];
@@ -454,6 +461,7 @@ export default function ScanTableClient({
             : Number(row.entry).toFixed(2)
       );
       setTicketStop(calc.stop !== null ? calc.stop.toFixed(2) : Number(row.stop).toFixed(2));
+      setStaleOpenConfirmed(false);
       setTicketError(null);
       if (json?.ok) {
         setCalcBySymbol((prev) => ({ ...prev, [row.symbol]: json }));
@@ -486,7 +494,36 @@ export default function ScanTableClient({
         }),
       });
       const json = await res.json().catch(() => null);
-      openModal("WHY", `Why: ${row.symbol}`, json ?? { ok: false, error: "No response" });
+      const rowAny = row as any;
+      const rowDivergence =
+        typeof rowAny?.divergencePct === "number" && Number.isFinite(rowAny?.divergencePct)
+          ? rowAny.divergencePct
+          : null;
+      const rowMismatch = !!rowAny?.priceMismatch;
+      const rowStale = !!rowAny?.staleScan;
+      const merged =
+        json && typeof json === "object"
+          ? {
+              ...json,
+              row: json?.row
+                ? {
+                    ...json.row,
+                    reason_json: {
+                      ...(json.row.reason_json ?? {}),
+                      execution_flags: {
+                        ...((json.row.reason_json as any)?.execution_flags ?? {}),
+                        stale_scan: rowStale,
+                        scan_date: scanDate,
+                        last_completed_trading_day: lastCompletedTradingDay ?? null,
+                        price_mismatch: rowMismatch,
+                        divergence_pct: rowDivergence,
+                      },
+                    },
+                  }
+                : json?.row,
+            }
+          : json;
+      openModal("WHY", `Why: ${row.symbol}`, merged ?? { ok: false, error: "No response" });
     } catch (e: any) {
       openModal("WHY", `Why: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
     } finally {
@@ -514,6 +551,10 @@ export default function ScanTableClient({
     }
     if (!Number.isFinite(stopPrice) || stopPrice <= 0 || stopPrice >= entryPrice) {
       setTicketError("Stop must be positive and strictly below entry.");
+      return;
+    }
+    if (staleScan && !staleOpenConfirmed) {
+      setTicketError("Scan is stale. Confirm stale open before submitting.");
       return;
     }
 
@@ -724,6 +765,24 @@ export default function ScanTableClient({
             </div>
           ) : null}
 
+          {staleScan ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              <div className="font-semibold">STALE scan</div>
+              <div className="mt-1">
+                Scan date {scanDate} is behind last completed trading day {lastCompletedTradingDay ?? "—"}.
+              </div>
+              <label className="mt-2 inline-flex items-center gap-2 text-xs font-medium">
+                <input
+                  type="checkbox"
+                  checked={staleOpenConfirmed}
+                  onChange={(e) => setStaleOpenConfirmed(e.target.checked)}
+                  disabled={ticketSubmitting}
+                />
+                Confirm open anyway
+              </label>
+            </div>
+          ) : null}
+
           {cashLimited ? (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
               <span className="font-semibold">Cash-limited</span>: risk sizing suggests{" "}
@@ -747,7 +806,7 @@ export default function ScanTableClient({
           ) : null}
 
           <div className="flex justify-end">
-            <Button onClick={submitTicketOpen} disabled={ticketSubmitting || stopTooWide}>
+            <Button onClick={submitTicketOpen} disabled={ticketSubmitting || stopTooWide || (staleScan && !staleOpenConfirmed)}>
               {ticketSubmitting ? "Opening..." : "Open position"}
             </Button>
           </div>
@@ -1002,6 +1061,11 @@ export default function ScanTableClient({
                         <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${signalPill(r.effectiveSignal)}`}>
                           {r.effectiveSignal}
                         </span>
+                        {r.staleScan ? (
+                          <span className="ml-2 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">
+                            STALE
+                          </span>
+                        ) : null}
                         {r.priceMismatch ? (
                           <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
                             PRICE MISMATCH
