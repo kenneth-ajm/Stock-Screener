@@ -248,6 +248,7 @@ export default async function ScreenerPage({
         <CardHeader title="Utilities" subtitle="Build universe, ingest history, and scan in safe batches" />
         <CardContent>
           <UtilitiesClient
+            universeSlug={DEFAULT_UNIVERSE}
             strategyVersion={activeStrategy}
             strategyLabel={strategyLabel(activeStrategy)}
             autopilotStatus={autopilotStatus}

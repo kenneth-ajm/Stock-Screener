@@ -21,10 +21,12 @@ function sleep(ms: number) {
 }
 
 export default function UtilitiesClient({
+  universeSlug = DEFAULT_UNIVERSE,
   strategyVersion = DEFAULT_STRATEGY_VERSION,
   strategyLabel = "Momentum Swing",
   autopilotStatus = null,
 }: {
+  universeSlug?: string;
   strategyVersion?: string;
   strategyLabel?: string;
   autopilotStatus?: {
@@ -123,13 +125,13 @@ export default function UtilitiesClient({
 
   async function ingestCoreUniverse() {
     const { res, json } = await callJson(
-      `Ingest ${DEFAULT_UNIVERSE} history (batch_size=${ingestBatchSize})`,
+      `Ingest ${universeSlug} history (batch_size=${ingestBatchSize})`,
       "/api/universe/ingest-liquid-2000",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          universe_slug: DEFAULT_UNIVERSE,
+          universe_slug: universeSlug,
           limit: ingestBatchSize,
           offset: ingestOffset,
         }),
@@ -142,7 +144,7 @@ export default function UtilitiesClient({
 
   async function runBackfillAuto() {
     const { res, json } = await callJson(
-      `Backfill ${DEFAULT_UNIVERSE} auto (offset=${backfillOffset}, batch=25)`,
+      `Backfill ${universeSlug} auto (offset=${backfillOffset}, batch=25)`,
       "/api/jobs/backfill-core-800",
       {
         method: "POST",
@@ -161,16 +163,31 @@ export default function UtilitiesClient({
 
   async function runScanBatch(offset: number, limit: number) {
     await callJson(
-      `Scan ${DEFAULT_UNIVERSE} batch (offset=${offset}, limit=${limit})`,
+      `Scan ${universeSlug} batch (offset=${offset}, limit=${limit})`,
       "/api/scan",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          universe_slug: DEFAULT_UNIVERSE,
+          universe_slug: universeSlug,
           strategy_version: strategyVersion,
           offset,
           limit,
+        }),
+      }
+    );
+  }
+
+  async function runRescanNow() {
+    await callJson(
+      `Rescan latest completed day (${universeSlug}, ${strategyVersion})`,
+      "/api/jobs/rescan-latest",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          universe_slug: universeSlug,
+          strategy_version: strategyVersion,
         }),
       }
     );
@@ -180,7 +197,7 @@ export default function UtilitiesClient({
     // sequential batches so we don’t blow up Vercel
     setBusy("Scan ALL batches");
     append("Scan ALL batches (start)", {
-      universe_slug: DEFAULT_UNIVERSE,
+      universe_slug: universeSlug,
       strategy_version: strategyVersion,
       offsets: scanOffsets,
       limit: scanLimit,
@@ -197,7 +214,7 @@ export default function UtilitiesClient({
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            universe_slug: DEFAULT_UNIVERSE,
+            universe_slug: universeSlug,
             strategy_version: strategyVersion,
             offset: off,
             limit: scanLimit,
@@ -285,7 +302,7 @@ export default function UtilitiesClient({
             {busy === "Build Core 800 universe" ? "Building..." : "Build / Refresh Core 800"}
           </Button>
           <Button variant="secondary" onClick={runBackfillAuto} disabled={!!busy}>
-            {busy?.startsWith(`Backfill ${DEFAULT_UNIVERSE} auto`) ? "Backfilling..." : "Backfill core_800 (auto)"}
+            {busy?.startsWith(`Backfill ${universeSlug} auto`) ? "Backfilling..." : "Backfill core_800 (auto)"}
           </Button>
         </div>
       </div>
@@ -314,7 +331,7 @@ export default function UtilitiesClient({
             disabled={!!busy}
           />
           <Button onClick={ingestCoreUniverse} disabled={!!busy}>
-            {busy?.startsWith(`Ingest ${DEFAULT_UNIVERSE} history`) ? "Ingesting..." : "Ingest next batch"}
+            {busy?.startsWith(`Ingest ${universeSlug} history`) ? "Ingesting..." : "Ingest next batch"}
           </Button>
         </div>
       </div>
@@ -322,7 +339,7 @@ export default function UtilitiesClient({
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
         <div className="text-sm font-semibold text-slate-900">Run scan</div>
         <div className="text-sm text-slate-600">
-          Runs the daily scan on <span className="font-mono">{DEFAULT_UNIVERSE}</span> for{" "}
+          Runs the daily scan on <span className="font-mono">{universeSlug}</span> for{" "}
           <span className="font-semibold">{strategyLabel}</span>. Use batches to avoid timeouts.
         </div>
 
@@ -354,6 +371,10 @@ export default function UtilitiesClient({
 
           <Button onClick={runScanAllBatches} disabled={!!busy}>
             {busy === "Scan ALL batches" ? "Scanning..." : "Run scan (all batches)"}
+          </Button>
+
+          <Button variant="secondary" onClick={runRescanNow} disabled={!!busy}>
+            {busy?.startsWith("Rescan latest completed day") ? "Rescanning..." : "Rescan now"}
           </Button>
         </div>
 
