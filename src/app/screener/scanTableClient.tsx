@@ -30,6 +30,7 @@ type DisplayRow = Row & {
   execution: ReturnType<typeof computeExecutionGuidance>;
   staleScan: boolean;
   eventRisk: boolean;
+  newsRisk: boolean;
 };
 
 function chipClass(active: boolean) {
@@ -132,6 +133,8 @@ function extractCalcMetrics(payload: any, fallback?: { entry?: number; stop?: nu
 
 type CheckCategory =
   | "trend"
+  | "leadership"
+  | "rs"
   | "momentum"
   | "volatility"
   | "pullback"
@@ -144,6 +147,8 @@ type CheckCategory =
 
 const CHECK_CATEGORY_ORDER: CheckCategory[] = [
   "trend",
+  "leadership",
+  "rs",
   "momentum",
   "volatility",
   "pullback",
@@ -162,6 +167,9 @@ function categoryForCheck(c: any): CheckCategory {
   const label = String(c?.label ?? "").toLowerCase();
   const text = `${key} ${label}`;
   if (text.includes("regime")) return "regime";
+  if (text.includes("leader") || text.includes("52w") || text.includes("high") || text.includes("low"))
+    return "leadership";
+  if (text.includes("rs ") || text.includes("relative strength") || text.includes("spy")) return "rs";
   if (text.includes("volatility")) return "volatility";
   if (text.includes("pullback")) return "pullback";
   if (text.includes("liquidity")) return "liquidity";
@@ -176,6 +184,8 @@ function categoryForCheck(c: any): CheckCategory {
 
 function categoryLabel(c: CheckCategory) {
   if (c === "trend") return "Trend";
+  if (c === "leadership") return "Leadership";
+  if (c === "rs") return "RS";
   if (c === "momentum") return "Momentum";
   if (c === "volatility") return "Volatility";
   if (c === "pullback") return "Pullback";
@@ -366,6 +376,7 @@ export default function ScanTableClient({
               strategyVersion,
             });
       const eventRisk = Boolean(row?.reason_json?.flags?.event_risk);
+      const newsRisk = Boolean(row?.reason_json?.flags?.news_risk);
       return {
         ...row,
         effectiveSignal,
@@ -377,6 +388,7 @@ export default function ScanTableClient({
         execution,
         staleScan,
         eventRisk,
+        newsRisk,
       };
     });
   }, [rows, quotes, strategyVersion, staleScan]);
@@ -1329,6 +1341,11 @@ export default function ScanTableClient({
                         {r.eventRisk ? (
                           <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
                             EVENT RISK
+                          </span>
+                        ) : null}
+                        {r.newsRisk ? (
+                          <span className="ml-2 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">
+                            NEWS RISK
                           </span>
                         ) : null}
                         <span className={`ml-2 rounded-full border px-2 py-1 text-[10px] font-semibold ${actionPill(r.execution.action)}`}>

@@ -17,6 +17,7 @@ import {
   evaluateTrendHold,
 } from "@/lib/strategy/trendHold";
 import { lastCompletedUsTradingDay } from "@/lib/tradingDay";
+import { fetchEarningsRiskFlags, fetchNewsRiskFlags } from "@/lib/externalRisk";
 
 type ScanBody = {
   universe_slug?: string;
@@ -216,6 +217,29 @@ export async function POST(req: Request) {
 
     let processed = 0;
     let scored = 0;
+    const stagedTrendRows: Array<{
+      symbol: string;
+      computed: RuleEvaluation;
+    }> = [];
+
+    let spy252Return: number | null = null;
+    if (isTrend) {
+      const { data: spyBars, error: spyErr } = await supabase
+        .from("price_bars")
+        .select("date,close")
+        .eq("symbol", "SPY")
+        .eq("source", "polygon")
+        .lte("date", scanDate)
+        .order("date", { ascending: true })
+        .limit(260);
+      if (!spyErr && spyBars && spyBars.length >= 252) {
+        const latest = Number(spyBars[spyBars.length - 1]?.close);
+        const start = Number(spyBars[spyBars.length - 252]?.close);
+        if (Number.isFinite(latest) && Number.isFinite(start) && start > 0) {
+          spy252Return = latest / start - 1;
+        }
+      }
+    }
 
     for (const symbol of symbols) {
       processed += 1;
@@ -241,6 +265,7 @@ export async function POST(req: Request) {
               volume: Number(bar.volume),
             })),
             regime,
+            spy252Return,
           })
         : evaluateCoreMomentumSwing({
             bars: bars.map((bar) => ({
@@ -255,6 +280,12 @@ export async function POST(req: Request) {
           });
       if (!computed) continue;
       scored += 1;
+
+      if (isTrend) {
+        stagedTrendRows.push({ symbol, computed });
+        continue;
+      }
+
       const reasonJsonWithFlags = {
         ...computed.reason_json,
         execution_flags: {
@@ -282,6 +313,102 @@ export async function POST(req: Request) {
         reason_json: reasonJsonWithFlags,
         updated_at: new Date().toISOString(),
       });
+    }
+
+    if (isTrend && stagedTrendRows.length > 0) {
+      const trendSymbols = stagedTrendRows.map((x) => x.symbol);
+      const [earningsFlags, newsFlags] = await Promise.all([
+        fetchEarningsRiskFlags(trendSymbols, scanDate),
+        fetchNewsRiskFlags(trendSymbols),
+      ]);
+
+      for (const row of stagedTrendRows) {
+        const earnings = earningsFlags[row.symbol] ?? {
+          event_risk: false,
+          earnings_in_days: null,
+          earnings_date: null,
+        };
+        const news = newsFlags[row.symbol] ?? {
+          news_risk: false,
+          matched_keywords: [],
+          headline: null,
+          published_utc: null,
+        };
+
+        let signal = row.computed.signal;
+        let reasonSummary = row.computed.reason_summary;
+        const reasons: string[] = [];
+        if (earnings.event_risk && signal === "BUY") {
+          signal = "WATCH";
+          reasons.push("earnings within 5 trading days");
+        }
+        if (news.news_risk && signal === "BUY") {
+          signal = "WATCH";
+          reasons.push("news risk");
+        }
+        if (reasons.length > 0) reasonSummary = `${reasonSummary} • downgraded: ${reasons.join(", ")}`;
+
+        const baseJson = row.computed.reason_json as any;
+        const checks = Array.isArray(baseJson?.checks) ? [...baseJson.checks] : [];
+        checks.push({
+          key: "earnings_proximity",
+          label: "No earnings within 5 trading days",
+          ok: !earnings.event_risk,
+          detail:
+            earnings.earnings_in_days == null
+              ? "No earnings date available"
+              : `earnings in ${earnings.earnings_in_days} trading day(s)`,
+          category: "risk",
+        });
+        checks.push({
+          key: "news_risk",
+          label: "No major negative-news keywords",
+          ok: !news.news_risk,
+          detail: news.news_risk
+            ? `matched: ${(news.matched_keywords ?? []).join(", ")}`
+            : "No negative keywords",
+          category: "risk",
+        });
+
+        const reasonJsonWithFlags = {
+          ...baseJson,
+          flags: {
+            ...(baseJson?.flags ?? {}),
+            event_risk: Boolean(earnings.event_risk),
+            earnings_within_days: earnings.earnings_in_days,
+            earnings_date: earnings.earnings_date,
+            news_risk: Boolean(news.news_risk),
+            news_keywords: news.matched_keywords,
+            news_headline: news.headline,
+            news_published_utc: news.published_utc,
+          },
+          checks,
+          execution_flags: {
+            ...((baseJson?.execution_flags ?? {}) as Record<string, unknown>),
+            stale_scan: staleScan,
+            scan_date: scanDate,
+            last_completed_trading_day: expectedTradingDate,
+            price_mismatch: null,
+            divergence_pct: null,
+          },
+        } as RuleEvaluation["reason_json"];
+
+        upserts.push({
+          date: scanDate,
+          universe_slug,
+          strategy_version: strategyVersion,
+          symbol: row.symbol,
+          signal,
+          confidence: row.computed.confidence,
+          entry: row.computed.entry,
+          stop: row.computed.stop,
+          tp1: row.computed.tp1,
+          tp2: row.computed.tp2,
+          reason_summary: reasonSummary,
+          reason_json: reasonJsonWithFlags,
+          updated_at: new Date().toISOString(),
+        });
+      }
     }
 
     let upserted = 0;

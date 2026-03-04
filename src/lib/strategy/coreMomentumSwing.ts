@@ -14,6 +14,8 @@ export type RuleCheck = {
   label: string;
   category?:
     | "trend"
+    | "leadership"
+    | "rs"
     | "momentum"
     | "volume"
     | "risk"
@@ -43,18 +45,6 @@ export type RuleEvaluation = {
     downgraded_buy_to_watch: boolean;
     indicators: {
       close: number;
-      sma20: number;
-      sma50: number;
-      sma200: number;
-      prevSma50: number;
-      rsi14: number;
-      atr14: number;
-      avgVolume20: number;
-      volumeSpike: number;
-      avgDollarVolume20: number;
-      distFromSma20: number;
-      distInAtr: number;
-      marketCap: number | null;
       [key: string]: number | null;
     };
     flags?: {
@@ -65,6 +55,7 @@ export type RuleEvaluation = {
     checks: RuleCheck[];
     score_breakdown: Array<{ key: string; points: number }>;
     score: number;
+    rank_score?: number;
     trade_plan: {
       entry: number;
       stop: number;
