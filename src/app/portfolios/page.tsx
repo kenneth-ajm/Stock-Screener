@@ -35,13 +35,11 @@ type PositionRow = {
   exit_fee?: number | null;
   position_size?: number | null;
   quantity?: number | null;
-  qty?: number | null;
   shares?: number | null;
 };
 
 function resolveQty(p: PositionRow): number {
   const v =
-    (typeof p.qty === "number" ? p.qty : null) ??
     (typeof p.shares === "number" ? p.shares : null) ??
     (typeof p.quantity === "number" ? p.quantity : null) ??
     (typeof p.position_size === "number" ? p.position_size : null) ??
@@ -70,7 +68,7 @@ export default async function PortfoliosPage() {
   if (portfolioIds.length > 0) {
     const { data: pos } = await supabase
       .from("portfolio_positions")
-      .select("portfolio_id,status,entry_price,exit_price,entry_fee,exit_fee,qty,quantity,shares,position_size")
+      .select("portfolio_id,status,entry_price,exit_price,entry_fee,exit_fee,quantity,shares,position_size")
       .in("portfolio_id", portfolioIds);
 
     positions = (pos ?? []) as any;

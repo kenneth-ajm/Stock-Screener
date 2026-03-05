@@ -38,7 +38,6 @@ function toNum(v: unknown) {
 
 function resolveQty(row: any) {
   return (
-    toNum(row?.qty) ??
     toNum(row?.shares) ??
     toNum(row?.quantity) ??
     toNum(row?.position_size)
@@ -68,7 +67,7 @@ export async function computeDeployedAndCash(opts: ComputePortfolioMathArgs): Pr
   let openRows: any[] = [];
   const primaryRes = await supa
     .from("portfolio_positions")
-    .select("symbol,qty,shares,quantity,position_size,entry_price,status")
+    .select("symbol,shares,quantity,position_size,entry_price,status")
     .eq("portfolio_id", portfolioId)
     .eq("status", "OPEN");
   if (primaryRes.error) throw primaryRes.error;
@@ -111,7 +110,7 @@ export async function computeDeployedAndCash(opts: ComputePortfolioMathArgs): Pr
       if (unknownExamples.length < 5) {
         unknownExamples.push({
           symbol: String(row?.symbol ?? ""),
-          qty: row?.shares ?? row?.quantity ?? row?.position_size ?? row?.qty ?? null,
+          qty: row?.shares ?? row?.quantity ?? row?.position_size ?? null,
           entry_price: row?.entry_price ?? null,
         });
       }
