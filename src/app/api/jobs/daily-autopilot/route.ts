@@ -7,10 +7,10 @@ import {
 import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
 import {
   finalizeSignals,
-  resolveScanDate,
   runScanPipeline,
   type ScanEngineClient,
 } from "@/lib/scan_engine";
+import { getLCTD } from "@/lib/scan_date";
 
 const UNIVERSE_SLUG = "core_800";
 const STATUS_KEY = "daily_autopilot_core_800";
@@ -242,11 +242,11 @@ async function runAutopilot() {
   ) as ScanEngineClient;
   const supa = supabase as any;
 
-  const dateResult = await resolveScanDate({ supabase: supa });
-  if (!dateResult.ok || !dateResult.scan_date_used) {
-    throw new Error(dateResult.error ?? "Unable to resolve scan date");
+  const lctd = await getLCTD(supa);
+  if (!lctd.ok || !lctd.scan_date) {
+    throw new Error(lctd.error ?? "Unable to resolve scan date");
   }
-  const scanDate = dateResult.scan_date_used;
+  const scanDate = lctd.scan_date;
 
   const { data: universe, error: universeErr } = await supa
     .from("universes")
@@ -295,7 +295,7 @@ async function runAutopilot() {
     ok: true,
     scan_date: scanDate,
     scan_date_used: scanDate,
-    lctd_source: dateResult.lctd_source,
+    lctd_source: lctd.lctd_source,
     bars_upserted,
     regime_state: regime.state,
     regime_date_used: regime.regime_date_used,

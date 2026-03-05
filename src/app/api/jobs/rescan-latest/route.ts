@@ -4,9 +4,9 @@ import {
   CORE_MOMENTUM_DEFAULT_UNIVERSE,
   CORE_MOMENTUM_DEFAULT_VERSION,
 } from "@/lib/strategy/coreMomentumSwing";
+import { getLCTD } from "@/lib/scan_date";
 import {
   finalizeSignals,
-  resolveScanDate,
   runScanPipeline,
   type ScanEngineClient,
 } from "@/lib/scan_engine";
@@ -30,10 +30,10 @@ export async function POST(req: Request) {
     ) as ScanEngineClient;
     const supaAny = supa as any;
 
-    const scanDateResult = await resolveScanDate({ supabase: supaAny });
-    if (!scanDateResult.ok || !scanDateResult.scan_date_used) {
+    const lctd = await getLCTD(supaAny);
+    if (!lctd.ok || !lctd.scan_date) {
       return NextResponse.json(
-        { ok: false, error: scanDateResult.error ?? "Failed to resolve scan date", detail: null },
+        { ok: false, error: lctd.error ?? "Failed to resolve scan date", detail: null },
         { status: 500 }
       );
     }
@@ -71,7 +71,7 @@ export async function POST(req: Request) {
     let first_error: unknown = null;
     let regime_state: string | null = null;
     let regime_stale = false;
-    let scan_date_used = scanDateResult.scan_date_used;
+    let scan_date_used = lctd.scan_date;
 
     for (let batch = 0; batch < estimatedBatches; batch += 1) {
       const offset = batch * batchLimit;
@@ -142,7 +142,7 @@ export async function POST(req: Request) {
       universe_slug,
       strategy_version,
       scan_date_used,
-      lctd_source: scanDateResult.lctd_source,
+      lctd_source: lctd.lctd_source,
       regime_state,
       regime_stale,
       batch_limit: batchLimit,

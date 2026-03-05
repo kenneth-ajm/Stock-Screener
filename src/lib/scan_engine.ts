@@ -14,6 +14,7 @@ import {
   TREND_HOLD_WATCH_CAP,
   evaluateTrendHold,
 } from "@/lib/strategy/trendHold";
+import { getLCTD } from "@/lib/scan_date";
 
 export type ScanEngineClient = SupabaseClient<any, any, any> | any;
 
@@ -79,53 +80,13 @@ export async function resolveScanDate(opts: {
   supabase: ScanEngineClient;
   requestedScanDate?: string | null;
 }): Promise<ResolveScanDateResult> {
-  const supa = opts.supabase as any;
-  try {
-    const { data: spyData, error: spyErr } = await supa
-      .from("price_bars")
-      .select("date")
-      .eq("symbol", "SPY")
-      .order("date", { ascending: false })
-      .limit(1);
-    if (!spyErr && spyData?.[0]?.date) {
-      const lctd = String(spyData[0].date);
-      const requested = opts.requestedScanDate ? String(opts.requestedScanDate) : null;
-      return {
-        ok: true,
-        scan_date_used: requested && requested <= lctd ? requested : lctd,
-        lctd_source: "spy_max_date",
-      };
-    }
-
-    const { data: globalData, error: globalErr } = await supa
-      .from("price_bars")
-      .select("date")
-      .order("date", { ascending: false })
-      .limit(1);
-    if (!globalErr && globalData?.[0]?.date) {
-      const d = String(globalData[0].date);
-      const requested = opts.requestedScanDate ? String(opts.requestedScanDate) : null;
-      return {
-        ok: true,
-        scan_date_used: requested && requested <= d ? requested : d,
-        lctd_source: "global_max_date",
-      };
-    }
-
-    return {
-      ok: false,
-      scan_date_used: null,
-      lctd_source: "none",
-      error: spyErr?.message || globalErr?.message || "No price_bars available",
-    };
-  } catch (e: any) {
-    return {
-      ok: false,
-      scan_date_used: null,
-      lctd_source: "none",
-      error: e?.message ?? "Failed to resolve scan date",
-    };
-  }
+  const resolved = await getLCTD(opts.supabase);
+  return {
+    ok: resolved.ok,
+    scan_date_used: resolved.scan_date,
+    lctd_source: resolved.lctd_source,
+    error: resolved.error ?? undefined,
+  };
 }
 
 export async function loadUniverseSymbols(opts: {
@@ -423,10 +384,7 @@ export async function runScanPipeline(opts: {
   const strategy_version = opts.strategy_version ?? CORE_MOMENTUM_DEFAULT_VERSION;
   const startedAt = Date.now();
 
-  const dateResolved = await resolveScanDate({
-    supabase: supa,
-    requestedScanDate: opts.scan_date ?? null,
-  });
+  const dateResolved = await resolveScanDate({ supabase: supa });
   if (!dateResolved.ok || !dateResolved.scan_date_used) {
     return {
       ok: false,
@@ -436,6 +394,14 @@ export async function runScanPipeline(opts: {
     };
   }
   const scanDate = dateResolved.scan_date_used;
+
+  // Guardrail: remove impossible future scan rows for this universe/strategy.
+  await supa
+    .from("daily_scans")
+    .delete()
+    .eq("universe_slug", universe_slug)
+    .eq("strategy_version", strategy_version)
+    .gt("date", scanDate);
 
   const symbolsResult = await loadUniverseSymbols({
     supabase: supa,
@@ -558,7 +524,8 @@ export async function runScanPipeline(opts: {
   }
 
   let finalization: unknown = null;
-  if (opts.finalize) {
+  const shouldFinalize = opts.finalize ?? true;
+  if (shouldFinalize) {
     finalization = await finalizeSignals({
       supabase: supa,
       date: scanDate,

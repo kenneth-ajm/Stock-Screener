@@ -30,7 +30,7 @@ export async function POST(req: Request) {
       scan_date: body.scan_date,
       offset,
       limit,
-      finalize: false,
+      finalize: true,
     });
 
     if (!result.ok) {
