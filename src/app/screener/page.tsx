@@ -20,6 +20,8 @@ type ScanRow = {
   symbol: string;
   signal: "BUY" | "WATCH" | "AVOID";
   confidence: number;
+  rank_score?: number | null;
+  rank?: number | null;
   entry: number;
   stop: number;
   tp1: number;
@@ -29,6 +31,9 @@ type ScanRow = {
 
 function rankRows(rows: ScanRow[]) {
   return [...rows].sort((a, b) => {
+    const ars = Number(a.rank_score ?? 0);
+    const brs = Number(b.rank_score ?? 0);
+    if (brs !== ars) return brs - ars;
     const ac = Number(a.confidence ?? 0);
     const bc = Number(b.confidence ?? 0);
     if (bc !== ac) return bc - ac;
@@ -126,10 +131,11 @@ export default async function ScreenerPage({
   if (latestScanDate) {
     const { data: rows } = await supabase
       .from("daily_scans")
-      .select("symbol, signal, confidence, entry, stop, tp1, tp2, reason_json")
+      .select("symbol, signal, confidence, rank_score, rank, entry, stop, tp1, tp2, reason_json")
       .eq("universe_slug", DEFAULT_UNIVERSE)
       .eq("strategy_version", activeStrategy)
       .eq("date", latestScanDate)
+      .order("rank_score", { ascending: false, nullsFirst: false })
       .order("confidence", { ascending: false })
       .order("symbol", { ascending: true })
       .limit(200);

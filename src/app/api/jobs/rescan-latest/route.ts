@@ -83,7 +83,7 @@ async function finalizeCappedSignals(opts: {
 
   const { data, error } = await supa
     .from("daily_scans")
-    .select("date,universe_slug,strategy_version,symbol,signal,confidence,reason_summary,reason_json,updated_at")
+    .select("date,universe_slug,strategy_version,symbol,signal,confidence,rank_score,rank,reason_summary,reason_json,updated_at")
     .eq("date", date_used)
     .eq("universe_slug", universe_slug)
     .eq("strategy_version", strategy_version);
@@ -91,6 +91,9 @@ async function finalizeCappedSignals(opts: {
 
   const rows = Array.isArray(data) ? data : [];
   const rank = (a: any, b: any) => {
+    const ar = Number(a?.rank_score ?? 0);
+    const br = Number(b?.rank_score ?? 0);
+    if (br !== ar) return br - ar;
     const ac = Number(a?.confidence ?? 0);
     const bc = Number(b?.confidence ?? 0);
     if (bc !== ac) return bc - ac;
@@ -106,6 +109,8 @@ async function finalizeCappedSignals(opts: {
     const cur = bySymbol.get(sym);
     if (cur) cur.signal = "WATCH";
   }
+  const finalBuys = [...bySymbol.values()].filter((r: any) => r.signal === "BUY").sort(rank);
+  const buyRankMap = new Map(finalBuys.map((r: any, idx: number) => [String(r.symbol), idx + 1]));
 
   const watchesAfterBuyPass = [...bySymbol.values()].filter((r: any) => r.signal === "WATCH").sort(rank);
   for (let i = watchCap; i < watchesAfterBuyPass.length; i++) {
@@ -113,12 +118,13 @@ async function finalizeCappedSignals(opts: {
     const cur = bySymbol.get(sym);
     if (cur) cur.signal = "AVOID";
   }
+  const finalWatches = [...bySymbol.values()].filter((r: any) => r.signal === "WATCH").sort(rank);
+  const watchRankMap = new Map(finalWatches.map((r: any, idx: number) => [String(r.symbol), idx + 1]));
 
   const updates: any[] = [];
   for (const original of rows) {
     const updated = bySymbol.get(String(original.symbol));
     if (!updated) continue;
-    if (updated.signal === original.signal) continue;
     const priorReasonJson =
       original.reason_json && typeof original.reason_json === "object" ? original.reason_json : {};
     const capAdjustment =
@@ -127,6 +133,12 @@ async function finalizeCappedSignals(opts: {
         : original.signal === "WATCH" && updated.signal === "AVOID"
           ? "WATCH overflow downgraded to AVOID (final cap pass)"
           : "Signal adjusted by final cap pass";
+    const rankValue =
+      updated.signal === "BUY"
+        ? buyRankMap.get(String(original.symbol)) ?? null
+        : updated.signal === "WATCH"
+          ? watchRankMap.get(String(original.symbol)) ?? null
+          : null;
 
     updates.push({
       date: String(original.date),
@@ -134,22 +146,27 @@ async function finalizeCappedSignals(opts: {
       strategy_version: String(original.strategy_version),
       symbol: String(original.symbol),
       signal: updated.signal,
-      reason_summary: `${String(original.reason_summary ?? "").trim()} • ${capAdjustment}`.trim(),
+      rank_score: Number(updated.rank_score ?? original.rank_score ?? 0),
+      rank: rankValue,
+      reason_summary:
+        updated.signal === original.signal
+          ? String(original.reason_summary ?? "").trim()
+          : `${String(original.reason_summary ?? "").trim()} • ${capAdjustment}`.trim(),
       reason_json: {
         ...priorReasonJson,
-        cap_adjustment: capAdjustment,
+        ...(updated.signal === original.signal ? {} : { cap_adjustment: capAdjustment }),
+        rank_score: Number(updated.rank_score ?? original.rank_score ?? 0),
+        rank: rankValue,
         capped_signal: updated.signal,
       },
       updated_at: new Date().toISOString(),
     });
   }
 
-  if (updates.length > 0) {
-    const { error: upErr } = await supa
-      .from("daily_scans")
-      .upsert(updates, { onConflict: "date,universe_slug,strategy_version,symbol" });
-    if (upErr) throw new Error(upErr.message ?? "Failed to persist cap finalization");
-  }
+  const { error: upErr } = await supa
+    .from("daily_scans")
+    .upsert(updates, { onConflict: "date,universe_slug,strategy_version,symbol" });
+  if (upErr) throw new Error(upErr.message ?? "Failed to persist cap finalization");
 
   const finalRows = [...bySymbol.values()];
   return {

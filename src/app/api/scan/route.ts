@@ -25,6 +25,18 @@ type ScanBody = {
   scan_date?: string;
 };
 
+type ScanFinalizerRow = {
+  date: string;
+  universe_slug: string;
+  strategy_version: string;
+  symbol: string;
+  signal: "BUY" | "WATCH" | "AVOID";
+  confidence: number | null;
+  rank_score?: number | null;
+  reason_summary: string | null;
+  reason_json: unknown;
+};
+
 function sma(values: number[], period: number) {
   if (values.length < period) return null;
   let sum = 0;
@@ -37,6 +49,57 @@ function admin() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("Missing Supabase env vars for admin client");
   return createClient(url, key, { auth: { persistSession: false } });
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function toNum(v: unknown): number | null {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
+function computeRankScore(row: ScanFinalizerRow) {
+  const reason = row.reason_json && typeof row.reason_json === "object" ? (row.reason_json as any) : {};
+  const indicators = reason?.indicators && typeof reason.indicators === "object" ? reason.indicators : {};
+  const confidenceNorm = clamp((toNum(row.confidence) ?? 50) / 100, 0, 1);
+
+  if (row.strategy_version === TREND_HOLD_DEFAULT_VERSION) {
+    const rsOut = toNum(indicators.rsOutperformance ?? indicators.rsProxy);
+    const nearHighPct = toNum(indicators.nearHighPct);
+    const sma200Slope = toNum(indicators.sma200Slope);
+    const adv = toNum(indicators.avgDollarVolume20);
+
+    const rsScore = rsOut == null ? 0.5 : clamp((rsOut + 0.05) / 0.2, 0, 1);
+    const nearHighScore = nearHighPct == null ? 0.5 : clamp((nearHighPct - 0.7) / 0.3, 0, 1);
+    const slopeScore = sma200Slope == null ? 0.5 : clamp((sma200Slope + 0.02) / 0.08, 0, 1);
+    const liqScore = adv == null ? 0.5 : clamp((adv - 5_000_000) / 45_000_000, 0, 1);
+
+    return round2(rsScore * 35 + nearHighScore * 25 + slopeScore * 20 + liqScore * 20);
+  }
+
+  const volumeSpike = toNum(indicators.volumeSpike);
+  const rsi14 = toNum(indicators.rsi14);
+  const distInAtr = toNum(indicators.distInAtr);
+
+  const volumeScore = volumeSpike == null ? 0.5 : clamp((volumeSpike - 1) / 1.5, 0, 1);
+  const rsiScore = rsi14 == null ? 0.5 : 1 - clamp(Math.abs(rsi14 - 55) / 20, 0, 1);
+  const extensionScore = distInAtr == null ? 0.5 : 1 - clamp(distInAtr / 2, 0, 1);
+
+  return round2(confidenceNorm * 50 + volumeScore * 15 + rsiScore * 15 + extensionScore * 20);
+}
+
+function rankSort(a: ScanFinalizerRow & { rank_score: number }, b: ScanFinalizerRow & { rank_score: number }) {
+  if (b.rank_score !== a.rank_score) return b.rank_score - a.rank_score;
+  const ac = Number(a.confidence ?? 0);
+  const bc = Number(b.confidence ?? 0);
+  if (bc !== ac) return bc - ac;
+  return String(a.symbol ?? "").localeCompare(String(b.symbol ?? ""));
 }
 
 async function getRegimeByDate(opts: {
@@ -138,7 +201,7 @@ async function enforceGlobalCaps(opts: {
 
   const { data, error } = await supabase
     .from("daily_scans")
-    .select("date,universe_slug,strategy_version,symbol,signal,confidence,reason_summary,reason_json")
+    .select("date,universe_slug,strategy_version,symbol,signal,confidence,rank_score,reason_summary,reason_json")
     .eq("date", date)
     .eq("universe_slug", universe_slug)
     .eq("strategy_version", strategy_version)
@@ -147,15 +210,13 @@ async function enforceGlobalCaps(opts: {
   if (error) throw error;
   if (!data || data.length === 0) return;
 
-  const byRank = [...data].sort((a, b) => {
-    const ac = Number(a.confidence ?? 0);
-    const bc = Number(b.confidence ?? 0);
-    if (bc !== ac) return bc - ac;
-    return String(a.symbol ?? "").localeCompare(String(b.symbol ?? ""));
-  });
+  const rows = (data as ScanFinalizerRow[]).map((row) => ({
+    ...row,
+    rank_score: computeRankScore(row),
+  }));
 
-  const buys = byRank.filter((row) => row.signal === "BUY");
-  const watches = byRank.filter((row) => row.signal === "WATCH");
+  const buys = rows.filter((row) => row.signal === "BUY").sort(rankSort);
+  const watchBase = rows.filter((row) => row.signal === "WATCH").sort(rankSort);
 
   const keyOf = (row: {
     date: string;
@@ -165,17 +226,15 @@ async function enforceGlobalCaps(opts: {
   }) =>
     `${String(row.date)}|${String(row.universe_slug)}|${String(row.strategy_version)}|${String(row.symbol)}`;
 
-  const keepBuy = new Set(buys.slice(0, buyCap).map((row) => keyOf(row as any)));
+  const keepBuyRows = buys.slice(0, buyCap);
   const buyOverflow = buys.slice(buyCap);
+  const keepBuy = new Set(keepBuyRows.map((row) => keyOf(row as any)));
 
-  const watchPool = [...watches, ...buyOverflow].sort((a, b) => {
-    const ac = Number(a.confidence ?? 0);
-    const bc = Number(b.confidence ?? 0);
-    if (bc !== ac) return bc - ac;
-    return String(a.symbol ?? "").localeCompare(String(b.symbol ?? ""));
-  });
-
-  const keepWatch = new Set(watchPool.slice(0, watchCap).map((row) => keyOf(row as any)));
+  const watchPool = [...watchBase, ...buyOverflow].sort(rankSort);
+  const keepWatchRows = watchPool.slice(0, watchCap);
+  const keepWatch = new Set(keepWatchRows.map((row) => keyOf(row as any)));
+  const buyRankMap = new Map(keepBuyRows.map((row, idx) => [keyOf(row as any), idx + 1]));
+  const watchRankMap = new Map(keepWatchRows.map((row, idx) => [keyOf(row as any), idx + 1]));
 
   const updates: Array<{
     date: string;
@@ -183,17 +242,19 @@ async function enforceGlobalCaps(opts: {
     strategy_version: string;
     symbol: string;
     signal: "BUY" | "WATCH" | "AVOID";
+    rank_score: number;
+    rank: number | null;
     reason_summary: string;
     reason_json: unknown;
     updated_at: string;
   }> = [];
 
-  for (const row of data) {
+  for (const row of rows) {
     const key = keyOf(row as any);
     const shouldBeBuy = keepBuy.has(key);
     const shouldBeWatch = !shouldBeBuy && keepWatch.has(key);
     const desired: "BUY" | "WATCH" | "AVOID" = shouldBeBuy ? "BUY" : shouldBeWatch ? "WATCH" : "AVOID";
-    if (row.signal === desired) continue;
+    const desiredRank = desired === "BUY" ? buyRankMap.get(key) ?? null : desired === "WATCH" ? watchRankMap.get(key) ?? null : null;
 
     const priorReason = row.reason_json && typeof row.reason_json === "object" ? row.reason_json : {};
     const capAdjustment =
@@ -211,17 +272,22 @@ async function enforceGlobalCaps(opts: {
       strategy_version: String((row as any).strategy_version),
       symbol: String((row as any).symbol),
       signal: desired,
-      reason_summary: `${String(row.reason_summary ?? "").trim()} • ${capAdjustment}`.trim(),
+      rank_score: row.rank_score,
+      rank: desiredRank,
+      reason_summary:
+        row.signal === desired
+          ? String(row.reason_summary ?? "").trim()
+          : `${String(row.reason_summary ?? "").trim()} • ${capAdjustment}`.trim(),
       reason_json: {
         ...priorReason,
-        cap_adjustment: capAdjustment,
+        ...(row.signal === desired ? {} : { cap_adjustment: capAdjustment }),
+        rank_score: row.rank_score,
+        rank: desiredRank,
         capped_signal: desired,
       },
       updated_at: new Date().toISOString(),
     });
   }
-
-  if (updates.length === 0) return;
 
   const { error: upErr } = await supabase
     .from("daily_scans")

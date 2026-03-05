@@ -9,6 +9,8 @@ type Row = {
   symbol: string;
   signal: "BUY" | "WATCH" | "AVOID";
   confidence: number;
+  rank_score?: number | null;
+  rank?: number | null;
   entry: number;
   stop: number;
   reason_json?: any;
@@ -1470,6 +1472,13 @@ export default function ScanTableClient({
                         <span className={`ml-2 rounded-full border px-2 py-1 text-[10px] font-semibold ${actionPill(r.execution.action)}`}>
                           {actionLabel(r.execution.action)}
                         </span>
+                        {(r.effectiveSignal === "BUY" || r.effectiveSignal === "WATCH") &&
+                        typeof r.rank === "number" &&
+                        Number.isFinite(r.rank) ? (
+                          <span className="ml-2 rounded-full border border-slate-300 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-700">
+                            #{Math.round(r.rank)}
+                          </span>
+                        ) : null}
                         {r.execution.flags.stopTooWide ? (
                           <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
                             STOP TOO WIDE
