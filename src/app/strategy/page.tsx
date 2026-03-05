@@ -1,25 +1,28 @@
 import Link from "next/link";
 import BacktestClient from "./BacktestClient";
+import AppShell from "@/components/app-shell";
+import { getWorkspaceContext } from "@/lib/workspace_context";
 
-export default function StrategyPage() {
+export default async function StrategyPage() {
+  const { user, portfolios } = await getWorkspaceContext("/strategy");
   return (
-    <div className="mx-auto max-w-4xl p-6 space-y-6 text-slate-900">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-2xl font-semibold tracking-tight">Strategy & Logic</div>
-          <div className="text-sm text-slate-600">
-            What the platform is optimizing for, and how to use the signals with discipline.
+    <AppShell currentPath="/strategy" userEmail={user.email ?? ""} portfolios={portfolios}>
+      <div className="mx-auto max-w-4xl space-y-6 text-slate-900">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-2xl font-semibold tracking-tight">Strategy & Logic</div>
+            <div className="text-sm text-slate-600">
+              What the platform is optimizing for, and how to use the signals with discipline.
+            </div>
           </div>
+          <Link
+            href="/ideas"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
+          >
+            <span aria-hidden="true">←</span>
+            Back to Ideas
+          </Link>
         </div>
-
-        <Link
-          href="/screener"
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
-        >
-          <span aria-hidden="true">←</span>
-          Back to Screener
-        </Link>
-      </div>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-2">
         <div className="text-lg font-semibold">0) Universe</div>
@@ -106,7 +109,8 @@ export default function StrategyPage() {
         </div>
       </section>
 
-      <BacktestClient />
-    </div>
+        <BacktestClient />
+      </div>
+    </AppShell>
   );
 }
