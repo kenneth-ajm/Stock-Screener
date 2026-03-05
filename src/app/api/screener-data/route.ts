@@ -24,7 +24,6 @@ type ScanRow = {
   tp1: number;
   tp2: number;
   reason_summary?: string | null;
-  reason_json?: any;
 };
 
 function rankRows(rows: ScanRow[]) {
@@ -40,11 +39,6 @@ function applyDisplayCaps(rows: ScanRow[]) {
   const buyRanked = rankRows(rows.filter((r) => r.signal === "BUY")).slice(0, BUY_CAP);
   const watchRanked = rankRows(rows.filter((r) => r.signal === "WATCH")).slice(0, WATCH_CAP);
   return rankRows([...buyRanked, ...watchRanked]);
-}
-
-function toNum(v: unknown, fallback = 0) {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : fallback;
 }
 
 const loadScreenerDataCached = unstable_cache(
@@ -73,7 +67,7 @@ const loadScreenerDataCached = unstable_cache(
       ? await (supabase as any)
           .from("daily_scans")
           .select(
-            "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json"
+            "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary"
           )
           .eq("universe_slug", universeSlug)
           .eq("strategy_version", strategyVersion)
@@ -101,7 +95,6 @@ const loadScreenerDataCached = unstable_cache(
         },
         capacity
       );
-      const indicators = row.reason_json?.indicators ?? row.reason_json?.metrics ?? {};
       return {
         symbol: row.symbol,
         signal: row.signal,
@@ -113,9 +106,9 @@ const loadScreenerDataCached = unstable_cache(
         rank: row.rank ?? null,
         rank_score: row.rank_score ?? null,
         reason_summary: row.reason_summary ?? null,
-        atr14: toNum(indicators?.atr14, 0) || null,
-        event_risk: Boolean(row.reason_json?.flags?.event_risk),
-        news_risk: Boolean(row.reason_json?.flags?.news_risk),
+        atr14: null,
+        event_risk: false,
+        news_risk: false,
         action: action.action,
         action_reason: action.action_reason,
         sizing: action.sizing,

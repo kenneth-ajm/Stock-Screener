@@ -3,6 +3,7 @@ import { supabaseServer } from "@/lib/supabase/server";
 import ScreenerPanelClient from "./ScreenerPanelClient";
 import UtilitiesClient from "./UtilitiesClient";
 import ScreenerSearchClient from "./ScreenerSearchClient";
+import CashBalanceEditor from "./CashBalanceEditor";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 
@@ -47,7 +48,7 @@ export default async function ScreenerPage({
 
   const { data: defaultPortfolio } = await supabase
     .from("portfolios")
-    .select("id, name, account_currency, account_size, risk_per_trade, max_positions")
+    .select("id, name, account_currency, account_size, risk_per_trade, max_positions,cash_balance,cash_updated_at")
     .eq("is_default", true)
     .limit(1)
     .maybeSingle();
@@ -166,6 +167,14 @@ export default async function ScreenerPage({
                     Strategy & logic
                   </a>
                 </div>
+
+                <CashBalanceEditor
+                  initialCashBalance={
+                    typeof defaultPortfolio.cash_balance === "number"
+                      ? defaultPortfolio.cash_balance
+                      : null
+                  }
+                />
 
                 <div className="mt-5 border-t border-slate-200 pt-4 space-y-2">
                   <div className="text-sm font-semibold">Market regime (SPY)</div>

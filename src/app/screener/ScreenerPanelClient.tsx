@@ -39,6 +39,9 @@ type ScreenerPayload = {
   capacity?: {
     slots_left: number;
     cash_available: number;
+    cash_source: "manual" | "estimated";
+    cash_updated_at: string | null;
+    risk_per_trade: number;
   } | null;
   rows?: Row[];
   error?: string;
@@ -121,9 +124,17 @@ export default function ScreenerPanelClient({
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
           Today&apos;s Plan • Slots left: <span className="font-semibold">{data.capacity.slots_left}</span>
           {" • "}
-          Cash available: <span className="font-semibold">{Number(data.capacity.cash_available).toFixed(2)}</span>
+          Cash available: <span className="font-semibold">{Number(data.capacity.cash_available).toFixed(2)}</span>{" "}
+          <span className="text-xs text-slate-500">
+            ({data.capacity.cash_source === "manual" ? "Exact" : "Estimated"})
+          </span>
           {" • "}
           Actionable today: <span className="font-semibold">{actionable}</span>
+          {data.capacity.cash_source === "estimated" ? (
+            <div className="mt-1 text-xs text-slate-500">
+              Set cash balance to make this accurate.
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -131,4 +142,3 @@ export default function ScreenerPanelClient({
     </div>
   );
 }
-

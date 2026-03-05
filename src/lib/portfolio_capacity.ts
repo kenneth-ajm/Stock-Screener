@@ -6,6 +6,8 @@ type CapacityArgs = {
 export type PortfolioCapacity = {
   portfolio_value: number;
   cash_available: number;
+  cash_source: "manual" | "estimated";
+  cash_updated_at: string | null;
   open_positions_count: number;
   max_positions: number;
   slots_left: number;
@@ -21,7 +23,7 @@ export async function getActivePortfolioCapacity(opts: CapacityArgs): Promise<Po
   const supa = opts.supabase as any;
   const { data: portfolio, error: pErr } = await supa
     .from("portfolios")
-    .select("id,account_size,risk_per_trade,max_positions")
+    .select("id,account_size,risk_per_trade,max_positions,cash_balance,cash_updated_at")
     .eq("user_id", opts.userId)
     .eq("is_default", true)
     .maybeSingle();
@@ -43,26 +45,34 @@ export async function getActivePortfolioCapacity(opts: CapacityArgs): Promise<Po
   const openPositions = Array.isArray(openRows) ? openRows : [];
   const openCount = openPositions.length;
   const deployed = openPositions.reduce((sum: number, row: any) => {
-    const entry = toNum(row.entry_price, 0);
-    const shares = toNum(row.shares, 0);
+    if (row?.entry_price == null || row?.shares == null) return sum;
+    const entry = toNum(row.entry_price, NaN);
+    const shares = toNum(row.shares, NaN);
+    if (!Number.isFinite(entry) || !Number.isFinite(shares)) return sum;
     return sum + entry * shares;
   }, 0);
 
   const cashApprox = portfolioValue > 0 ? portfolioValue - deployed : 0;
-  const cashAvailable =
+  const hasManualCash =
+    portfolio?.cash_balance != null && Number.isFinite(Number(portfolio.cash_balance));
+  const manualCash = hasManualCash ? Number(portfolio.cash_balance) : null;
+  const estimatedCash =
     Number.isFinite(cashApprox) && cashApprox >= 0
       ? cashApprox
       : portfolioValue > 0
         ? portfolioValue
         : 0;
+  const cashAvailable = hasManualCash ? Math.max(0, manualCash as number) : estimatedCash;
+  const cashSource = hasManualCash ? "manual" : "estimated";
 
   return {
     portfolio_value: portfolioValue,
     cash_available: cashAvailable,
+    cash_source: cashSource,
+    cash_updated_at: portfolio?.cash_updated_at ? String(portfolio.cash_updated_at) : null,
     open_positions_count: openCount,
     max_positions: maxPositions,
     slots_left: Math.max(0, maxPositions - openCount),
     risk_per_trade: riskPerTrade,
   };
 }
-
