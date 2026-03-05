@@ -1,20 +1,19 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { POST as scanPost } from "@/app/api/scan/route";
+import {
+  CORE_MOMENTUM_DEFAULT_UNIVERSE,
+  CORE_MOMENTUM_DEFAULT_VERSION,
+} from "@/lib/strategy/coreMomentumSwing";
+import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
+import {
+  finalizeSignals,
+  resolveScanDate,
+  runScanPipeline,
+  type ScanEngineClient,
+} from "@/lib/scan_engine";
 
 const UNIVERSE_SLUG = "core_800";
 const STATUS_KEY = "daily_autopilot_core_800";
-
-type BarRow = {
-  symbol: string;
-  date: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  source?: string | null;
-};
 
 function sma(values: number[], period: number) {
   if (values.length < period) return null;
@@ -64,6 +63,7 @@ async function ingestGroupedForDate(opts: {
       .map((r: { symbol?: string | null }) => String(r.symbol ?? "").toUpperCase())
       .filter(Boolean)
   );
+
   const upserts: Array<{
     symbol: string;
     date: string;
@@ -106,13 +106,11 @@ async function ingestGroupedForDate(opts: {
   }
 
   if (upserts.length === 0) return 0;
-
   const chunkSize = 400;
   let written = 0;
   for (let i = 0; i < upserts.length; i += chunkSize) {
-    const chunk = upserts.slice(i, i + chunkSize);
-    const chunkAny = chunk as any[];
-    const { error } = await supa.from("price_bars").upsert(chunkAny, {
+    const chunk = upserts.slice(i, i + chunkSize) as any[];
+    const { error } = await supa.from("price_bars").upsert(chunk, {
       onConflict: "symbol,date",
     });
     if (error) throw error;
@@ -121,160 +119,99 @@ async function ingestGroupedForDate(opts: {
   return written;
 }
 
-async function updateSpyRegimeForDate(opts: {
-  supabase: any;
-  date: string;
-}) {
+async function updateSpyRegimeForDate(opts: { supabase: any; date: string }) {
   const supa = opts.supabase as any;
   const { data: latestRows, error: latestErr } = await supa
     .from("price_bars")
-    .select("symbol,date,open,high,low,close,volume,source")
+    .select("date,close")
     .eq("symbol", "SPY")
     .order("date", { ascending: false })
     .limit(1);
   if (latestErr) throw latestErr;
-  const latestList = (latestRows ?? []) as BarRow[];
-  const latest = latestList[0];
-  if (!latest) {
-    throw new Error("No SPY bars available in price_bars");
-  }
+  const latest = latestRows?.[0];
+  if (!latest) throw new Error("No SPY bars available in price_bars");
+
   const regimeDateUsed = String(latest.date);
   const spyRegimeStale = regimeDateUsed < opts.date;
-
   const { data: bars, error: barsErr } = await supa
     .from("price_bars")
-    .select("symbol,date,open,high,low,close,volume,source")
+    .select("date,close")
     .eq("symbol", "SPY")
     .lte("date", regimeDateUsed)
     .order("date", { ascending: false })
     .limit(260);
   if (barsErr) throw barsErr;
-  const typedBars = (bars ?? []) as BarRow[];
-  if (typedBars.length < 200) {
-    throw new Error("Not enough SPY bars to compute regime");
-  }
+  if (!bars || bars.length < 200) throw new Error("Not enough SPY bars to compute regime");
 
-  const asc = [...typedBars].reverse();
-  const closes = asc.map((b) => Number(b.close));
+  const asc = [...bars].reverse();
+  const closes = asc.map((b: any) => Number(b.close));
   const sma200 = sma(closes, 200);
   if (!sma200) throw new Error("Unable to compute SPY SMA200");
   const close = Number(latest.close);
   const state = close > sma200 ? "FAVORABLE" : "DEFENSIVE";
 
-  const { error: upErr } = await supa
-    .from("market_regime")
-    .upsert(
-      {
-        symbol: "SPY",
-        date: regimeDateUsed,
-        close,
-        sma200,
-        state,
-      },
-      { onConflict: "symbol,date" }
-    );
+  const { error: upErr } = await supa.from("market_regime").upsert(
+    {
+      symbol: "SPY",
+      date: regimeDateUsed,
+      close,
+      sma200,
+      state,
+    },
+    { onConflict: "symbol,date" }
+  );
   if (upErr) throw upErr;
+
   return { state, regime_date_used: regimeDateUsed, spy_regime_stale: spyRegimeStale };
 }
 
-async function runAutopilot() {
-  const startedAt = Date.now();
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-  const supa = supabase as any;
-  const { data: latestSpyRows, error: latestSpyErr } = await supa
-    .from("price_bars")
-    .select("date")
-    .eq("symbol", "SPY")
-    .order("date", { ascending: false })
-    .limit(1);
-  if (latestSpyErr) throw new Error(latestSpyErr.message ?? "Failed to determine scan date");
-  const dateUsed = latestSpyRows?.[0]?.date ? String(latestSpyRows[0].date) : null;
-  if (!dateUsed) throw new Error("No SPY bars available in price_bars");
+async function runFullStrategyScan(opts: {
+  supabase: any;
+  universe_slug: string;
+  strategy_version: string;
+  scan_date_used: string;
+  total_members: number;
+}) {
+  const batchLimit = 200;
+  const batches = Math.max(1, Math.ceil(opts.total_members / batchLimit));
+  let processed = 0;
+  let scored = 0;
+  let upserted = 0;
+  let regime_state: string | null = null;
 
-  const { data: universe, error: universeErr } = await supa
-    .from("universes")
-    .select("id")
-    .eq("slug", UNIVERSE_SLUG)
-    .maybeSingle();
-  if (universeErr) throw new Error(universeErr.message);
-  if (!universe?.id) throw new Error(`Universe not found: ${UNIVERSE_SLUG}`);
-
-  const { data: members, error: membersErr } = await supa
-    .from("universe_members")
-    .select("symbol")
-    .eq("universe_id", universe.id)
-    .eq("active", true)
-    .order("symbol", { ascending: true });
-  if (membersErr) throw new Error(membersErr.message);
-  const symbols = (members ?? [])
-    .map((m: { symbol?: string | null }) => String(m.symbol ?? "").toUpperCase())
-    .filter(Boolean);
-  const symbolSet = new Set<string>(symbols);
-  symbolSet.add("SPY");
-  const symbolsWithSpy = Array.from(symbolSet) as string[];
-
-  const barsUpserted = await ingestGroupedForDate({ supabase: supa, date: dateUsed, symbols: symbolsWithSpy });
-  const regime = await updateSpyRegimeForDate({ supabase: supa, date: dateUsed });
-
-  async function runStrategyScan(strategyVersion: string) {
-    const scanReq = new Request("http://localhost/api/scan", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        universe_slug: UNIVERSE_SLUG,
-        strategy_version: strategyVersion,
-        scan_date: dateUsed,
-        offset: 0,
-        limit: 1200,
-      }),
+  for (let i = 0; i < batches; i += 1) {
+    const result = await runScanPipeline({
+      supabase: opts.supabase,
+      universe_slug: opts.universe_slug,
+      strategy_version: opts.strategy_version,
+      scan_date: opts.scan_date_used,
+      offset: i * batchLimit,
+      limit: batchLimit,
+      finalize: false,
     });
-    const scanRes = await scanPost(scanReq);
-    const scanJson = await scanRes.json().catch(() => null);
-    if (!scanRes.ok || !scanJson?.ok) {
-      throw new Error(
-        scanJson?.error || `Scan failed (${strategyVersion}) with status ${scanRes.status}`
-      );
-    }
-    const { data: counts, error: countErr } = await supa
-      .from("daily_scans")
-      .select("signal")
-      .eq("universe_slug", UNIVERSE_SLUG)
-      .eq("strategy_version", strategyVersion)
-      .eq("date", dateUsed)
-      .in("signal", ["BUY", "WATCH"]);
-    if (countErr) throw new Error(countErr.message);
+    if (!result.ok) throw new Error(result.error ?? `Batch ${i + 1} failed`);
 
-    return {
-      buys: (counts ?? []).filter((r: { signal?: string | null }) => r.signal === "BUY").length,
-      watch: (counts ?? []).filter((r: { signal?: string | null }) => r.signal === "WATCH").length,
-      scan_upserted: Number(scanJson?.upserted ?? 0),
-    };
+    processed += Number(result.processed ?? 0);
+    scored += Number(result.scored ?? 0);
+    upserted += Number(result.upserted ?? 0);
+    regime_state = String(result.regime_state ?? regime_state ?? "FAVORABLE");
+    if (Number(result.processed ?? 0) < batchLimit) break;
   }
 
-  const momentum = await runStrategyScan("v2_core_momentum");
-  const trend = await runStrategyScan("v1_trend_hold");
+  const finalization = await finalizeSignals({
+    supabase: opts.supabase,
+    date: opts.scan_date_used,
+    universe_slug: opts.universe_slug,
+    strategy_version: opts.strategy_version,
+  });
+  if (!finalization.ok) throw new Error(finalization.error ?? "Finalization failed");
 
   return {
-    ok: true,
-    scan_date: dateUsed,
-    date_used: dateUsed,
-    bars_upserted: barsUpserted,
-    regime_state: regime.state,
-    regime_date_used: regime.regime_date_used,
-    spy_regime_stale: regime.spy_regime_stale,
-    momentum: {
-      buys: momentum.buys,
-      watch: momentum.watch,
-    },
-    trend: {
-      buys: trend.buys,
-      watch: trend.watch,
-    },
-    scan_written: momentum.scan_upserted + trend.scan_upserted,
-    duration_ms: Date.now() - startedAt,
+    processed,
+    scored,
+    upserted,
+    regime_state,
+    finalization,
   };
 }
 
@@ -297,18 +234,95 @@ async function writeStatus(payload: Record<string, unknown>) {
   }
 }
 
+async function runAutopilot() {
+  const startedAt = Date.now();
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  ) as ScanEngineClient;
+  const supa = supabase as any;
+
+  const dateResult = await resolveScanDate({ supabase: supa });
+  if (!dateResult.ok || !dateResult.scan_date_used) {
+    throw new Error(dateResult.error ?? "Unable to resolve scan date");
+  }
+  const scanDate = dateResult.scan_date_used;
+
+  const { data: universe, error: universeErr } = await supa
+    .from("universes")
+    .select("id")
+    .eq("slug", UNIVERSE_SLUG)
+    .maybeSingle();
+  if (universeErr) throw new Error(universeErr.message);
+  if (!universe?.id) throw new Error(`Universe not found: ${UNIVERSE_SLUG}`);
+
+  const { data: members, error: membersErr } = await supa
+    .from("universe_members")
+    .select("symbol")
+    .eq("universe_id", universe.id)
+    .eq("active", true)
+    .order("symbol", { ascending: true });
+  if (membersErr) throw new Error(membersErr.message);
+  const symbols = (members ?? [])
+    .map((m: { symbol?: string | null }) => String(m.symbol ?? "").toUpperCase())
+    .filter(Boolean);
+  const symbolsWithSpy = Array.from(new Set([...symbols, "SPY"]));
+
+  const bars_upserted = await ingestGroupedForDate({
+    supabase: supa,
+    date: scanDate,
+    symbols: symbolsWithSpy,
+  });
+  const regime = await updateSpyRegimeForDate({ supabase: supa, date: scanDate });
+
+  const momentumRun = await runFullStrategyScan({
+    supabase: supa,
+    universe_slug: UNIVERSE_SLUG,
+    strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
+    scan_date_used: scanDate,
+    total_members: symbols.length,
+  });
+
+  const trendRun = await runFullStrategyScan({
+    supabase: supa,
+    universe_slug: UNIVERSE_SLUG,
+    strategy_version: TREND_HOLD_DEFAULT_VERSION,
+    scan_date_used: scanDate,
+    total_members: symbols.length,
+  });
+
+  return {
+    ok: true,
+    scan_date: scanDate,
+    scan_date_used: scanDate,
+    lctd_source: dateResult.lctd_source,
+    bars_upserted,
+    regime_state: regime.state,
+    regime_date_used: regime.regime_date_used,
+    spy_regime_stale: regime.spy_regime_stale,
+    momentum: {
+      buys: Number((momentumRun.finalization as any)?.buy_count ?? 0),
+      watch: Number((momentumRun.finalization as any)?.watch_count ?? 0),
+    },
+    trend: {
+      buys: Number((trendRun.finalization as any)?.buy_count ?? 0),
+      watch: Number((trendRun.finalization as any)?.watch_count ?? 0),
+    },
+    duration_ms: Date.now() - startedAt,
+  };
+}
+
 export async function GET() {
   try {
     const result = await runAutopilot();
     await writeStatus({
       ok: true,
       scan_date: result.scan_date,
-      date_used: result.date_used,
+      date_used: result.scan_date_used,
       bars_upserted: result.bars_upserted,
       regime_state: result.regime_state,
       regime_date_used: result.regime_date_used,
       spy_regime_stale: result.spy_regime_stale,
-      scan_written: result.scan_written,
       buy_count: result.momentum.buys,
       watch_count: result.momentum.watch,
       trend_buy_count: result.trend.buys,
@@ -326,7 +340,6 @@ export async function GET() {
       scan_date: null,
       date_used: null,
       bars_upserted: 0,
-      scan_written: 0,
       buy_count: 0,
       watch_count: 0,
       trend_buy_count: 0,
