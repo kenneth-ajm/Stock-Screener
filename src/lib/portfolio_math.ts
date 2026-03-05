@@ -8,6 +8,9 @@ export type PortfolioMath = {
   open_count: number;
   deployed_cost_basis: number;
   estimated_cash: number;
+  lots_used: boolean;
+  open_lots_count: number;
+  open_symbols_count: number;
   unknown_open_positions_count: number;
   unknown_examples: Array<{ symbol: string; shares: unknown; entry_price: unknown }>;
 };
@@ -33,19 +36,75 @@ export async function computePortfolioMath(opts: ComputePortfolioMathArgs): Prom
 
   const accountSize = toNum(portfolio.account_size) ?? 0;
 
-  const { data: openRows, error: openErr } = await supa
-    .from("portfolio_positions")
-    .select("symbol,shares,entry_price,status")
-    .eq("portfolio_id", portfolioId)
-    .eq("status", "OPEN");
-  if (openErr) throw openErr;
+  // Preferred source of truth: open lots (qty, avg_cost). Fallback to grouped/open positions.
+  let lotsUsed = false;
+  let openRows: any[] = [];
+  let openErr: any = null;
+
+  try {
+    const lotsRes = await supa
+      .from("portfolio_lots")
+      .select("symbol,qty,avg_cost,status")
+      .eq("portfolio_id", portfolioId)
+      .eq("status", "OPEN");
+    if (!lotsRes.error && Array.isArray(lotsRes.data)) {
+      if (lotsRes.data.length > 0) {
+        openRows = lotsRes.data.map((row: any) => ({
+          symbol: row?.symbol,
+          shares: row?.qty,
+          entry_price: row?.avg_cost,
+        }));
+        lotsUsed = true;
+      }
+    } else {
+      openErr = lotsRes.error;
+    }
+  } catch (e) {
+    openErr = e;
+  }
+
+  if (!lotsUsed) {
+    try {
+      const lotLikeRes = await supa
+        .from("portfolio_positions")
+        .select("symbol,qty,avg_cost,status")
+        .eq("portfolio_id", portfolioId)
+        .eq("status", "OPEN");
+      if (!lotLikeRes.error && Array.isArray(lotLikeRes.data) && lotLikeRes.data.length > 0) {
+        openRows = lotLikeRes.data.map((row: any) => ({
+          symbol: row?.symbol,
+          shares: row?.qty,
+          entry_price: row?.avg_cost,
+        }));
+        lotsUsed = true;
+      } else if (lotLikeRes.error) {
+        openErr = lotLikeRes.error;
+      }
+    } catch (e) {
+      openErr = e;
+    }
+  }
+
+  if (!lotsUsed) {
+    const fallbackRes = await supa
+      .from("portfolio_positions")
+      .select("symbol,shares,entry_price,status")
+      .eq("portfolio_id", portfolioId)
+      .eq("status", "OPEN");
+    if (fallbackRes.error) throw fallbackRes.error ?? openErr;
+    openRows = Array.isArray(fallbackRes.data) ? fallbackRes.data : [];
+  }
 
   const rows = Array.isArray(openRows) ? openRows : [];
   let deployedCostBasis = 0;
   let unknownOpenPositionsCount = 0;
   const unknownExamples: Array<{ symbol: string; shares: unknown; entry_price: unknown }> = [];
+  const symbolSet = new Set<string>();
 
   for (const row of rows) {
+    const symbol = String(row?.symbol ?? "").toUpperCase().trim();
+    if (symbol) symbolSet.add(symbol);
+
     const shares = toNum(row?.shares);
     const entryPrice = toNum(row?.entry_price);
     if (shares == null || entryPrice == null) {
@@ -64,9 +123,12 @@ export async function computePortfolioMath(opts: ComputePortfolioMathArgs): Prom
 
   return {
     account_size: accountSize,
-    open_count: rows.length,
+    open_count: lotsUsed ? symbolSet.size : rows.length,
     deployed_cost_basis: deployedCostBasis,
     estimated_cash: accountSize - deployedCostBasis,
+    lots_used: lotsUsed,
+    open_lots_count: rows.length,
+    open_symbols_count: symbolSet.size,
     unknown_open_positions_count: unknownOpenPositionsCount,
     unknown_examples: unknownExamples,
   };
