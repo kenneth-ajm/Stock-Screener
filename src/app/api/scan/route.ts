@@ -6,7 +6,6 @@ import {
   CORE_MOMENTUM_DEFAULT_VERSION,
   CORE_MOMENTUM_WATCH_CAP,
   evaluateCoreMomentumSwing,
-  isoDate,
   type RegimeState,
   type RuleEvaluation,
 } from "@/lib/strategy/coreMomentumSwing";
@@ -16,7 +15,6 @@ import {
   TREND_HOLD_WATCH_CAP,
   evaluateTrendHold,
 } from "@/lib/strategy/trendHold";
-import { lastCompletedUsTradingDay } from "@/lib/tradingDay";
 
 type ScanBody = {
   universe_slug?: string;
@@ -114,6 +112,18 @@ async function getRegimeByDate(opts: {
     regimeDateUsed: scanDate,
     regimeStale: true,
   };
+}
+
+async function getLatestSpyScanDate(supabase: ReturnType<typeof admin>) {
+  const { data, error } = await supabase
+    .from("price_bars")
+    .select("date")
+    .eq("symbol", "SPY")
+    .order("date", { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  const d = data?.[0]?.date;
+  return d ? String(d) : null;
 }
 
 async function enforceGlobalCaps(opts: {
@@ -231,9 +241,15 @@ export async function POST(req: Request) {
     const watchCap = isTrend ? TREND_HOLD_WATCH_CAP : CORE_MOMENTUM_WATCH_CAP;
     const offset = Number.isFinite(body.offset as number) ? Number(body.offset) : 0;
     const limit = Number.isFinite(body.limit as number) ? Number(body.limit) : 200;
-    const scanDate = (body.scan_date && String(body.scan_date)) || isoDate();
-    const expectedTradingDate = lastCompletedUsTradingDay();
-    const staleScan = scanDate < expectedTradingDate;
+    const scanDate = await getLatestSpyScanDate(supabase);
+    if (!scanDate) {
+      return NextResponse.json(
+        { ok: false, error: "No SPY bars available in price_bars to determine scan_date" },
+        { status: 500 }
+      );
+    }
+    const expectedTradingDate = scanDate;
+    const staleScan = false;
 
     const { regimeState, regimeDateUsed, regimeStale } = await getRegimeByDate({
       supabase,
@@ -416,6 +432,7 @@ export async function POST(req: Request) {
       ok: true,
       universe_slug,
       strategy_version: strategyVersion,
+      scan_date: scanDate,
       date: scanDate,
       stale_scan: staleScan,
       last_completed_trading_day: expectedTradingDate,

@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { POST as scanPost } from "@/app/api/scan/route";
-import { lastCompletedUsTradingDay } from "@/lib/tradingDay";
 
 type Body = {
   universe_slug?: string;
@@ -10,6 +9,8 @@ type Body = {
 
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY_VERSION = "v2_core_momentum";
+const BUY_CAP = 5;
+const WATCH_CAP = 10;
 
 function sma(values: number[], period: number) {
   if (values.length < period) return null;
@@ -35,9 +36,7 @@ async function refreshSpyRegimeForDate(dateUsed: string) {
   if (!Array.isArray(bars) || bars.length < 200) throw new Error("Not enough SPY bars to compute regime");
 
   const latest = bars[0];
-  if (!latest || String(latest.date) !== dateUsed) {
-    throw new Error(`SPY bar missing for ${dateUsed}`);
-  }
+  if (!latest) throw new Error("SPY bars unavailable for regime computation");
 
   const asc = [...bars].reverse();
   const closes = asc.map((b: any) => Number(b.close));
@@ -60,20 +59,127 @@ async function refreshSpyRegimeForDate(dateUsed: string) {
   return state;
 }
 
+async function getLatestSpyScanDate(supa: any) {
+  const { data, error } = await supa
+    .from("price_bars")
+    .select("date")
+    .eq("symbol", "SPY")
+    .order("date", { ascending: false })
+    .limit(1);
+  if (error) throw new Error(error.message ?? "Failed to resolve latest SPY scan date");
+  const d = data?.[0]?.date;
+  return d ? String(d) : null;
+}
+
+async function finalizeCappedSignals(opts: {
+  supa: any;
+  date_used: string;
+  universe_slug: string;
+  strategy_version: string;
+  buyCap: number;
+  watchCap: number;
+}) {
+  const { supa, date_used, universe_slug, strategy_version, buyCap, watchCap } = opts;
+
+  const { data, error } = await supa
+    .from("daily_scans")
+    .select("date,universe_slug,strategy_version,symbol,signal,confidence,reason_summary,reason_json,updated_at")
+    .eq("date", date_used)
+    .eq("universe_slug", universe_slug)
+    .eq("strategy_version", strategy_version);
+  if (error) throw new Error(error.message ?? "Failed to load rows for finalization");
+
+  const rows = Array.isArray(data) ? data : [];
+  const rank = (a: any, b: any) => {
+    const ac = Number(a?.confidence ?? 0);
+    const bc = Number(b?.confidence ?? 0);
+    if (bc !== ac) return bc - ac;
+    return String(a?.symbol ?? "").localeCompare(String(b?.symbol ?? ""));
+  };
+
+  const bySymbol = new Map<string, any>();
+  for (const r of rows) bySymbol.set(String(r.symbol), { ...r });
+
+  const buys = rows.filter((r: any) => r.signal === "BUY").sort(rank);
+  for (let i = buyCap; i < buys.length; i++) {
+    const sym = String(buys[i].symbol);
+    const cur = bySymbol.get(sym);
+    if (cur) cur.signal = "WATCH";
+  }
+
+  const watchesAfterBuyPass = [...bySymbol.values()].filter((r: any) => r.signal === "WATCH").sort(rank);
+  for (let i = watchCap; i < watchesAfterBuyPass.length; i++) {
+    const sym = String(watchesAfterBuyPass[i].symbol);
+    const cur = bySymbol.get(sym);
+    if (cur) cur.signal = "AVOID";
+  }
+
+  const updates: any[] = [];
+  for (const original of rows) {
+    const updated = bySymbol.get(String(original.symbol));
+    if (!updated) continue;
+    if (updated.signal === original.signal) continue;
+    const priorReasonJson =
+      original.reason_json && typeof original.reason_json === "object" ? original.reason_json : {};
+    const capAdjustment =
+      original.signal === "BUY" && updated.signal === "WATCH"
+        ? "BUY overflow downgraded to WATCH (final cap pass)"
+        : original.signal === "WATCH" && updated.signal === "AVOID"
+          ? "WATCH overflow downgraded to AVOID (final cap pass)"
+          : "Signal adjusted by final cap pass";
+
+    updates.push({
+      date: String(original.date),
+      universe_slug: String(original.universe_slug),
+      strategy_version: String(original.strategy_version),
+      symbol: String(original.symbol),
+      signal: updated.signal,
+      reason_summary: `${String(original.reason_summary ?? "").trim()} • ${capAdjustment}`.trim(),
+      reason_json: {
+        ...priorReasonJson,
+        cap_adjustment: capAdjustment,
+        capped_signal: updated.signal,
+      },
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  if (updates.length > 0) {
+    const { error: upErr } = await supa
+      .from("daily_scans")
+      .upsert(updates, { onConflict: "date,universe_slug,strategy_version,symbol" });
+    if (upErr) throw new Error(upErr.message ?? "Failed to persist cap finalization");
+  }
+
+  const finalRows = [...bySymbol.values()];
+  return {
+    updated: updates.length,
+    final_buy_count: finalRows.filter((r: any) => r.signal === "BUY").length,
+    final_watch_count: finalRows.filter((r: any) => r.signal === "WATCH").length,
+    final_avoid_count: finalRows.filter((r: any) => r.signal === "AVOID").length,
+  };
+}
+
 export async function POST(req: Request) {
   const startedAt = Date.now();
   try {
-    const body = (await req.json().catch(() => ({}))) as Body;
-    const universe_slug = String(body?.universe_slug ?? DEFAULT_UNIVERSE).trim() || DEFAULT_UNIVERSE;
-    const strategy_version =
-      String(body?.strategy_version ?? DEFAULT_STRATEGY_VERSION).trim() || DEFAULT_STRATEGY_VERSION;
-    const date_used = lastCompletedUsTradingDay();
-    const regime_state = await refreshSpyRegimeForDate(date_used);
-
     const supa = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     ) as any;
+
+    const body = (await req.json().catch(() => ({}))) as Body;
+    const universe_slug = String(body?.universe_slug ?? DEFAULT_UNIVERSE).trim() || DEFAULT_UNIVERSE;
+    const strategy_version =
+      String(body?.strategy_version ?? DEFAULT_STRATEGY_VERSION).trim() || DEFAULT_STRATEGY_VERSION;
+    const date_used = await getLatestSpyScanDate(supa);
+    if (!date_used) {
+      return NextResponse.json(
+        { ok: false, error: "No SPY bars available in price_bars to determine scan_date" },
+        { status: 500 }
+      );
+    }
+    const regime_state = await refreshSpyRegimeForDate(date_used);
 
     const { data: universeRow, error: universeErr } = await supa
       .from("universes")
@@ -154,6 +260,7 @@ export async function POST(req: Request) {
           detail: first_error,
           universe_slug,
           strategy_version,
+          scan_date: date_used,
           date_used,
           regime_state,
           batches_ok,
@@ -163,10 +270,20 @@ export async function POST(req: Request) {
       );
     }
 
+    const finalization = await finalizeCappedSignals({
+      supa,
+      date_used,
+      universe_slug,
+      strategy_version,
+      buyCap: BUY_CAP,
+      watchCap: WATCH_CAP,
+    });
+
     return NextResponse.json({
       ok: true,
       universe_slug,
       strategy_version,
+      scan_date: date_used,
       date_used,
       regime_state,
       batch_limit: batchLimit,
@@ -177,6 +294,7 @@ export async function POST(req: Request) {
       processed: totalProcessed,
       scored: totalScored,
       upserted: totalUpserted,
+      finalization,
       duration_ms: Date.now() - startedAt,
     });
   } catch (e: unknown) {
