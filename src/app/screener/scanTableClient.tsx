@@ -13,7 +13,10 @@ type Row = {
   rank?: number | null;
   entry: number;
   stop: number;
-  reason_json?: any;
+  reason_summary?: string | null;
+  atr14?: number | null;
+  event_risk?: boolean;
+  news_risk?: boolean;
   portfolio_action?: "BUY_NOW" | "WAIT" | "SKIP";
   action_reason?: string;
   sizing?: {
@@ -87,11 +90,7 @@ function computeDivergencePct(entry: number | null, live: number | null) {
 }
 
 function extractAtr14FromReasonJson(row: Row) {
-  const n = asNumber(
-    row?.reason_json?.indicators?.atr14 ??
-      row?.reason_json?.metrics?.atr14 ??
-      row?.reason_json?.atr14
-  );
+  const n = asNumber(row?.atr14);
   return n !== null && n > 0 ? n : null;
 }
 
@@ -431,8 +430,8 @@ export default function ScanTableClient({
               : execution.reasons,
           }
         : execution;
-      const eventRisk = Boolean(row?.reason_json?.flags?.event_risk);
-      const newsRisk = Boolean(row?.reason_json?.flags?.news_risk);
+      const eventRisk = Boolean(row?.event_risk);
+      const newsRisk = Boolean(row?.news_risk);
       return {
         ...row,
         effectiveSignal,
@@ -611,16 +610,12 @@ export default function ScanTableClient({
     setWhyFailuresOnly(false);
     showToast(`Details: ${row.symbol}`);
     try {
-      const res = await fetch("/api/why", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          symbol: row.symbol,
-          date: scanDate,
-          universe_slug: "core_800",
-          strategy_version: strategyVersion,
-        }),
-      });
+      const res = await fetch(
+        `/api/scan-row-detail?symbol=${encodeURIComponent(row.symbol)}&date=${encodeURIComponent(
+          scanDate
+        )}&universe_slug=core_800&strategy_version=${encodeURIComponent(strategyVersion)}`,
+        { cache: "no-store" }
+      );
       const json = await res.json().catch(() => null);
       const rowAny = row as any;
       const rowDivergence =
