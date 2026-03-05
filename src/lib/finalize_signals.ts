@@ -38,18 +38,37 @@ function sortByRankScore(rows: ScanRow[]) {
 
 export async function finalizeSignals(opts: FinalizeArgs) {
   const supa = opts.supabase as any;
+  const universe_slug = "core_800";
+  console.log("finalizeSignals filters", {
+    date: opts.date,
+    universe_slug,
+    strategy_version: opts.strategy_version,
+  });
   const { data, error } = await supa
     .from("daily_scans")
-    .select("id,date,universe_slug,strategy_version,symbol,signal,confidence,rank_score,rank")
+    .select("*")
     .eq("date", opts.date)
-    .eq("universe_slug", opts.universe_slug)
+    .eq("universe_slug", universe_slug)
     .eq("strategy_version", opts.strategy_version);
 
   if (error) return { ok: false, error: error.message };
   const rawRows = Array.isArray(data) ? (data as any[]) : [];
+  console.log("finalizeSignals fetched", {
+    fetched_total: rawRows.length,
+    strategy_version: opts.strategy_version,
+    universe_slug,
+    date: opts.date,
+  });
   if (!rawRows.length) {
     return {
       ok: true,
+      date: opts.date,
+      universe_slug,
+      strategy_version: opts.strategy_version,
+      fetched_total: 0,
+      updated_rows: 0,
+      before_counts: { buy: 0, watch: 0, avoid: 0 },
+      after_counts: { buy: 0, watch: 0, avoid: 0 },
       total: 0,
       buy: 0,
       watch: 0,
@@ -107,50 +126,45 @@ export async function finalizeSignals(opts: FinalizeArgs) {
       rank_score: row.rank_score,
       updated_at: nowIso,
     }));
-  const updatesByKey = sorted
-    .filter((row) => row.id === null || row.id === undefined)
-    .map((row) => ({
-      date: row.date,
-      universe_slug: row.universe_slug,
-      strategy_version: row.strategy_version,
-      symbol: row.symbol,
-      signal: row.signal,
-      rank: row.rank,
-      rank_score: row.rank_score,
-      updated_at: nowIso,
-    }));
-  const chunkSize = 500;
+  if (updatesById.length !== sorted.length) {
+    return {
+      ok: false,
+      error: "Some rows are missing id; cannot persist by id",
+      date: opts.date,
+      universe_slug,
+      strategy_version: opts.strategy_version,
+      fetched_total: sorted.length,
+      updated_rows: updatesById.length,
+      before_counts: before,
+    };
+  }
+  const chunkSize = 100;
   for (let i = 0; i < updatesById.length; i += chunkSize) {
     const chunk = updatesById.slice(i, i + chunkSize);
-    const { error: upsertError } = await supa
-      .from("daily_scans")
-      .upsert(chunk as any[], { onConflict: "id" });
-    if (upsertError) {
+    const chunkResults = await Promise.all(
+      chunk.map(async (row) => {
+        const { error: updateError } = await supa
+          .from("daily_scans")
+          .update({
+            signal: row.signal,
+            rank: row.rank,
+            rank_score: row.rank_score,
+            updated_at: row.updated_at,
+          })
+          .eq("id", row.id);
+        return updateError;
+      })
+    );
+    const failed = chunkResults.find(Boolean);
+    if (failed) {
       return {
         ok: false,
-        error: upsertError.message,
+        error: String((failed as any)?.message ?? "Update failed"),
         date: opts.date,
-        universe_slug: opts.universe_slug,
+        universe_slug,
         strategy_version: opts.strategy_version,
         fetched_total: rows.length,
-        before,
-      };
-    }
-  }
-  for (let i = 0; i < updatesByKey.length; i += chunkSize) {
-    const chunk = updatesByKey.slice(i, i + chunkSize);
-    const { error: upsertError } = await supa
-      .from("daily_scans")
-      .upsert(chunk as any[], { onConflict: "date,universe_slug,symbol,strategy_version" });
-    if (upsertError) {
-      return {
-        ok: false,
-        error: upsertError.message,
-        date: opts.date,
-        universe_slug: opts.universe_slug,
-        strategy_version: opts.strategy_version,
-        fetched_total: rows.length,
-        before,
+        before_counts: before,
       };
     }
   }
@@ -164,16 +178,18 @@ export async function finalizeSignals(opts: FinalizeArgs) {
   return {
     ok: true,
     date: opts.date,
-    universe_slug: opts.universe_slug,
+    universe_slug,
     strategy_version: opts.strategy_version,
     fetched_total: sorted.length,
     before,
     after,
+    before_counts: before,
+    after_counts: after,
     total: sorted.length,
     buy: after.buy,
     watch: after.watch,
     avoid: after.avoid,
-    updated: updatesById.length + updatesByKey.length,
-    updated_rows: updatesById.length + updatesByKey.length,
+    updated: updatesById.length,
+    updated_rows: updatesById.length,
   };
 }

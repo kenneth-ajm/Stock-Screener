@@ -2,10 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getLCTD } from "@/lib/scan_date";
 import { finalizeSignals } from "@/lib/finalize_signals";
-import {
-  CORE_MOMENTUM_DEFAULT_UNIVERSE,
-  CORE_MOMENTUM_DEFAULT_VERSION,
-} from "@/lib/strategy/coreMomentumSwing";
+import { CORE_MOMENTUM_DEFAULT_VERSION } from "@/lib/strategy/coreMomentumSwing";
 import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
 
 export async function POST() {
@@ -24,6 +21,7 @@ export async function POST() {
     }
 
     const date_used = lctd.scan_date;
+    const universe_slug = "core_800";
     const strategies = [CORE_MOMENTUM_DEFAULT_VERSION, TREND_HOLD_DEFAULT_VERSION];
     const results_by_strategy: Record<string, unknown> = {};
 
@@ -31,7 +29,7 @@ export async function POST() {
       const result = await finalizeSignals({
         supabase,
         date: date_used,
-        universe_slug: CORE_MOMENTUM_DEFAULT_UNIVERSE,
+        universe_slug,
         strategy_version,
       });
       if (!result.ok) {
@@ -55,6 +53,7 @@ export async function POST() {
     return NextResponse.json({
       ok: true,
       date_used,
+      universe_slug,
       lctd_source: lctd.lctd_source,
       results_by_strategy,
     });
@@ -65,4 +64,3 @@ export async function POST() {
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }
-
