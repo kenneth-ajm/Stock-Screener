@@ -1,3 +1,5 @@
+import { getOrRepairDefaultPortfolio } from "@/lib/get_or_repair_default_portfolio";
+
 type CapacityArgs = {
   supabase: any;
   userId: string;
@@ -23,17 +25,11 @@ function toNum(v: unknown, fallback = 0) {
 
 export async function getActivePortfolioCapacity(opts: CapacityArgs): Promise<PortfolioCapacity | null> {
   const supa = opts.supabase as any;
-  const { data: defaultPortfolio, error: defaultErr } = await supa
-    .from("portfolios")
-    .select("id,account_size,risk_per_trade,max_positions,cash_balance,cash_updated_at")
-    .eq("user_id", opts.userId)
-    .eq("is_default", true)
-    .limit(1)
-    .maybeSingle();
-
-  const portfolio = defaultPortfolio;
-  const pErr = defaultErr;
-  if (pErr || !portfolio?.id) return null;
+  const portfolio = await getOrRepairDefaultPortfolio({
+    supabase: supa,
+    user_id: opts.userId,
+  });
+  if (!portfolio?.id) return null;
 
   const portfolioValue = toNum(portfolio.account_size, 0);
   const riskPerTrade = toNum(portfolio.risk_per_trade, 0.02);

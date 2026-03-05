@@ -8,6 +8,7 @@ import RepairDefaultPortfolioButton from "./RepairDefaultPortfolioButton";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { getLCTD } from "@/lib/scan_status";
+import { getOrRepairDefaultPortfolio } from "@/lib/get_or_repair_default_portfolio";
 
 export const dynamic = "force-dynamic";
 
@@ -48,13 +49,34 @@ export default async function ScreenerPage({
 
   if (!user) redirect("/auth?next=/screener");
 
-  const { data: defaultPortfolio } = await supabase
-    .from("portfolios")
-    .select("id, name, account_currency, account_size, risk_per_trade, max_positions,cash_balance,cash_updated_at,active,is_default")
-    .eq("user_id", user.id)
-    .eq("is_default", true)
-    .limit(1)
-    .maybeSingle();
+  const defaultPortfolio = await getOrRepairDefaultPortfolio({
+    supabase: supabase as any,
+    user_id: user.id,
+  });
+
+  let portfolioDebug:
+    | { user_id: string; portfolio_count: number; has_default: boolean }
+    | null = null;
+  if (!defaultPortfolio) {
+    const [{ count }, { data: defaultRows }] = await Promise.all([
+      supabase
+        .from("portfolios")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id),
+      supabase
+        .from("portfolios")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("is_default", true)
+        .limit(1),
+    ]);
+    portfolioDebug = {
+      user_id: user.id,
+      portfolio_count: Number(count ?? 0),
+      has_default: Array.isArray(defaultRows) && defaultRows.length > 0,
+    };
+    console.error("screener default portfolio missing", portfolioDebug);
+  }
 
   const { data: regimeRows } = await supabase
     .from("market_regime")
@@ -213,6 +235,12 @@ export default async function ScreenerPage({
             ) : (
               <div className="space-y-2">
                 <div className="text-sm muted">No active portfolio found.</div>
+                {portfolioDebug ? (
+                  <div className="text-xs text-slate-500 font-mono">
+                    user_id={portfolioDebug.user_id} • count={portfolioDebug.portfolio_count} • has_default=
+                    {String(portfolioDebug.has_default)}
+                  </div>
+                ) : null}
                 <RepairDefaultPortfolioButton />
               </div>
             )}

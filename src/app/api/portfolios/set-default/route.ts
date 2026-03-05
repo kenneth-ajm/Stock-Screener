@@ -34,6 +34,22 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "portfolio_id is required" }, { status: 400 });
   }
 
+  const { data: targetPortfolio, error: targetErr } = await supabase
+    .from("portfolios")
+    .select("id,user_id")
+    .eq("id", portfolioId)
+    .limit(1)
+    .maybeSingle();
+  if (targetErr) {
+    return NextResponse.json({ ok: false, error: targetErr.message }, { status: 500 });
+  }
+  if (!targetPortfolio?.id) {
+    return NextResponse.json({ ok: false, error: "Portfolio not found" }, { status: 404 });
+  }
+  if (targetPortfolio.user_id && String(targetPortfolio.user_id) !== user.id) {
+    return NextResponse.json({ ok: false, error: "Portfolio not found for current user" }, { status: 404 });
+  }
+
   const { error: unsetErr } = await supabase
     .from("portfolios")
     .update({ is_default: false })
@@ -44,9 +60,8 @@ export async function POST(req: Request) {
 
   const { data: setRows, error: setErr } = await supabase
     .from("portfolios")
-    .update({ is_default: true })
+    .update({ is_default: true, user_id: user.id })
     .eq("id", portfolioId)
-    .eq("user_id", user.id)
     .select("id")
     .limit(1);
   if (setErr) {
@@ -58,4 +73,3 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok: true, default_portfolio_id: setRows[0].id });
 }
-
