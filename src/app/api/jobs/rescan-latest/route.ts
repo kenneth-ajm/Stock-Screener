@@ -127,12 +127,13 @@ export async function POST(req: Request) {
       CORE_MOMENTUM_DEFAULT_VERSION,
       TREND_HOLD_DEFAULT_VERSION,
     ];
+    const finalizeUniverse = CORE_MOMENTUM_DEFAULT_UNIVERSE;
     const finalizationResults: Record<string, unknown> = {};
     for (const sv of strategiesToFinalize) {
       const finalization = await finalizeSignals({
         supabase: supaAny,
         date: scan_date_used,
-        universe_slug,
+        universe_slug: finalizeUniverse,
         strategy_version: sv,
       });
       if (!finalization.ok) {

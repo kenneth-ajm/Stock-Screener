@@ -8,6 +8,7 @@ type FinalizeArgs = {
 type Signal = "BUY" | "WATCH" | "AVOID";
 
 type ScanRow = {
+  id: string | number | null;
   date: string;
   universe_slug: string;
   strategy_version: string;
@@ -39,7 +40,7 @@ export async function finalizeSignals(opts: FinalizeArgs) {
   const supa = opts.supabase as any;
   const { data, error } = await supa
     .from("daily_scans")
-    .select("date,universe_slug,strategy_version,symbol,signal,confidence,rank_score,rank")
+    .select("id,date,universe_slug,strategy_version,symbol,signal,confidence,rank_score,rank")
     .eq("date", opts.date)
     .eq("universe_slug", opts.universe_slug)
     .eq("strategy_version", opts.strategy_version);
@@ -58,6 +59,7 @@ export async function finalizeSignals(opts: FinalizeArgs) {
   }
 
   const rows: ScanRow[] = rawRows.map((row) => ({
+    id: row.id ?? null,
     date: String(row.date),
     universe_slug: String(row.universe_slug),
     strategy_version: String(row.strategy_version),
@@ -70,6 +72,11 @@ export async function finalizeSignals(opts: FinalizeArgs) {
     rank_score: toNumber(row.rank_score),
     rank: toNumber(row.rank),
   }));
+  const before = {
+    buy: rows.filter((row) => row.signal === "BUY").length,
+    watch: rows.filter((row) => row.signal === "WATCH").length,
+    avoid: rows.filter((row) => row.signal === "AVOID").length,
+  };
 
   for (const row of rows) {
     if (row.rank_score === null) row.rank_score = toNumber(row.confidence) ?? 0;
@@ -90,33 +97,83 @@ export async function finalizeSignals(opts: FinalizeArgs) {
     if (idx >= WATCH_CAP) row.signal = "AVOID";
   });
 
-  const updates = sorted.map((row) => ({
-    date: row.date,
-    universe_slug: row.universe_slug,
-    strategy_version: row.strategy_version,
-    symbol: row.symbol,
-    signal: row.signal,
-    rank: row.rank,
-    rank_score: row.rank_score,
-    updated_at: new Date().toISOString(),
-  }));
+  const nowIso = new Date().toISOString();
+  const updatesById = sorted
+    .filter((row) => row.id !== null && row.id !== undefined)
+    .map((row) => ({
+      id: row.id,
+      signal: row.signal,
+      rank: row.rank,
+      rank_score: row.rank_score,
+      updated_at: nowIso,
+    }));
+  const updatesByKey = sorted
+    .filter((row) => row.id === null || row.id === undefined)
+    .map((row) => ({
+      date: row.date,
+      universe_slug: row.universe_slug,
+      strategy_version: row.strategy_version,
+      symbol: row.symbol,
+      signal: row.signal,
+      rank: row.rank,
+      rank_score: row.rank_score,
+      updated_at: nowIso,
+    }));
+  const chunkSize = 500;
+  for (let i = 0; i < updatesById.length; i += chunkSize) {
+    const chunk = updatesById.slice(i, i + chunkSize);
+    const { error: upsertError } = await supa
+      .from("daily_scans")
+      .upsert(chunk as any[], { onConflict: "id" });
+    if (upsertError) {
+      return {
+        ok: false,
+        error: upsertError.message,
+        date: opts.date,
+        universe_slug: opts.universe_slug,
+        strategy_version: opts.strategy_version,
+        fetched_total: rows.length,
+        before,
+      };
+    }
+  }
+  for (let i = 0; i < updatesByKey.length; i += chunkSize) {
+    const chunk = updatesByKey.slice(i, i + chunkSize);
+    const { error: upsertError } = await supa
+      .from("daily_scans")
+      .upsert(chunk as any[], { onConflict: "date,universe_slug,symbol,strategy_version" });
+    if (upsertError) {
+      return {
+        ok: false,
+        error: upsertError.message,
+        date: opts.date,
+        universe_slug: opts.universe_slug,
+        strategy_version: opts.strategy_version,
+        fetched_total: rows.length,
+        before,
+      };
+    }
+  }
 
-  const { error: upsertError } = await supa
-    .from("daily_scans")
-    .upsert(updates as any[], { onConflict: "date,universe_slug,symbol,strategy_version" });
-  if (upsertError) return { ok: false, error: upsertError.message };
-
-  const buy = sorted.filter((row) => row.signal === "BUY").length;
-  const watch = sorted.filter((row) => row.signal === "WATCH").length;
-  const avoid = sorted.filter((row) => row.signal === "AVOID").length;
+  const after = {
+    buy: sorted.filter((row) => row.signal === "BUY").length,
+    watch: sorted.filter((row) => row.signal === "WATCH").length,
+    avoid: sorted.filter((row) => row.signal === "AVOID").length,
+  };
 
   return {
     ok: true,
+    date: opts.date,
+    universe_slug: opts.universe_slug,
+    strategy_version: opts.strategy_version,
+    fetched_total: sorted.length,
+    before,
+    after,
     total: sorted.length,
-    buy,
-    watch,
-    avoid,
-    updated: updates.length,
+    buy: after.buy,
+    watch: after.watch,
+    avoid: after.avoid,
+    updated: updatesById.length + updatesByKey.length,
+    updated_rows: updatesById.length + updatesByKey.length,
   };
 }
-
