@@ -763,7 +763,7 @@ export default function PositionsClient({
     const map = new Map<string, { lots: PositionRow[] }>();
 
     for (const p of openFiltered) {
-      const sym = (p.symbol ?? "").toUpperCase();
+      const sym = String(p.symbol ?? "").trim().toUpperCase();
       if (!sym) continue;
       const strat = p.strategy_version ?? "v2_core_momentum";
       const key = `${strat}::${sym}`;
@@ -775,7 +775,7 @@ export default function PositionsClient({
     const rows: GroupedOpenRow[] = [];
 
     for (const [_key, { lots }] of map.entries()) {
-      const symbol = (lots[0]?.symbol ?? "").toUpperCase();
+      const symbol = String(lots[0]?.symbol ?? "").trim().toUpperCase();
       let totalQty = 0;
       let costSum = 0;
       let feesSum = 0;
@@ -1111,7 +1111,7 @@ export default function PositionsClient({
                   ) : (
                     openFiltered.map((p) => {
                       const qty = resolveQty(p);
-                      const last = latestPriceBySymbol?.[(p.symbol ?? "").toUpperCase()] ?? null;
+                      const last = latestPriceBySymbol?.[String(p.symbol ?? "").trim().toUpperCase()] ?? null;
                       const strategyVer = p.strategy_version ?? "v2_core_momentum";
                       const maxHold = p.max_hold_days ?? (strategyVer === "v1_trend_hold" ? 45 : 7);
                       const heldFrom = p.entry_date ?? p.created_at ?? null;

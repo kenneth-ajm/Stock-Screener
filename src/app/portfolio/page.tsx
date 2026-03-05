@@ -6,7 +6,6 @@ import { createClient } from "@supabase/supabase-js";
 
 import PositionsClient from "./PositionsClient";
 import { computeClosedTradeSummary } from "@/lib/analytics/closedTradeSummary";
-import { computePortfolioMath } from "@/lib/portfolio_math";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +15,7 @@ type Portfolio = {
   name?: string | null;
   account_currency?: string | null;
   account_size?: number | null;
+  cash_balance?: number | null;
   risk_per_trade?: number | null;
   max_positions?: number | null;
   default_fee_per_order?: number | null;
@@ -210,7 +210,13 @@ export default async function PortfolioPage() {
   const closed = closedPositions ?? [];
 
   // Latest prices for ALL open symbols (with auto-fetch)
-  const uniqueSymbols = [...new Set(open.map((p) => (p.symbol ?? "").toUpperCase()).filter(Boolean))];
+  const uniqueSymbols = [
+    ...new Set(
+      open
+        .map((p) => String(p.symbol ?? "").trim().toUpperCase())
+        .filter(Boolean)
+    ),
+  ];
   const latestPriceBySymbol: Record<string, number | null> = {};
   const admin = makeSupabaseAdminClient();
 
@@ -273,16 +279,52 @@ export default async function PortfolioPage() {
   const realizedTrades = realizedWins + realizedLosses;
   const winRate = realizedTrades ? realizedWins / realizedTrades : 0;
 
-  const math = await computePortfolioMath({
-    supabase: supabase as any,
-    portfolio_id: String(portfolio.id),
-  });
-
   // Exposure
-  const capitalDeployed = math?.deployed_cost_basis ?? 0;
-  const estimatedCash = math?.estimated_cash ?? null;
-  const unknownOpenCount = math?.unknown_open_positions_count ?? 0;
-  const deployedTooHigh = (math?.account_size ?? 0) > 0 && capitalDeployed > (math?.account_size ?? 0) * 1.05;
+  let deployedCostBasis = 0;
+  let marketValue = 0;
+  const debugLots: Array<{
+    symbol: string;
+    qty: number;
+    entry_price: number | null;
+    contribution: number | null;
+  }> = [];
+  let unknownOpenCount = 0;
+  for (const p of open) {
+    const qty = resolveQty(p);
+    const entry = typeof p.entry_price === "number" && Number.isFinite(p.entry_price) ? p.entry_price : null;
+    const symbol = String(p.symbol ?? "").trim().toUpperCase();
+    const contribution = entry !== null && qty > 0 ? entry * qty : null;
+    debugLots.push({
+      symbol,
+      qty,
+      entry_price: entry,
+      contribution,
+    });
+    if (contribution === null) {
+      unknownOpenCount += 1;
+    } else {
+      deployedCostBasis += contribution;
+    }
+
+    const last = symbol ? latestPriceBySymbol[symbol] : null;
+    if (typeof last === "number" && Number.isFinite(last) && last > 0 && qty > 0) {
+      marketValue += last * qty;
+    }
+  }
+
+  const acctSize = portfolio.account_size ?? null;
+  const hasManualCash = typeof portfolio.cash_balance === "number" && Number.isFinite(portfolio.cash_balance);
+  const estimatedCash = hasManualCash
+    ? Number(portfolio.cash_balance)
+    : typeof acctSize === "number" && Number.isFinite(acctSize)
+      ? acctSize - deployedCostBasis
+      : null;
+  const capitalDeployed = deployedCostBasis;
+  const deployedTooHigh =
+    typeof acctSize === "number" &&
+    Number.isFinite(acctSize) &&
+    acctSize > 0 &&
+    capitalDeployed > acctSize * 1.05;
   let riskDeployed = 0;
 
   for (const p of open) {
@@ -294,7 +336,6 @@ export default async function PortfolioPage() {
     }
   }
 
-  const acctSize = portfolio.account_size ?? null;
   const pctDeployed = typeof acctSize === "number" && acctSize > 0 ? capitalDeployed / acctSize : null;
 
   return (
@@ -341,17 +382,36 @@ export default async function PortfolioPage() {
           <div className="mt-1 text-sm text-slate-800">
             Risk deployed: <span className="font-semibold">{formatMoney(riskDeployed)}</span>
           </div>
+          <div className="mt-1 text-sm text-slate-800">
+            Market value: <span className="font-semibold">{formatMoney(marketValue)}</span>
+          </div>
           <div className="mt-1 text-xs text-slate-500">
             {pctDeployed !== null ? `${(pctDeployed * 100).toFixed(1)}% of account size` : "—"}
           </div>
           <div className="mt-1 text-xs text-slate-500">
-            Estimated cash: <span className="font-semibold">{formatMoney(estimatedCash)}</span>
+            Estimated cash: <span className="font-semibold">{formatMoney(estimatedCash)}</span>{" "}
+            {hasManualCash ? "(Exact)" : "(Estimated)"}
           </div>
           {unknownOpenCount > 0 ? (
             <div className="mt-1 text-xs text-amber-700">
               {unknownOpenCount} open position(s) missing entry/qty excluded from deployed math.
             </div>
           ) : null}
+          <details className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1">
+            <summary className="cursor-pointer text-xs text-slate-600">Debug cost-basis contributions</summary>
+            <div className="mt-2 space-y-1 text-xs font-mono text-slate-700">
+              {debugLots.map((lot, idx) => (
+                <div key={`${lot.symbol}-${idx}`}>
+                  {lot.symbol || "—"} | qty={Number.isFinite(lot.qty) ? lot.qty : "—"} | entry=
+                  {lot.entry_price == null ? "—" : lot.entry_price.toFixed(4)} | contrib=
+                  {lot.contribution == null ? "—" : lot.contribution.toFixed(2)}
+                </div>
+              ))}
+              <div className="pt-1 font-semibold">
+                TOTAL = {formatMoney(capitalDeployed)}
+              </div>
+            </div>
+          </details>
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
