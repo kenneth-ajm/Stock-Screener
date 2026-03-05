@@ -12,16 +12,10 @@ import {
 import { getLCTD } from "@/lib/scan_date";
 import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 import { finalizeSignals } from "@/lib/finalize_signals";
+import { refreshSpyRegimeForLctd } from "@/lib/spy_regime";
 
 const UNIVERSE_SLUG = "core_800";
 const STATUS_KEY = "daily_autopilot_core_800";
-
-function sma(values: number[], period: number) {
-  if (values.length < period) return null;
-  const slice = values.slice(-period);
-  const sum = slice.reduce((a, b) => a + b, 0);
-  return sum / period;
-}
 
 async function ingestGroupedForDate(opts: {
   supabase: any;
@@ -118,52 +112,6 @@ async function ingestGroupedForDate(opts: {
     written += chunk.length;
   }
   return written;
-}
-
-async function updateSpyRegimeForDate(opts: { supabase: any; date: string }) {
-  const supa = opts.supabase as any;
-  const { data: latestRows, error: latestErr } = await supa
-    .from("price_bars")
-    .select("date,close")
-    .eq("symbol", "SPY")
-    .order("date", { ascending: false })
-    .limit(1);
-  if (latestErr) throw latestErr;
-  const latest = latestRows?.[0];
-  if (!latest) throw new Error("No SPY bars available in price_bars");
-
-  const regimeDateUsed = String(latest.date);
-  const spyRegimeStale = regimeDateUsed < opts.date;
-  const { data: bars, error: barsErr } = await supa
-    .from("price_bars")
-    .select("date,close")
-    .eq("symbol", "SPY")
-    .lte("date", regimeDateUsed)
-    .order("date", { ascending: false })
-    .limit(260);
-  if (barsErr) throw barsErr;
-  if (!bars || bars.length < 200) throw new Error("Not enough SPY bars to compute regime");
-
-  const asc = [...bars].reverse();
-  const closes = asc.map((b: any) => Number(b.close));
-  const sma200 = sma(closes, 200);
-  if (!sma200) throw new Error("Unable to compute SPY SMA200");
-  const close = Number(latest.close);
-  const state = close > sma200 ? "FAVORABLE" : "DEFENSIVE";
-
-  const { error: upErr } = await supa.from("market_regime").upsert(
-    {
-      symbol: "SPY",
-      date: regimeDateUsed,
-      close,
-      sma200,
-      state,
-    },
-    { onConflict: "symbol,date" }
-  );
-  if (upErr) throw upErr;
-
-  return { state, regime_date_used: regimeDateUsed, spy_regime_stale: spyRegimeStale };
 }
 
 async function runFullStrategyScan(opts: {
@@ -265,7 +213,7 @@ async function runAutopilot() {
     date: scanDate,
     symbols: symbolsWithSpy,
   });
-  const regime = await updateSpyRegimeForDate({ supabase: supa, date: scanDate });
+  const regime = await refreshSpyRegimeForLctd({ supabase: supa, lctd: scanDate });
 
   const momentumRun = await runFullStrategyScan({
     supabase: supa,
@@ -313,9 +261,9 @@ async function runAutopilot() {
     scan_date_used: scanDate,
     lctd_source: lctd.lctd_source,
     bars_upserted,
-    regime_state: regime.state,
+    regime_state: regime.state ?? "FAVORABLE",
     regime_date_used: regime.regime_date_used,
-    spy_regime_stale: regime.spy_regime_stale,
+    spy_regime_stale: regime.regime_stale,
     momentum: {
       buys: Number(finalizations[CORE_MOMENTUM_DEFAULT_VERSION]?.buy ?? 0),
       watch: Number(finalizations[CORE_MOMENTUM_DEFAULT_VERSION]?.watch ?? 0),

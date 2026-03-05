@@ -9,6 +9,7 @@ import { runScanPipeline, type ScanEngineClient } from "@/lib/scan_engine";
 import { finalizeSignals } from "@/lib/finalize_signals";
 import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
+import { refreshSpyRegimeForLctd } from "@/lib/spy_regime";
 
 type Body = {
   universe_slug?: string;
@@ -36,6 +37,10 @@ export async function POST(req: Request) {
         { status: 500 }
       );
     }
+    const regimeRefresh = await refreshSpyRegimeForLctd({
+      supabase: supaAny,
+      lctd: lctd.scan_date,
+    });
 
     const { data: universeRow, error: universeErr } = await supaAny
       .from("universes")
@@ -69,7 +74,7 @@ export async function POST(req: Request) {
     let batches_failed = 0;
     let first_error: unknown = null;
     let regime_state: string | null = null;
-    let regime_stale = false;
+    let regime_stale = Boolean(regimeRefresh.regime_stale);
     let scan_date_used = lctd.scan_date;
 
     for (let batch = 0; batch < estimatedBatches; batch += 1) {
@@ -176,8 +181,9 @@ export async function POST(req: Request) {
       strategy_version,
       scan_date_used,
       lctd_source: lctd.lctd_source,
-      regime_state,
+      regime_state: regime_state ?? regimeRefresh.state ?? null,
       regime_stale,
+      regime_date_used: regimeRefresh.regime_date_used ?? null,
       batch_limit: batchLimit,
       estimated_batches: estimatedBatches,
       batches_ok,

@@ -6,6 +6,7 @@ import ScreenerSearchClient from "./ScreenerSearchClient";
 import CashBalanceEditor from "./CashBalanceEditor";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { getLCTD } from "@/lib/scan_status";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +62,10 @@ export default async function ScreenerPage({
     .limit(1);
 
   const regime = regimeRows?.[0] ?? null;
+  const lctd = await getLCTD(supabase as any);
+  const lctdDate = lctd.lctd ?? null;
+  const regimeDate = regime?.date ? String(regime.date) : null;
+  const regimeIsStale = !lctdDate || !regimeDate || regimeDate < lctdDate;
 
   let autopilotStatus: { updated_at?: string | null; value?: AutopilotStatus | null } | null = null;
   try {
@@ -177,11 +182,18 @@ export default async function ScreenerPage({
                 />
 
                 <div className="mt-5 border-t border-slate-200 pt-4 space-y-2">
-                  <div className="text-sm font-semibold">Market regime (SPY)</div>
+                  <div className="text-sm font-semibold">Market regime (SPY) — as of LCTD</div>
                   {regime ? (
                     <div className="text-sm">
                       <div className="muted">
-                        Date: <span className="font-mono">{regime.date}</span>
+                        LCTD: <span className="font-mono">{lctdDate ?? "—"}</span>
+                        {" • "}
+                        Regime date: <span className="font-mono">{regimeDate}</span>
+                        {regimeIsStale ? (
+                          <span className="ml-2 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">
+                            STALE (run rescan)
+                          </span>
+                        ) : null}
                       </div>
                       <div className="mt-1">
                         State: <span className="font-semibold">{regime.state}</span>

@@ -4,7 +4,6 @@ import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { unstable_cache } from "next/cache";
 import { getLCTD } from "@/lib/scan_status";
-import { getFreshnessStatus } from "@/lib/scan_status";
 import { getActivePortfolioCapacity } from "@/lib/portfolio_capacity";
 import { computePortfolioAwareAction } from "@/lib/execution_action";
 
@@ -50,6 +49,13 @@ const loadScreenerDataCached = unstable_cache(
 
     const lctd = await getLCTD(supabase as any);
     const dateUsed = requestedDate && requestedDate.trim() ? requestedDate.trim() : lctd.lctd;
+    const { data: regimeExactRows } = await supabase
+      .from("market_regime")
+      .select("date,state")
+      .eq("symbol", "SPY")
+      .eq("date", lctd.lctd)
+      .limit(1);
+    const regimeExact = regimeExactRows?.[0] ?? null;
     const { data: regimeRows } = await supabase
       .from("market_regime")
       .select("date,state")
@@ -57,11 +63,13 @@ const loadScreenerDataCached = unstable_cache(
       .order("date", { ascending: false })
       .limit(1);
     const regimeRow = regimeRows?.[0] ?? null;
-    const freshness = getFreshnessStatus({
-      lctd: lctd.lctd,
-      latestScanDate: dateUsed,
-      regimeDate: regimeRow?.date ? String(regimeRow.date) : null,
-    });
+    const regimeDate = regimeExact?.date
+      ? String(regimeExact.date)
+      : regimeRow?.date
+        ? String(regimeRow.date)
+        : null;
+    const regimeState = regimeExact?.state ?? regimeRow?.state ?? null;
+    const regimeStale = !lctd.lctd || !regimeDate || regimeDate < lctd.lctd;
 
     const { data: rows } = dateUsed
       ? await (supabase as any)
@@ -136,9 +144,9 @@ const loadScreenerDataCached = unstable_cache(
         date_used: dateUsed ?? null,
         lctd: lctd.lctd,
         lctd_source: lctd.source,
-        regime_state: regimeRow?.state ?? null,
-        regime_date: regimeRow?.date ?? null,
-        regime_stale: freshness.is_stale,
+        regime_state: regimeState,
+        regime_date: regimeDate,
+        regime_stale: regimeStale,
       },
       capacity,
       rows: rowsFinal,

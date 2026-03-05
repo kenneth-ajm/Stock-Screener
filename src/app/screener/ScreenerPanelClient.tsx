@@ -34,6 +34,7 @@ type ScreenerPayload = {
     date_used: string | null;
     lctd: string | null;
     regime_state: string | null;
+    regime_date: string | null;
     regime_stale: boolean;
   };
   capacity?: {
@@ -91,6 +92,7 @@ export default function ScreenerPanelClient({
   const rows = data.rows ?? [];
   const scanDate = data.meta?.date_used ?? "";
   const lctd = data.meta?.lctd ?? "";
+  const regimeDate = data.meta?.regime_date ?? "";
   const regimeState = data.meta?.regime_state ?? null;
   const regimeStale = Boolean(data.meta?.regime_stale);
   const actionable = rows.filter((r) => r.action === "BUY_NOW").length;
@@ -118,6 +120,10 @@ export default function ScreenerPanelClient({
             </span>
           ) : null}
         </div>
+      </div>
+      <div className="text-xs text-slate-500">
+        Market regime (SPY) — as of LCTD • LCTD: <span className="font-mono">{lctd || "—"}</span>
+        {" • "}Regime date: <span className="font-mono">{regimeDate || "—"}</span>
       </div>
 
       {data.capacity ? (
