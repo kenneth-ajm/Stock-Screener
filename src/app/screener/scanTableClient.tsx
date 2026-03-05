@@ -569,13 +569,7 @@ export default function ScanTableClient({
       );
       setTicketStop(calc.stop !== null ? calc.stop.toFixed(2) : Number(row.stop).toFixed(2));
       const defaults = defaultTpPercents(strategyVersion);
-      const entryForTp = Number(
-        liveForTicket !== null
-          ? liveForTicket
-          : calc.entry !== null
-            ? calc.entry
-            : Number(row.entry)
-      );
+      const entryForTp = Number(row.entry);
       setTicketTpPlan("tp1_tp2");
       setTicketTp1Pct(String(defaults.tp1Pct));
       setTicketTp2Pct(String(defaults.tp2Pct));
@@ -658,6 +652,9 @@ export default function ScanTableClient({
     const symbol = (ticketSymbol ?? "").trim().toUpperCase();
     const shares = Math.floor(Number(ticketShares));
     const entryPrice = Number(ticketEntry);
+    const modelEntryPrice = Number(ticketRow?.entry ?? entryPrice);
+    const tpAnchorEntry =
+      Number.isFinite(modelEntryPrice) && modelEntryPrice > 0 ? modelEntryPrice : entryPrice;
     const stopPrice = Number(ticketStop);
 
     if (!symbol) {
@@ -704,8 +701,8 @@ export default function ScanTableClient({
       finalTp2SizePct = null;
     } else {
       if (tp1PriceInput !== null) {
-        const derivedPct = round1(((tp1PriceInput / entryPrice) - 1) * 100);
-        if (derivedPct <= 0 || tp1PriceInput <= entryPrice) {
+        const derivedPct = round1(((tp1PriceInput / tpAnchorEntry) - 1) * 100);
+        if (derivedPct <= 0 || tp1PriceInput <= tpAnchorEntry) {
           setTicketError("TP1 must be above entry.");
           return;
         }
@@ -717,7 +714,7 @@ export default function ScanTableClient({
           return;
         }
         finalTp1Pct = round1(tp1PctInput);
-        finalTp1Price = round2(entryPrice * (1 + finalTp1Pct / 100));
+        finalTp1Price = round2(tpAnchorEntry * (1 + finalTp1Pct / 100));
       } else {
         setTicketError("TP1 % or TP1 price must be provided.");
         return;
@@ -731,8 +728,8 @@ export default function ScanTableClient({
 
     if (plan === "tp1_tp2") {
       if (tp2PriceInput !== null) {
-        const derivedPct = round1(((tp2PriceInput / entryPrice) - 1) * 100);
-        if (derivedPct <= 0 || tp2PriceInput <= entryPrice) {
+        const derivedPct = round1(((tp2PriceInput / tpAnchorEntry) - 1) * 100);
+        if (derivedPct <= 0 || tp2PriceInput <= tpAnchorEntry) {
           setTicketError("TP2 must be above entry.");
           return;
         }
@@ -744,7 +741,7 @@ export default function ScanTableClient({
           return;
         }
         finalTp2Pct = round1(tp2PctInput);
-        finalTp2Price = round2(entryPrice * (1 + finalTp2Pct / 100));
+        finalTp2Price = round2(tpAnchorEntry * (1 + finalTp2Pct / 100));
       } else {
         setTicketError("TP2 % or TP2 price must be provided.");
         return;
@@ -859,10 +856,17 @@ export default function ScanTableClient({
       const sharesNum = Math.floor(Number(ticketShares));
       const entryNum = Number(ticketEntry);
       const stopNum = Number(ticketStop);
+      const modelEntryNum = Number(ticketRow?.entry ?? calc.entry ?? entryNum);
+      const tpAnchorEntry =
+        Number.isFinite(modelEntryNum) && modelEntryNum > 0
+          ? modelEntryNum
+          : Number.isFinite(entryNum)
+            ? entryNum
+            : NaN;
       const liveForTicket = Number.isFinite(entryNum) ? entryNum : null;
       const execution = computeExecutionGuidance({
         signal: ticketRow?.effectiveSignal ?? "WATCH",
-        idealEntry: Number(ticketRow?.entry ?? calc.entry ?? entryNum),
+        idealEntry: modelEntryNum,
         stop: stopNum,
         live: liveForTicket,
         atr: ticketRow?.atr14 ?? null,
@@ -871,6 +875,11 @@ export default function ScanTableClient({
       });
       const riskPerShare = Number.isFinite(entryNum) && Number.isFinite(stopNum) ? entryNum - stopNum : null;
       const stopTooWide = execution.flags.stopTooWide;
+      const extensionPctFromModel =
+        Number.isFinite(entryNum) && Number.isFinite(modelEntryNum) && modelEntryNum > 0
+          ? (entryNum - modelEntryNum) / modelEntryNum
+          : 0;
+      const entryExtended = extensionPctFromModel > 0.02;
       const maxHoldDays = maxHoldDaysForStrategy(strategyVersion);
       const entryDate = new Date(scanDate);
       const timeStopDate = new Date(entryDate);
@@ -892,12 +901,11 @@ export default function ScanTableClient({
           : calc.maxRiskUsd !== null
             ? calc.maxRiskUsd
             : null;
+      // Use fill price for ticket sizing so changes to fill price update share sizing immediately.
       const sharesByRisk =
-        calc.sharesByRisk !== null
-          ? Math.max(0, Math.floor(calc.sharesByRisk))
-          : riskBudget !== null && riskPerShare !== null && riskPerShare > 0
-            ? Math.max(0, Math.floor(riskBudget / riskPerShare))
-            : null;
+        riskBudget !== null && riskPerShare !== null && riskPerShare > 0
+          ? Math.max(0, Math.floor(riskBudget / riskPerShare))
+          : null;
       const sharesByCash =
         calc.sharesByCash !== null
           ? Math.max(0, Math.floor(calc.sharesByCash))
@@ -910,6 +918,10 @@ export default function ScanTableClient({
         sharesByCash !== null && Number.isFinite(sharesNum) && sharesNum > sharesByCash;
       const cashRemainingAfter =
         cashAvailable !== null && positionCost !== null ? cashAvailable - positionCost : null;
+      const tpPct1 = strategyVersion === "v1_trend_hold" ? 0.1 : 0.05;
+      const tpPct2 = strategyVersion === "v1_trend_hold" ? 0.2 : 0.1;
+      const modelTp1 = Number.isFinite(modelEntryNum) ? modelEntryNum * (1 + tpPct1) : NaN;
+      const modelTp2 = Number.isFinite(modelEntryNum) ? modelEntryNum * (1 + tpPct2) : NaN;
 
       return (
         <div className="space-y-3">
@@ -973,7 +985,7 @@ export default function ScanTableClient({
 
           <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Take Profit Plan</div>
-            <div className="text-[11px] text-slate-500">Based on entry: {Number.isFinite(Number(ticketEntry)) ? fmt2(Number(ticketEntry)) : "—"}</div>
+            <div className="text-[11px] text-slate-500">Based on entry: {Number.isFinite(tpAnchorEntry) ? fmt2(tpAnchorEntry) : "—"}</div>
             <div className="grid gap-2 sm:grid-cols-3">
               <div className="space-y-1 sm:col-span-3">
                 <label className="text-xs text-slate-500">Plan</label>
@@ -983,12 +995,12 @@ export default function ScanTableClient({
                   onChange={(e) => {
                     const next = e.target.value as TpPlan;
                     const defaults = defaultTpPercents(strategyVersion);
-                    setTicketTpPlan(next);
-                    if (next === "tp1_only") {
-                      setTicketTp1Pct(String(defaults.tp1Pct));
-                      setTicketTp1Price(
-                        Number.isFinite(Number(ticketEntry))
-                          ? (Number(ticketEntry) * (1 + defaults.tp1Pct / 100)).toFixed(2)
+                      setTicketTpPlan(next);
+                      if (next === "tp1_only") {
+                        setTicketTp1Pct(String(defaults.tp1Pct));
+                        setTicketTp1Price(
+                        Number.isFinite(tpAnchorEntry)
+                          ? (tpAnchorEntry * (1 + defaults.tp1Pct / 100)).toFixed(2)
                           : ""
                       );
                       setTicketTp1SizePct("100");
@@ -999,13 +1011,13 @@ export default function ScanTableClient({
                       setTicketTp1Pct(String(defaults.tp1Pct));
                       setTicketTp2Pct(String(defaults.tp2Pct));
                       setTicketTp1Price(
-                        Number.isFinite(Number(ticketEntry))
-                          ? (Number(ticketEntry) * (1 + defaults.tp1Pct / 100)).toFixed(2)
+                        Number.isFinite(tpAnchorEntry)
+                          ? (tpAnchorEntry * (1 + defaults.tp1Pct / 100)).toFixed(2)
                           : ""
                       );
                       setTicketTp2Price(
-                        Number.isFinite(Number(ticketEntry))
-                          ? (Number(ticketEntry) * (1 + defaults.tp2Pct / 100)).toFixed(2)
+                        Number.isFinite(tpAnchorEntry)
+                          ? (tpAnchorEntry * (1 + defaults.tp2Pct / 100)).toFixed(2)
                           : ""
                       );
                       setTicketTp1SizePct("50");
@@ -1037,7 +1049,7 @@ export default function ScanTableClient({
                       onChange={(e) => {
                         const v = e.target.value;
                         setTicketTp1Pct(v);
-                        const entry = Number(ticketEntry);
+                        const entry = tpAnchorEntry;
                         const pct = Number(v);
                         if (Number.isFinite(entry) && entry > 0 && Number.isFinite(pct) && pct > 0) {
                           setTicketTp1Price((entry * (1 + pct / 100)).toFixed(2));
@@ -1055,7 +1067,7 @@ export default function ScanTableClient({
                       onChange={(e) => {
                         const v = e.target.value;
                         setTicketTp1Price(v);
-                        const entry = Number(ticketEntry);
+                        const entry = tpAnchorEntry;
                         const price = Number(v);
                         if (Number.isFinite(entry) && entry > 0 && Number.isFinite(price) && price > 0) {
                           setTicketTp1Pct(round1(((price / entry) - 1) * 100).toFixed(1));
@@ -1088,7 +1100,7 @@ export default function ScanTableClient({
                       onChange={(e) => {
                         const v = e.target.value;
                         setTicketTp2Pct(v);
-                        const entry = Number(ticketEntry);
+                        const entry = tpAnchorEntry;
                         const pct = Number(v);
                         if (Number.isFinite(entry) && entry > 0 && Number.isFinite(pct) && pct > 0) {
                           setTicketTp2Price((entry * (1 + pct / 100)).toFixed(2));
@@ -1106,7 +1118,7 @@ export default function ScanTableClient({
                       onChange={(e) => {
                         const v = e.target.value;
                         setTicketTp2Price(v);
-                        const entry = Number(ticketEntry);
+                        const entry = tpAnchorEntry;
                         const price = Number(v);
                         if (Number.isFinite(entry) && entry > 0 && Number.isFinite(price) && price > 0) {
                           setTicketTp2Pct(round1(((price / entry) - 1) * 100).toFixed(1));
@@ -1146,11 +1158,11 @@ export default function ScanTableClient({
             <KV k="Risk/share" v={riskPerShare !== null ? fmtMoney(riskPerShare) : "—"} />
             <KV
               k={strategyVersion === "v1_trend_hold" ? "TP1 (10%)" : "TP1 (5%)"}
-              v={Number.isFinite(execution.tp1) ? fmt2(execution.tp1) : "—"}
+              v={Number.isFinite(modelTp1) ? fmt2(modelTp1) : "—"}
             />
             <KV
               k={strategyVersion === "v1_trend_hold" ? "TP2 (20%)" : "TP2 (10%)"}
-              v={Number.isFinite(execution.tp2) ? fmt2(execution.tp2) : "—"}
+              v={Number.isFinite(modelTp2) ? fmt2(modelTp2) : "—"}
             />
             <KV k="Risk used" v={riskUsed !== null ? fmtMoney(riskUsed) : "—"} />
             <KV k="Position cost" v={positionCost !== null ? fmtMoney(positionCost) : "—"} />
@@ -1163,6 +1175,12 @@ export default function ScanTableClient({
           {stopTooWide ? (
             <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
               <span className="font-semibold">Risk too wide for % system.</span>
+            </div>
+          ) : null}
+
+          {entryExtended ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              Entry extended beyond model entry — reward/risk reduced.
             </div>
           ) : null}
 
