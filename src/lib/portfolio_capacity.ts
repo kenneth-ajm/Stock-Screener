@@ -1,5 +1,5 @@
 import { getOrRepairDefaultPortfolio } from "@/lib/get_or_repair_default_portfolio";
-import { computePortfolioMath } from "@/lib/portfolio_math";
+import { computeDeployedAndCash } from "@/lib/portfolio_math";
 
 type CapacityArgs = {
   supabase: any;
@@ -38,26 +38,15 @@ export async function getActivePortfolioCapacity(opts: CapacityArgs): Promise<Po
   const portfolioValue = toNum(portfolio.account_size, 0);
   const riskPerTrade = toNum(portfolio.risk_per_trade, 0.02);
   const maxPositions = Math.max(1, Math.floor(toNum(portfolio.max_positions, 5)));
-  const math = await computePortfolioMath({
+  const math = await computeDeployedAndCash({
     supabase: supa,
     portfolio_id: String(portfolio.id),
   });
   if (!math) return null;
   const openCount = math.open_count;
   const deployed = math.deployed_cost_basis;
-
-  const cashApprox = portfolioValue > 0 ? portfolioValue - deployed : 0;
-  const hasManualCash =
-    portfolio?.cash_balance != null && Number.isFinite(Number(portfolio.cash_balance));
-  const manualCash = hasManualCash ? Number(portfolio.cash_balance) : null;
-  const estimatedCash =
-    Number.isFinite(cashApprox) && cashApprox >= 0
-      ? cashApprox
-      : portfolioValue > 0
-        ? portfolioValue
-        : 0;
-  const cashAvailable = hasManualCash ? Math.max(0, manualCash as number) : estimatedCash;
-  const cashSource = hasManualCash ? "manual" : "estimated";
+  const cashAvailable = Number.isFinite(math.cash_available) ? Number(math.cash_available) : 0;
+  const cashSource = math.cash_source;
 
   return {
     portfolio_id: String(portfolio.id),
