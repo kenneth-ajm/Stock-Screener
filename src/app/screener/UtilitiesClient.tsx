@@ -218,6 +218,22 @@ export default function UtilitiesClient({
     }
   }
 
+  async function runFinalizeLatestSignals() {
+    const { res, json } = await callJson(
+      "Finalize latest signals",
+      "/api/jobs/finalize-latest",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      },
+      120000
+    );
+
+    if (res?.ok && json?.ok) {
+      await callJson("Diagnostics after finalization", "/api/diagnostics", undefined, 60000);
+    }
+  }
+
   async function runAutopilotNow() {
     const title = "Run daily autopilot now";
     const beforeUpdatedAt = autopilotStatusLive?.updated_at ?? autopilotStatus?.updated_at ?? null;
@@ -403,6 +419,9 @@ export default function UtilitiesClient({
           </Button>
           <Button variant="secondary" onClick={runRepairLatestScanState} disabled={!!busy}>
             {busy === "Repair latest scan state" ? "Repairing..." : "Repair latest scan state"}
+          </Button>
+          <Button variant="secondary" onClick={runFinalizeLatestSignals} disabled={!!busy}>
+            {busy === "Finalize latest signals" ? "Finalizing..." : "Finalize latest signals"}
           </Button>
           <a
             href="/diagnostics"

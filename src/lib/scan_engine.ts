@@ -1,20 +1,17 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
-  CORE_MOMENTUM_BUY_CAP,
   CORE_MOMENTUM_DEFAULT_UNIVERSE,
   CORE_MOMENTUM_DEFAULT_VERSION,
-  CORE_MOMENTUM_WATCH_CAP,
   evaluateCoreMomentumSwing,
   type RegimeState,
   type RuleEvaluation,
 } from "@/lib/strategy/coreMomentumSwing";
 import {
-  TREND_HOLD_BUY_CAP,
   TREND_HOLD_DEFAULT_VERSION,
-  TREND_HOLD_WATCH_CAP,
   evaluateTrendHold,
 } from "@/lib/strategy/trendHold";
 import { getLCTD } from "@/lib/scan_date";
+import { finalizeSignals } from "@/lib/finalize_signals";
 
 export type ScanEngineClient = SupabaseClient<any, any, any> | any;
 
@@ -61,12 +58,6 @@ function toNum(v: unknown): number | null {
 
 function round2(n: number) {
   return Math.round(n * 100) / 100;
-}
-
-function rankSort(a: ScanRowPayload, b: ScanRowPayload) {
-  if (b.rank_score !== a.rank_score) return b.rank_score - a.rank_score;
-  if (b.confidence !== a.confidence) return b.confidence - a.confidence;
-  return String(a.symbol ?? "").localeCompare(String(b.symbol ?? ""));
 }
 
 export function makeScanEngineClient() {
@@ -258,116 +249,6 @@ export async function upsertRawDailyScans(opts: {
     .select("id");
   if (error) return { ok: false, upserted: 0, error: error.message };
   return { ok: true, upserted: data?.length ?? 0 };
-}
-
-export async function finalizeSignals(opts: {
-  supabase: ScanEngineClient;
-  date: string;
-  universe_slug: string;
-  strategy_version: string;
-}) {
-  const supa = opts.supabase as any;
-  const buyCap =
-    opts.strategy_version === TREND_HOLD_DEFAULT_VERSION ? TREND_HOLD_BUY_CAP : CORE_MOMENTUM_BUY_CAP;
-  const watchCap =
-    opts.strategy_version === TREND_HOLD_DEFAULT_VERSION ? TREND_HOLD_WATCH_CAP : CORE_MOMENTUM_WATCH_CAP;
-
-  const { data, error } = await supa
-    .from("daily_scans")
-    .select("date,universe_slug,symbol,strategy_version,signal,confidence,entry,stop,tp1,tp2,reason_summary,reason_json")
-    .eq("date", opts.date)
-    .eq("universe_slug", opts.universe_slug)
-    .eq("strategy_version", opts.strategy_version);
-  if (error) return { ok: false, error: error.message };
-  const rowsRaw = Array.isArray(data) ? (data as any[]) : [];
-  if (!rowsRaw.length) {
-    return {
-      ok: true,
-      updated: 0,
-      buy_count: 0,
-      watch_count: 0,
-      avoid_count: 0,
-    };
-  }
-
-  const rows: ScanRowPayload[] = rowsRaw.map((row) => {
-    const reasonJson = row.reason_json && typeof row.reason_json === "object" ? row.reason_json : {};
-    const rankScore = computeRankScore(
-      String(row.strategy_version),
-      Number(row.confidence ?? 0),
-      reasonJson
-    );
-    return {
-      date: String(row.date),
-      universe_slug: String(row.universe_slug),
-      strategy_version: String(row.strategy_version),
-      symbol: String(row.symbol),
-      signal: row.signal as "BUY" | "WATCH" | "AVOID",
-      confidence: Number(row.confidence ?? 0),
-      rank_score: rankScore,
-      rank: null,
-      entry: Number(row.entry ?? 0),
-      stop: Number(row.stop ?? 0),
-      tp1: Number(row.tp1 ?? 0),
-      tp2: Number(row.tp2 ?? 0),
-      reason_summary: String(row.reason_summary ?? "").trim(),
-      reason_json: reasonJson as RuleEvaluation["reason_json"],
-      updated_at: new Date().toISOString(),
-    };
-  });
-
-  const buys = rows.filter((r) => r.signal === "BUY").sort(rankSort);
-  const keepBuy = buys.slice(0, buyCap);
-  const buyKeepKeys = new Set(keepBuy.map((r) => r.symbol));
-  for (const r of rows) {
-    if (r.signal === "BUY" && !buyKeepKeys.has(r.symbol)) r.signal = "WATCH";
-  }
-
-  const watches = rows.filter((r) => r.signal === "WATCH").sort(rankSort);
-  const keepWatch = watches.slice(0, watchCap);
-  const watchKeepKeys = new Set(keepWatch.map((r) => r.symbol));
-  for (const r of rows) {
-    if (r.signal === "WATCH" && !watchKeepKeys.has(r.symbol)) r.signal = "AVOID";
-  }
-
-  const finalBuys = rows.filter((r) => r.signal === "BUY").sort(rankSort);
-  const finalWatches = rows.filter((r) => r.signal === "WATCH").sort(rankSort);
-  const buyRankMap = new Map(finalBuys.map((r, idx) => [r.symbol, idx + 1]));
-  const watchRankMap = new Map(finalWatches.map((r, idx) => [r.symbol, idx + 1]));
-
-  const updates: ScanRowPayload[] = rows.map((r) => {
-    const rank =
-      r.signal === "BUY"
-        ? buyRankMap.get(r.symbol) ?? null
-        : r.signal === "WATCH"
-          ? watchRankMap.get(r.symbol) ?? null
-          : null;
-    const reasonJson = r.reason_json && typeof r.reason_json === "object" ? (r.reason_json as any) : {};
-    return {
-      ...r,
-      rank,
-      reason_json: {
-        ...reasonJson,
-        rank_score: r.rank_score,
-        rank,
-        capped_signal: r.signal,
-      },
-      updated_at: new Date().toISOString(),
-    };
-  });
-
-  const { error: upErr } = await supa
-    .from("daily_scans")
-    .upsert(updates as any[], { onConflict: "date,universe_slug,symbol,strategy_version" });
-  if (upErr) return { ok: false, error: upErr.message };
-
-  return {
-    ok: true,
-    updated: updates.length,
-    buy_count: finalBuys.length,
-    watch_count: finalWatches.length,
-    avoid_count: rows.filter((r) => r.signal === "AVOID").length,
-  };
 }
 
 export async function runScanPipeline(opts: {

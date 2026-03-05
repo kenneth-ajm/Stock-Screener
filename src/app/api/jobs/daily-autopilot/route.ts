@@ -6,12 +6,12 @@ import {
 } from "@/lib/strategy/coreMomentumSwing";
 import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
 import {
-  finalizeSignals,
   runScanPipeline,
   type ScanEngineClient,
 } from "@/lib/scan_engine";
 import { getLCTD } from "@/lib/scan_date";
 import { runDiagnosticsWithClient } from "@/lib/diagnostics";
+import { finalizeSignals } from "@/lib/finalize_signals";
 
 const UNIVERSE_SLUG = "core_800";
 const STATUS_KEY = "daily_autopilot_core_800";
@@ -199,20 +199,11 @@ async function runFullStrategyScan(opts: {
     if (Number(result.processed ?? 0) < batchLimit) break;
   }
 
-  const finalization = await finalizeSignals({
-    supabase: opts.supabase,
-    date: opts.scan_date_used,
-    universe_slug: opts.universe_slug,
-    strategy_version: opts.strategy_version,
-  });
-  if (!finalization.ok) throw new Error(finalization.error ?? "Finalization failed");
-
   return {
     processed,
     scored,
     upserted,
     regime_state,
-    finalization,
   };
 }
 
@@ -292,6 +283,20 @@ async function runAutopilot() {
     total_members: symbols.length,
   });
 
+  const finalizations: Record<string, any> = {};
+  for (const strategy_version of [CORE_MOMENTUM_DEFAULT_VERSION, TREND_HOLD_DEFAULT_VERSION]) {
+    const finalization = await finalizeSignals({
+      supabase: supa,
+      date: scanDate,
+      universe_slug: UNIVERSE_SLUG,
+      strategy_version,
+    });
+    if (!finalization.ok) {
+      throw new Error(`Finalization failed for ${strategy_version}: ${finalization.error ?? "unknown"}`);
+    }
+    finalizations[strategy_version] = finalization;
+  }
+
   const diagnostics = await runDiagnosticsWithClient(supa);
   const diagnostics_summary = {
     ok: diagnostics.ok,
@@ -312,13 +317,14 @@ async function runAutopilot() {
     regime_date_used: regime.regime_date_used,
     spy_regime_stale: regime.spy_regime_stale,
     momentum: {
-      buys: Number((momentumRun.finalization as any)?.buy_count ?? 0),
-      watch: Number((momentumRun.finalization as any)?.watch_count ?? 0),
+      buys: Number(finalizations[CORE_MOMENTUM_DEFAULT_VERSION]?.buy ?? 0),
+      watch: Number(finalizations[CORE_MOMENTUM_DEFAULT_VERSION]?.watch ?? 0),
     },
     trend: {
-      buys: Number((trendRun.finalization as any)?.buy_count ?? 0),
-      watch: Number((trendRun.finalization as any)?.watch_count ?? 0),
+      buys: Number(finalizations[TREND_HOLD_DEFAULT_VERSION]?.buy ?? 0),
+      watch: Number(finalizations[TREND_HOLD_DEFAULT_VERSION]?.watch ?? 0),
     },
+    finalization: finalizations,
     diagnostics_summary,
     duration_ms: Date.now() - startedAt,
   };

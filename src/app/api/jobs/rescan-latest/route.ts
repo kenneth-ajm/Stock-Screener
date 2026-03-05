@@ -5,12 +5,10 @@ import {
   CORE_MOMENTUM_DEFAULT_VERSION,
 } from "@/lib/strategy/coreMomentumSwing";
 import { getLCTD } from "@/lib/scan_date";
-import {
-  finalizeSignals,
-  runScanPipeline,
-  type ScanEngineClient,
-} from "@/lib/scan_engine";
+import { runScanPipeline, type ScanEngineClient } from "@/lib/scan_engine";
+import { finalizeSignals } from "@/lib/finalize_signals";
 import { runDiagnosticsWithClient } from "@/lib/diagnostics";
+import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
 
 type Body = {
   universe_slug?: string;
@@ -125,17 +123,29 @@ export async function POST(req: Request) {
       );
     }
 
-    const finalization = await finalizeSignals({
-      supabase: supaAny,
-      date: scan_date_used,
-      universe_slug,
-      strategy_version,
-    });
-    if (!finalization.ok) {
-      return NextResponse.json(
-        { ok: false, error: finalization.error ?? "Finalization failed", detail: null },
-        { status: 500 }
-      );
+    const strategiesToFinalize = [
+      CORE_MOMENTUM_DEFAULT_VERSION,
+      TREND_HOLD_DEFAULT_VERSION,
+    ];
+    const finalizationResults: Record<string, unknown> = {};
+    for (const sv of strategiesToFinalize) {
+      const finalization = await finalizeSignals({
+        supabase: supaAny,
+        date: scan_date_used,
+        universe_slug,
+        strategy_version: sv,
+      });
+      if (!finalization.ok) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Finalization failed for ${sv}: ${finalization.error ?? "unknown"}`,
+            detail: null,
+          },
+          { status: 500 }
+        );
+      }
+      finalizationResults[sv] = finalization;
     }
 
     const diagnostics = await runDiagnosticsWithClient(supaAny);
@@ -153,7 +163,7 @@ export async function POST(req: Request) {
           universe_slug,
           strategy_version,
           scan_date_used,
-          finalization,
+          finalization: finalizationResults,
         },
         { status: 500 }
       );
@@ -175,7 +185,7 @@ export async function POST(req: Request) {
       processed: totalProcessed,
       scored: totalScored,
       upserted: totalUpserted,
-      finalization,
+      finalization: finalizationResults,
       diagnostics_summary: diagnosticsSummary,
       duration_ms: Date.now() - startedAt,
     });

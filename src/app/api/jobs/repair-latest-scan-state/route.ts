@@ -6,10 +6,10 @@ import {
 } from "@/lib/strategy/coreMomentumSwing";
 import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
 import {
-  finalizeSignals,
   runScanPipeline,
   type ScanEngineClient,
 } from "@/lib/scan_engine";
+import { finalizeSignals } from "@/lib/finalize_signals";
 import { getLCTD } from "@/lib/scan_status";
 import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 
@@ -224,4 +224,3 @@ export async function POST() {
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }
-
