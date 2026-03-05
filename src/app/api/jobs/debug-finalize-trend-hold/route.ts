@@ -6,7 +6,7 @@ import { finalizeSignals } from "@/lib/finalize_signals";
 const UNIVERSE_SLUG = "core_800";
 const STRATEGY_VERSION = "v1_trend_hold";
 
-export async function POST() {
+async function runFinalize() {
   try {
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -49,3 +49,10 @@ export async function POST() {
   }
 }
 
+export async function GET() {
+  return runFinalize();
+}
+
+export async function POST() {
+  return runFinalize();
+}
