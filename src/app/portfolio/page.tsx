@@ -6,6 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 
 import PositionsClient from "./PositionsClient";
 import { computeClosedTradeSummary } from "@/lib/analytics/closedTradeSummary";
+import { computePortfolioMath } from "@/lib/portfolio_math";
 
 export const dynamic = "force-dynamic";
 
@@ -272,21 +273,22 @@ export default async function PortfolioPage() {
   const realizedTrades = realizedWins + realizedLosses;
   const winRate = realizedTrades ? realizedWins / realizedTrades : 0;
 
+  const math = await computePortfolioMath({
+    supabase: supabase as any,
+    portfolio_id: String(portfolio.id),
+  });
+
   // Exposure
-  let capitalDeployed = 0;
+  const capitalDeployed = math?.deployed_cost_basis ?? 0;
+  const estimatedCash = math?.estimated_cash ?? null;
+  const unknownOpenCount = math?.unknown_open_positions_count ?? 0;
+  const deployedTooHigh = (math?.account_size ?? 0) > 0 && capitalDeployed > (math?.account_size ?? 0) * 1.05;
   let riskDeployed = 0;
 
   for (const p of open) {
     const entry = p.entry_price;
     const stop = p.stop_price;
     const qty = resolveQty(p);
-    const symbol = (p.symbol ?? "").toUpperCase();
-    const last = symbol ? latestPriceBySymbol[symbol] : null;
-
-    if (typeof last === "number" && Number.isFinite(last) && last > 0 && qty > 0) {
-      capitalDeployed += last * qty;
-    }
-
     if (typeof entry === "number" && entry > 0 && typeof stop === "number" && stop > 0 && qty > 0) {
       riskDeployed += Math.max(0, (entry - stop) * qty);
     }
@@ -327,6 +329,11 @@ export default async function PortfolioPage() {
           <div className="text-xs text-slate-500">Open exposure</div>
           <div className="mt-1 text-sm text-slate-800">
             Capital deployed: <span className="font-semibold">{formatMoney(capitalDeployed)}</span>
+            {deployedTooHigh ? (
+              <span className="ml-2 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+                Deployed exceeds account size (check holdings)
+              </span>
+            ) : null}
           </div>
           <div className="mt-1 text-sm text-slate-800">
             Open count: <span className="font-semibold">{open.length}</span>
@@ -337,6 +344,14 @@ export default async function PortfolioPage() {
           <div className="mt-1 text-xs text-slate-500">
             {pctDeployed !== null ? `${(pctDeployed * 100).toFixed(1)}% of account size` : "—"}
           </div>
+          <div className="mt-1 text-xs text-slate-500">
+            Estimated cash: <span className="font-semibold">{formatMoney(estimatedCash)}</span>
+          </div>
+          {unknownOpenCount > 0 ? (
+            <div className="mt-1 text-xs text-amber-700">
+              {unknownOpenCount} open position(s) missing entry/shares excluded from deployed math.
+            </div>
+          ) : null}
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">

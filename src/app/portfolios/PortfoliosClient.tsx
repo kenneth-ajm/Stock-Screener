@@ -7,6 +7,8 @@ type PortfolioStats = {
   deployed: number;
   openCount: number;
   realized: number;
+  deployedTooHigh?: boolean;
+  unknownOpenCount?: number;
 };
 
 type Portfolio = {
@@ -317,6 +319,16 @@ export default function PortfoliosClient({ initialPortfolios }: { initialPortfol
 
                     <td className="p-3 text-slate-800">
                       {p.account_currency ?? "USD"} {money(deployed)}
+                      {p.stats?.deployedTooHigh ? (
+                        <span className="ml-2 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+                          Check holdings
+                        </span>
+                      ) : null}
+                      {(p.stats?.unknownOpenCount ?? 0) > 0 ? (
+                        <div className="mt-1 text-[11px] text-amber-700">
+                          {(p.stats?.unknownOpenCount ?? 0)} unknown
+                        </div>
+                      ) : null}
                     </td>
 
                     <td className="p-3 text-slate-800">{openCount}</td>

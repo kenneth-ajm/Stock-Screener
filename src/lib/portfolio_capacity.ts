@@ -1,4 +1,5 @@
 import { getOrRepairDefaultPortfolio } from "@/lib/get_or_repair_default_portfolio";
+import { computePortfolioMath } from "@/lib/portfolio_math";
 
 type CapacityArgs = {
   supabase: any;
@@ -16,6 +17,9 @@ export type PortfolioCapacity = {
   max_positions: number;
   slots_left: number;
   risk_per_trade: number;
+  unknown_open_positions_count: number;
+  unknown_examples: Array<{ symbol: string; shares: unknown; entry_price: unknown }>;
+  deployed_exceeds_account_size: boolean;
 };
 
 function toNum(v: unknown, fallback = 0) {
@@ -34,24 +38,13 @@ export async function getActivePortfolioCapacity(opts: CapacityArgs): Promise<Po
   const portfolioValue = toNum(portfolio.account_size, 0);
   const riskPerTrade = toNum(portfolio.risk_per_trade, 0.02);
   const maxPositions = Math.max(1, Math.floor(toNum(portfolio.max_positions, 5)));
-
-  const { data: openRows, error: openErr } = await supa
-    .from("portfolio_positions")
-    .select("entry_price,shares")
-    .eq("user_id", opts.userId)
-    .eq("portfolio_id", portfolio.id)
-    .eq("status", "OPEN");
-  if (openErr) return null;
-
-  const openPositions = Array.isArray(openRows) ? openRows : [];
-  const openCount = openPositions.length;
-  const deployed = openPositions.reduce((sum: number, row: any) => {
-    if (row?.entry_price == null || row?.shares == null) return sum;
-    const entry = toNum(row.entry_price, NaN);
-    const shares = toNum(row.shares, NaN);
-    if (!Number.isFinite(entry) || !Number.isFinite(shares)) return sum;
-    return sum + entry * shares;
-  }, 0);
+  const math = await computePortfolioMath({
+    supabase: supa,
+    portfolio_id: String(portfolio.id),
+  });
+  if (!math) return null;
+  const openCount = math.open_count;
+  const deployed = math.deployed_cost_basis;
 
   const cashApprox = portfolioValue > 0 ? portfolioValue - deployed : 0;
   const hasManualCash =
@@ -77,5 +70,8 @@ export async function getActivePortfolioCapacity(opts: CapacityArgs): Promise<Po
     max_positions: maxPositions,
     slots_left: Math.max(0, maxPositions - openCount),
     risk_per_trade: riskPerTrade,
+    unknown_open_positions_count: math.unknown_open_positions_count,
+    unknown_examples: math.unknown_examples,
+    deployed_exceeds_account_size: portfolioValue > 0 && deployed > portfolioValue * 1.05,
   };
 }

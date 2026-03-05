@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import Link from "next/link";
 import PortfoliosClient from "./PortfoliosClient";
+import { computePortfolioMath } from "@/lib/portfolio_math";
 
 export const dynamic = "force-dynamic";
 
@@ -71,18 +72,37 @@ export default async function PortfoliosPage() {
     positions = (pos ?? []) as any;
   }
 
+  const mathByPortfolio = new Map<
+    string,
+    {
+      deployed_cost_basis: number;
+      open_count: number;
+      account_size: number;
+      unknown_open_positions_count: number;
+    }
+  >();
+  await Promise.all(
+    portfolioIds.map(async (portfolioId) => {
+      const math = await computePortfolioMath({
+        supabase: supabase as any,
+        portfolio_id: String(portfolioId),
+      });
+      if (math) {
+        mathByPortfolio.set(String(portfolioId), {
+          deployed_cost_basis: math.deployed_cost_basis,
+          open_count: math.open_count,
+          account_size: math.account_size,
+          unknown_open_positions_count: math.unknown_open_positions_count,
+        });
+      }
+    })
+  );
+
   const portfoliosWithStats =
     (portfolios ?? []).map((p: any) => {
       const related = positions.filter((x) => x.portfolio_id === p.id);
-
-      const open = related.filter((r) => r.status === "OPEN");
       const closed = related.filter((r) => r.status === "CLOSED");
-
-      const deployed = open.reduce((sum, r) => {
-        const qty = resolveQty(r);
-        const entry = typeof r.entry_price === "number" ? r.entry_price : 0;
-        return sum + entry * qty;
-      }, 0);
+      const math = mathByPortfolio.get(String(p.id));
 
       const realized = closed.reduce((sum, r) => {
         const qty = resolveQty(r);
@@ -92,12 +112,19 @@ export default async function PortfoliosPage() {
         return sum + (exit - entry) * qty - fees;
       }, 0);
 
+      const deployed = math?.deployed_cost_basis ?? 0;
+      const openCount = math?.open_count ?? 0;
+      const accountSize = math?.account_size ?? (typeof p.account_size === "number" ? p.account_size : 0);
+      const deployedTooHigh = accountSize > 0 && deployed > accountSize * 1.05;
+
       return {
         ...p,
         stats: {
           deployed,
-          openCount: open.length,
+          openCount,
           realized,
+          deployedTooHigh,
+          unknownOpenCount: math?.unknown_open_positions_count ?? 0,
         },
       };
     }) ?? [];
