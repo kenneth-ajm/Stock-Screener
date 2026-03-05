@@ -328,7 +328,7 @@ export default async function PortfolioPage() {
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">Open exposure</div>
           <div className="mt-1 text-sm text-slate-800">
-            Capital deployed: <span className="font-semibold">{formatMoney(capitalDeployed)}</span>
+            Capital deployed (cost basis): <span className="font-semibold">{formatMoney(capitalDeployed)}</span>
             {deployedTooHigh ? (
               <span className="ml-2 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
                 Deployed exceeds account size (check holdings)
@@ -349,7 +349,7 @@ export default async function PortfolioPage() {
           </div>
           {unknownOpenCount > 0 ? (
             <div className="mt-1 text-xs text-amber-700">
-              {unknownOpenCount} open position(s) missing entry/shares excluded from deployed math.
+              {unknownOpenCount} open position(s) missing entry/qty excluded from deployed math.
             </div>
           ) : null}
         </div>

@@ -150,7 +150,7 @@ export default function ScreenerPanelClient({
           ) : null}
           {(data.capacity.unknown_open_positions_count ?? 0) > 0 ? (
             <div className="mt-1 text-xs text-amber-700">
-              {data.capacity.unknown_open_positions_count} open position(s) missing entry/shares excluded from estimate.
+              {data.capacity.unknown_open_positions_count} open position(s) missing entry/qty excluded from estimate.
             </div>
           ) : null}
         </div>

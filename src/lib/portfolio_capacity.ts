@@ -18,7 +18,7 @@ export type PortfolioCapacity = {
   slots_left: number;
   risk_per_trade: number;
   unknown_open_positions_count: number;
-  unknown_examples: Array<{ symbol: string; shares: unknown; entry_price: unknown }>;
+  unknown_examples: Array<{ symbol: string; qty: unknown; entry_price: unknown }>;
   deployed_exceeds_account_size: boolean;
 };
 

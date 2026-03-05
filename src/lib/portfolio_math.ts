@@ -12,7 +12,7 @@ export type PortfolioMath = {
   open_lots_count: number;
   open_symbols_count: number;
   unknown_open_positions_count: number;
-  unknown_examples: Array<{ symbol: string; shares: unknown; entry_price: unknown }>;
+  unknown_examples: Array<{ symbol: string; qty: unknown; entry_price: unknown }>;
 };
 
 function toNum(v: unknown) {
@@ -36,83 +36,59 @@ export async function computePortfolioMath(opts: ComputePortfolioMathArgs): Prom
 
   const accountSize = toNum(portfolio.account_size) ?? 0;
 
-  // Preferred source of truth: open lots (qty, avg_cost). Fallback to grouped/open positions.
+  // Preferred source of truth: OPEN position lots with entry_price * qty cost basis.
+  // Fallback only if lot-style fields are unavailable.
   let lotsUsed = false;
   let openRows: any[] = [];
-  let openErr: any = null;
+  const primaryRes = await supa
+    .from("portfolio_positions")
+    .select("symbol,shares,quantity,position_size,entry_price,status")
+    .eq("portfolio_id", portfolioId)
+    .eq("status", "OPEN");
+  if (primaryRes.error) throw primaryRes.error;
+  openRows = Array.isArray(primaryRes.data) ? primaryRes.data : [];
+  lotsUsed = true;
 
-  try {
+  // Optional fallback path if a separate lots table exists and primary rows are empty.
+  if (openRows.length === 0) {
     const lotsRes = await supa
       .from("portfolio_lots")
-      .select("symbol,qty,avg_cost,status")
+      .select("symbol,qty,entry_price,avg_cost,status")
       .eq("portfolio_id", portfolioId)
       .eq("status", "OPEN");
-    if (!lotsRes.error && Array.isArray(lotsRes.data)) {
-      if (lotsRes.data.length > 0) {
-        openRows = lotsRes.data.map((row: any) => ({
-          symbol: row?.symbol,
-          shares: row?.qty,
-          entry_price: row?.avg_cost,
-        }));
-        lotsUsed = true;
-      }
-    } else {
-      openErr = lotsRes.error;
+    if (!lotsRes.error && Array.isArray(lotsRes.data) && lotsRes.data.length > 0) {
+      openRows = lotsRes.data.map((row: any) => ({
+        symbol: row?.symbol,
+        shares: row?.qty,
+        quantity: row?.qty,
+        position_size: row?.qty,
+        entry_price: row?.entry_price ?? row?.avg_cost ?? null,
+      }));
+      lotsUsed = true;
     }
-  } catch (e) {
-    openErr = e;
-  }
-
-  if (!lotsUsed) {
-    try {
-      const lotLikeRes = await supa
-        .from("portfolio_positions")
-        .select("symbol,qty,avg_cost,status")
-        .eq("portfolio_id", portfolioId)
-        .eq("status", "OPEN");
-      if (!lotLikeRes.error && Array.isArray(lotLikeRes.data) && lotLikeRes.data.length > 0) {
-        openRows = lotLikeRes.data.map((row: any) => ({
-          symbol: row?.symbol,
-          shares: row?.qty,
-          entry_price: row?.avg_cost,
-        }));
-        lotsUsed = true;
-      } else if (lotLikeRes.error) {
-        openErr = lotLikeRes.error;
-      }
-    } catch (e) {
-      openErr = e;
-    }
-  }
-
-  if (!lotsUsed) {
-    const fallbackRes = await supa
-      .from("portfolio_positions")
-      .select("symbol,shares,entry_price,status")
-      .eq("portfolio_id", portfolioId)
-      .eq("status", "OPEN");
-    if (fallbackRes.error) throw fallbackRes.error ?? openErr;
-    openRows = Array.isArray(fallbackRes.data) ? fallbackRes.data : [];
   }
 
   const rows = Array.isArray(openRows) ? openRows : [];
   let deployedCostBasis = 0;
   let unknownOpenPositionsCount = 0;
-  const unknownExamples: Array<{ symbol: string; shares: unknown; entry_price: unknown }> = [];
+  const unknownExamples: Array<{ symbol: string; qty: unknown; entry_price: unknown }> = [];
   const symbolSet = new Set<string>();
 
   for (const row of rows) {
     const symbol = String(row?.symbol ?? "").toUpperCase().trim();
     if (symbol) symbolSet.add(symbol);
 
-    const shares = toNum(row?.shares);
+    const shares =
+      toNum(row?.shares) ??
+      toNum(row?.quantity) ??
+      toNum(row?.position_size);
     const entryPrice = toNum(row?.entry_price);
     if (shares == null || entryPrice == null) {
       unknownOpenPositionsCount += 1;
       if (unknownExamples.length < 5) {
         unknownExamples.push({
           symbol: String(row?.symbol ?? ""),
-          shares: row?.shares ?? null,
+          qty: row?.shares ?? row?.quantity ?? row?.position_size ?? row?.qty ?? null,
           entry_price: row?.entry_price ?? null,
         });
       }
@@ -123,7 +99,7 @@ export async function computePortfolioMath(opts: ComputePortfolioMathArgs): Prom
 
   return {
     account_size: accountSize,
-    open_count: lotsUsed ? symbolSet.size : rows.length,
+    open_count: rows.length,
     deployed_cost_basis: deployedCostBasis,
     estimated_cash: accountSize - deployedCostBasis,
     lots_used: lotsUsed,
