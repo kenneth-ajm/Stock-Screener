@@ -13,30 +13,17 @@ export async function POST(req: Request) {
 
     const body = (await req.json().catch(() => ({}))) as { cash_balance?: unknown };
     const raw = body?.cash_balance;
-    const activeRow = await supabase
+    const defaultRow = await supabase
       .from("portfolios")
       .select("id")
       .eq("user_id", user.id)
-      .eq("active", true)
+      .eq("is_default", true)
       .limit(1)
       .maybeSingle();
-    if (activeRow.error) {
-      return NextResponse.json({ ok: false, error: activeRow.error.message }, { status: 500 });
+    if (defaultRow.error) {
+      return NextResponse.json({ ok: false, error: defaultRow.error.message }, { status: 500 });
     }
-    let portfolioId = activeRow.data?.id ?? null;
-    if (!portfolioId) {
-      const defaultRow = await supabase
-        .from("portfolios")
-        .select("id")
-        .eq("user_id", user.id)
-        .eq("is_default", true)
-        .limit(1)
-        .maybeSingle();
-      if (defaultRow.error) {
-        return NextResponse.json({ ok: false, error: defaultRow.error.message }, { status: 500 });
-      }
-      portfolioId = defaultRow.data?.id ?? null;
-    }
+    const portfolioId = defaultRow.data?.id ?? null;
     if (!portfolioId) {
       return NextResponse.json({ ok: false, error: "No active portfolio" }, { status: 404 });
     }

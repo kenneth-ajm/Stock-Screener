@@ -34,17 +34,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "portfolio_id is required" }, { status: 400 });
   }
 
-  // 1) unset existing default for this user
   const { error: unsetErr } = await supabase
     .from("portfolios")
     .update({ is_default: false })
     .eq("user_id", user.id);
-
   if (unsetErr) {
     return NextResponse.json({ ok: false, error: unsetErr.message }, { status: 500 });
   }
 
-  // 2) set new default on selected row owned by this user
   const { data: setRows, error: setErr } = await supabase
     .from("portfolios")
     .update({ is_default: true })
@@ -52,7 +49,6 @@ export async function POST(req: Request) {
     .eq("user_id", user.id)
     .select("id")
     .limit(1);
-
   if (setErr) {
     return NextResponse.json({ ok: false, error: setErr.message }, { status: 500 });
   }
@@ -62,3 +58,4 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok: true, default_portfolio_id: setRows[0].id });
 }
+

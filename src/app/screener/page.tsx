@@ -4,6 +4,7 @@ import ScreenerPanelClient from "./ScreenerPanelClient";
 import UtilitiesClient from "./UtilitiesClient";
 import ScreenerSearchClient from "./ScreenerSearchClient";
 import CashBalanceEditor from "./CashBalanceEditor";
+import RepairDefaultPortfolioButton from "./RepairDefaultPortfolioButton";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { getLCTD } from "@/lib/scan_status";
@@ -47,22 +48,13 @@ export default async function ScreenerPage({
 
   if (!user) redirect("/auth?next=/screener");
 
-  const { data: activePortfolio } = await supabase
+  const { data: defaultPortfolio } = await supabase
     .from("portfolios")
     .select("id, name, account_currency, account_size, risk_per_trade, max_positions,cash_balance,cash_updated_at,active,is_default")
-    .eq("active", true)
+    .eq("user_id", user.id)
+    .eq("is_default", true)
     .limit(1)
     .maybeSingle();
-  let defaultPortfolio = activePortfolio;
-  if (!defaultPortfolio) {
-    const fallback = await supabase
-      .from("portfolios")
-      .select("id, name, account_currency, account_size, risk_per_trade, max_positions,cash_balance,cash_updated_at,active,is_default")
-      .eq("is_default", true)
-      .limit(1)
-      .maybeSingle();
-    defaultPortfolio = fallback.data ?? null;
-  }
 
   const { data: regimeRows } = await supabase
     .from("market_regime")
@@ -219,7 +211,10 @@ export default async function ScreenerPage({
                 </div>
               </div>
             ) : (
-              <div className="text-sm muted">No active portfolio found.</div>
+              <div className="space-y-2">
+                <div className="text-sm muted">No active portfolio found.</div>
+                <RepairDefaultPortfolioButton />
+              </div>
             )}
           </CardContent>
         </Card>

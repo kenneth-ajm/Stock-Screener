@@ -23,28 +23,16 @@ function toNum(v: unknown, fallback = 0) {
 
 export async function getActivePortfolioCapacity(opts: CapacityArgs): Promise<PortfolioCapacity | null> {
   const supa = opts.supabase as any;
-  const { data: activePortfolio, error: activeErr } = await supa
+  const { data: defaultPortfolio, error: defaultErr } = await supa
     .from("portfolios")
     .select("id,account_size,risk_per_trade,max_positions,cash_balance,cash_updated_at")
     .eq("user_id", opts.userId)
-    .eq("active", true)
+    .eq("is_default", true)
     .limit(1)
     .maybeSingle();
 
-  let portfolio = activePortfolio;
-  let pErr = activeErr;
-  if (!portfolio) {
-    const fallback = await supa
-      .from("portfolios")
-      .select("id,account_size,risk_per_trade,max_positions,cash_balance,cash_updated_at")
-      .eq("user_id", opts.userId)
-      .eq("is_default", true)
-      .limit(1)
-      .maybeSingle();
-    portfolio = fallback.data;
-    pErr = fallback.error;
-  }
-
+  const portfolio = defaultPortfolio;
+  const pErr = defaultErr;
   if (pErr || !portfolio?.id) return null;
 
   const portfolioValue = toNum(portfolio.account_size, 0);
