@@ -31,9 +31,11 @@ type ScanRow = {
 
 function rankRows(rows: ScanRow[]) {
   return [...rows].sort((a, b) => {
-    const ars = Number(a.rank_score ?? 0);
-    const brs = Number(b.rank_score ?? 0);
-    if (brs !== ars) return brs - ars;
+    const ars = typeof a.rank_score === "number" && Number.isFinite(a.rank_score) ? a.rank_score : null;
+    const brs = typeof b.rank_score === "number" && Number.isFinite(b.rank_score) ? b.rank_score : null;
+    if (ars !== null && brs !== null && brs !== ars) return brs - ars;
+    if (ars !== null && brs === null) return -1;
+    if (ars === null && brs !== null) return 1;
     const ac = Number(a.confidence ?? 0);
     const bc = Number(b.confidence ?? 0);
     if (bc !== ac) return bc - ac;
@@ -42,9 +44,30 @@ function rankRows(rows: ScanRow[]) {
 }
 
 function applyDisplayCaps(rows: ScanRow[]) {
-  const ranked = rankRows(rows);
-  const buys = ranked.filter((r) => r.signal === "BUY").slice(0, DISPLAY_BUY_CAP);
-  const watches = ranked.filter((r) => r.signal === "WATCH").slice(0, DISPLAY_WATCH_CAP);
+  const buyRanked = rankRows(rows.filter((r) => r.signal === "BUY"));
+  const watchRanked = rankRows(rows.filter((r) => r.signal === "WATCH"));
+
+  const buysHaveRank = buyRanked.some((r) => typeof r.rank === "number" && Number.isFinite(r.rank));
+  const watchHaveRank = watchRanked.some((r) => typeof r.rank === "number" && Number.isFinite(r.rank));
+
+  const buys = buysHaveRank
+    ? (() => {
+        const byRank = buyRanked.filter(
+          (r) => typeof r.rank === "number" && Number.isFinite(r.rank) && Number(r.rank) <= DISPLAY_BUY_CAP
+        );
+        return byRank.length > 0 ? byRank : buyRanked.slice(0, DISPLAY_BUY_CAP);
+      })()
+    : buyRanked.slice(0, DISPLAY_BUY_CAP);
+
+  const watches = watchHaveRank
+    ? (() => {
+        const byRank = watchRanked.filter(
+          (r) => typeof r.rank === "number" && Number.isFinite(r.rank) && Number(r.rank) <= DISPLAY_WATCH_CAP
+        );
+        return byRank.length > 0 ? byRank : watchRanked.slice(0, DISPLAY_WATCH_CAP);
+      })()
+    : watchRanked.slice(0, DISPLAY_WATCH_CAP);
+
   return rankRows([...buys, ...watches]);
 }
 
@@ -135,7 +158,6 @@ export default async function ScreenerPage({
       .eq("universe_slug", DEFAULT_UNIVERSE)
       .eq("strategy_version", activeStrategy)
       .eq("date", latestScanDate)
-      .order("rank_score", { ascending: false, nullsFirst: false })
       .order("confidence", { ascending: false })
       .order("symbol", { ascending: true })
       .limit(200);
