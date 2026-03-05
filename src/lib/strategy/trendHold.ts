@@ -7,6 +7,7 @@ import {
   type RuleCheck,
   type RuleEvaluation,
 } from "@/lib/strategy/coreMomentumSwing";
+import { getStrategyConfig } from "@/lib/strategy_config";
 
 export const TREND_HOLD_DEFAULT_VERSION = "v1_trend_hold";
 export const TREND_HOLD_BUY_CAP = 5;
@@ -102,9 +103,23 @@ export function evaluateTrendHold(opts: {
   const rankScore = rsNorm * 50 + nearHighNorm * 30 + slopeNorm * 20;
 
   const downgradedBuyToWatch = regime === "DEFENSIVE" && rawSignal === "BUY";
-  const signal = downgradedBuyToWatch ? "WATCH" : rawSignal;
+  let signal: "BUY" | "WATCH" | "AVOID" = downgradedBuyToWatch ? "WATCH" : rawSignal;
 
-  const stop = entry * 0.9;
+  const stopPolicy = getStrategyConfig(TREND_HOLD_DEFAULT_VERSION);
+  const rawStop = entry * 0.9;
+  const rawStopPct = entry > 0 ? (entry - rawStop) / entry : 0;
+  let stop = rawStop;
+  let stopAdjusted = false;
+  const stopTooWide = rawStopPct > stopPolicy.max_stop_pct;
+  if (rawStopPct < stopPolicy.min_stop_pct) {
+    stop = entry * (1 - stopPolicy.min_stop_pct);
+    stopAdjusted = true;
+  }
+  if (stopTooWide) {
+    signal = signal === "BUY" ? "WATCH" : signal === "WATCH" ? "AVOID" : "AVOID";
+  }
+  const finalStopPct = entry > 0 ? (entry - stop) / entry : 0;
+
   const tp1 = entry * 1.1;
   const tp2 = entry * 1.2;
 
@@ -186,6 +201,15 @@ export function evaluateTrendHold(opts: {
       detail: `Regime ${regime}${downgradedBuyToWatch ? " (BUY downgraded)" : ""}`,
       category: "flags",
     },
+    {
+      key: "stop_policy",
+      label: "Stop policy by strategy",
+      ok: !stopTooWide,
+      detail: stopTooWide
+        ? `STOP_TOO_WIDE raw ${(rawStopPct * 100).toFixed(2)}% > max ${(stopPolicy.max_stop_pct * 100).toFixed(1)}%`
+        : `raw ${(rawStopPct * 100).toFixed(2)}% | final ${(finalStopPct * 100).toFixed(2)}%`,
+      category: "risk",
+    },
   ];
 
   const reasonSummaryBits: string[] = [];
@@ -196,6 +220,8 @@ export function evaluateTrendHold(opts: {
   reasonSummaryBits.push(c11 ? "volatility controlled" : "volatility high");
   reasonSummaryBits.push(liquidityOk ? "liquidity ok" : "liquidity weak");
   if (downgradedBuyToWatch) reasonSummaryBits.push("defensive regime downgrade");
+  if (stopTooWide) reasonSummaryBits.push("STOP_TOO_WIDE");
+  else if (stopAdjusted) reasonSummaryBits.push("stop adjusted to min policy");
 
   return {
     signal,
@@ -232,6 +258,10 @@ export function evaluateTrendHold(opts: {
         avgVolume20,
         avgDollarVolume20,
         marketCap: null,
+        raw_stop: rawStop,
+        raw_stop_pct: rawStopPct,
+        final_stop: stop,
+        final_stop_pct: finalStopPct,
       },
       flags: {
         event_risk: false,
@@ -245,6 +275,16 @@ export function evaluateTrendHold(opts: {
         { key: "Liquidity (7-8)", points: liquidityScore },
       ],
       score: confidence,
+      stop_policy: {
+        min_stop_pct: stopPolicy.min_stop_pct,
+        max_stop_pct: stopPolicy.max_stop_pct,
+        raw_stop: rawStop,
+        final_stop: stop,
+        raw_stop_pct: rawStopPct,
+        final_stop_pct: finalStopPct,
+        stop_adjusted: stopAdjusted,
+        stop_too_wide: stopTooWide,
+      },
       rank_score: rankScore,
       trade_plan: {
         entry,

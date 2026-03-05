@@ -1,3 +1,5 @@
+import { getStrategyConfig } from "@/lib/strategy_config";
+
 export type RegimeState = "FAVORABLE" | "CAUTION" | "DEFENSIVE";
 
 export type PriceBar = {
@@ -55,6 +57,16 @@ export type RuleEvaluation = {
     checks: RuleCheck[];
     score_breakdown: Array<{ key: string; points: number }>;
     score: number;
+    stop_policy?: {
+      min_stop_pct: number;
+      max_stop_pct: number;
+      raw_stop: number;
+      final_stop: number;
+      raw_stop_pct: number;
+      final_stop_pct: number;
+      stop_adjusted: boolean;
+      stop_too_wide: boolean;
+    };
     rank_score?: number;
     trade_plan: {
       entry: number;
@@ -274,10 +286,23 @@ export function evaluateCoreMomentumSwing(opts: {
   else if (watchEligible) rawSignal = "WATCH";
 
   const downgradedBuyToWatch = regime === "DEFENSIVE" && rawSignal === "BUY";
-  const signal = downgradedBuyToWatch ? "WATCH" : rawSignal;
+  let signal: "BUY" | "WATCH" | "AVOID" = downgradedBuyToWatch ? "WATCH" : rawSignal;
 
   const entry = latest.close;
-  const stop = entry * 0.92;
+  const stopPolicy = getStrategyConfig(CORE_MOMENTUM_DEFAULT_VERSION);
+  const rawStop = entry * 0.92;
+  const rawStopPct = entry > 0 ? (entry - rawStop) / entry : 0;
+  let stop = rawStop;
+  let stopAdjusted = false;
+  const stopTooWide = rawStopPct > stopPolicy.max_stop_pct;
+  if (rawStopPct < stopPolicy.min_stop_pct) {
+    stop = entry * (1 - stopPolicy.min_stop_pct);
+    stopAdjusted = true;
+  }
+  if (stopTooWide) {
+    signal = signal === "BUY" ? "WATCH" : signal === "WATCH" ? "AVOID" : "AVOID";
+  }
+  const finalStopPct = entry > 0 ? (entry - stop) / entry : 0;
   const tp1 = entry * 1.05;
   const tp2 = entry * 1.1;
 
@@ -366,6 +391,14 @@ export function evaluateCoreMomentumSwing(opts: {
       ok: !downgradedBuyToWatch,
       detail: `Regime ${regime}${downgradedBuyToWatch ? " (BUY downgraded)" : ""}`,
     },
+    {
+      key: "stop_policy",
+      label: "Stop policy by strategy",
+      ok: !stopTooWide,
+      detail: stopTooWide
+        ? `STOP_TOO_WIDE raw ${(rawStopPct * 100).toFixed(2)}% > max ${(stopPolicy.max_stop_pct * 100).toFixed(1)}%`
+        : `raw ${(rawStopPct * 100).toFixed(2)}% | final ${(finalStopPct * 100).toFixed(2)}%`,
+    },
   ];
 
   const checksWithCategory: RuleCheck[] = checks.map((c) => {
@@ -389,6 +422,7 @@ export function evaluateCoreMomentumSwing(opts: {
     `dist ${distInAtr.toFixed(2)} ATR`,
     `liq ${Math.round(avgDollarVolume20 / 1_000_000)}M`,
     downgradedBuyToWatch ? "defensive regime downgrade" : "regime ok",
+    stopTooWide ? "STOP_TOO_WIDE" : stopAdjusted ? "stop adjusted to min policy" : "stop policy ok",
     `${passCount}/${checks.length} checks`,
   ].join(" • ");
 
@@ -420,10 +454,24 @@ export function evaluateCoreMomentumSwing(opts: {
         distFromSma20,
         distInAtr,
         marketCap,
+        raw_stop: rawStop,
+        raw_stop_pct: rawStopPct,
+        final_stop: stop,
+        final_stop_pct: finalStopPct,
       },
       checks: checksWithCategory,
       score_breakdown: scoreBreakdown,
       score: Math.round(score),
+      stop_policy: {
+        min_stop_pct: stopPolicy.min_stop_pct,
+        max_stop_pct: stopPolicy.max_stop_pct,
+        raw_stop: rawStop,
+        final_stop: stop,
+        raw_stop_pct: rawStopPct,
+        final_stop_pct: finalStopPct,
+        stop_adjusted: stopAdjusted,
+        stop_too_wide: stopTooWide,
+      },
       trade_plan: {
         entry,
         stop,
