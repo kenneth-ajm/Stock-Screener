@@ -6,7 +6,8 @@ import ScreenerSearchClient from "./ScreenerSearchClient";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { lastCompletedUsTradingDay } from "@/lib/tradingDay";
+import { getFreshnessStatus, getLCTD } from "@/lib/scan_status";
+import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 
 export const dynamic = "force-dynamic";
 
@@ -119,8 +120,8 @@ export default async function ScreenerPage({
     .limit(1);
 
   const regime = regimeRows?.[0] ?? null;
-  const lastCompletedTradingDay = lastCompletedUsTradingDay();
-  const regimeIsStale = !!regime?.date && String(regime.date) < lastCompletedTradingDay;
+  const lctdStatus = await getLCTD(supabase as any);
+  const lastCompletedTradingDay = lctdStatus.lctd ?? "";
 
   let autopilotStatus: { updated_at?: string | null; value?: AutopilotStatus | null } | null = null;
   try {
@@ -149,6 +150,15 @@ export default async function ScreenerPage({
     .limit(1);
 
   const latestScanDate = latestScan?.[0]?.date ?? null;
+  const freshness = getFreshnessStatus({
+    lctd: lastCompletedTradingDay || null,
+    latestScanDate: latestScanDate ? String(latestScanDate) : null,
+    regimeDate: regime?.date ? String(regime.date) : null,
+  });
+  const regimeIsStale = freshness.regime_date
+    ? freshness.expected_date !== freshness.regime_date
+    : true;
+  const diagnostics = await runDiagnosticsWithClient(supabase as any);
 
   let scanRows: ScanRow[] = [];
   if (latestScanDate) {
@@ -207,6 +217,11 @@ export default async function ScreenerPage({
             right={regime ? regimeBadge : <Badge variant="neutral">No regime</Badge>}
           />
           <CardContent>
+            {!diagnostics.ok ? (
+              <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                Diagnostics failing: scan state may be unreliable
+              </div>
+            ) : null}
             <div className="mb-3 flex items-center gap-2">
               <a href="/screener?strategy=v2_core_momentum">
                 <button

@@ -511,6 +511,23 @@ export async function runScanPipeline(opts: {
     });
   }
 
+  const futureRows = rows.filter((row) => String(row.date) > scanDate);
+  if (futureRows.length > 0) {
+    console.error("scan_engine refusing future-dated rows", {
+      scanDate,
+      count: futureRows.length,
+      symbols: futureRows.slice(0, 10).map((r) => r.symbol),
+    });
+    return {
+      ok: false,
+      error: `Refusing to write ${futureRows.length} rows after LCTD ${scanDate}`,
+      scan_date_used: scanDate,
+      lctd_source: dateResolved.lctd_source,
+      processed,
+      scored,
+    };
+  }
+
   const upsertRaw = await upsertRawDailyScans({ supabase: supa, rows });
   if (!upsertRaw.ok) {
     return {

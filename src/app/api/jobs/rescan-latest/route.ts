@@ -10,6 +10,7 @@ import {
   runScanPipeline,
   type ScanEngineClient,
 } from "@/lib/scan_engine";
+import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 
 type Body = {
   universe_slug?: string;
@@ -137,6 +138,27 @@ export async function POST(req: Request) {
       );
     }
 
+    const diagnostics = await runDiagnosticsWithClient(supaAny);
+    const diagnosticsSummary = {
+      ok: diagnostics.ok,
+      lctd_vs_scans_ok: diagnostics.checks.lctd_vs_scans.ok,
+      caps_ok: diagnostics.checks.caps.ok,
+    };
+    if (!diagnosticsSummary.lctd_vs_scans_ok || !diagnosticsSummary.caps_ok) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Post-rescan diagnostics failed",
+          detail: diagnosticsSummary,
+          universe_slug,
+          strategy_version,
+          scan_date_used,
+          finalization,
+        },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
       ok: true,
       universe_slug,
@@ -154,6 +176,7 @@ export async function POST(req: Request) {
       scored: totalScored,
       upserted: totalUpserted,
       finalization,
+      diagnostics_summary: diagnosticsSummary,
       duration_ms: Date.now() - startedAt,
     });
   } catch (e: unknown) {

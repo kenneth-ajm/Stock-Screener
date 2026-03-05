@@ -1,4 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
+import {
+  getFreshnessStatus,
+  getLCTD,
+  getLatestScanDatesByStrategy,
+} from "@/lib/scan_status";
 
 type AnyObj = Record<string, unknown>;
 
@@ -28,45 +33,16 @@ function pickExamples<T>(arr: T[], n = 5) {
 export async function runDiagnosticsWithClient(supabase: any): Promise<DiagnosticsResult> {
   const supa = supabase as any;
 
-  const { data: spyMaxData } = await supa
-    .from("price_bars")
-    .select("date")
-    .eq("symbol", "SPY")
-    .order("date", { ascending: false })
-    .limit(1);
-  const spyMax = spyMaxData?.[0]?.date ? String(spyMaxData[0].date) : null;
+  const lctdStatus = await getLCTD(supa);
+  const lctd = lctdStatus.lctd;
+  const lctd_source = lctdStatus.source;
 
-  let lctd_source: DiagnosticsResult["lctd_source"] = "none";
-  let lctd: string | null = null;
-  if (spyMax) {
-    lctd = spyMax;
-    lctd_source = "spy_max_date";
-  } else {
-    const { data: anyMaxData } = await supa
-      .from("price_bars")
-      .select("date")
-      .order("date", { ascending: false })
-      .limit(1);
-    lctd = anyMaxData?.[0]?.date ? String(anyMaxData[0].date) : null;
-    lctd_source = lctd ? "global_max_date" : "none";
-  }
-
-  const { data: latestScansData } = await supa
-    .from("daily_scans")
-    .select("date,universe_slug,strategy_version")
-    .eq("universe_slug", "core_800")
-    .order("date", { ascending: false })
-    .limit(2000);
-  const latestScans = Array.isArray(latestScansData) ? latestScansData : [];
-
-  const latestByStrategy = new Map<string, string>();
-  for (const r of latestScans) {
-    const sv = String(r.strategy_version ?? "");
-    const d = String(r.date ?? "");
-    if (!sv || !d) continue;
-    const cur = latestByStrategy.get(sv);
-    if (!cur || d > cur) latestByStrategy.set(sv, d);
-  }
+  const latestScansByStrategy = await getLatestScanDatesByStrategy(supa, "core_800");
+  const latestByStrategyObj =
+    latestScansByStrategy.ok && latestScansByStrategy.latest_by_strategy
+      ? latestScansByStrategy.latest_by_strategy
+      : {};
+  const latestByStrategy = new Map<string, string>(Object.entries(latestByStrategyObj));
 
   const strategyDateMismatches = Array.from(latestByStrategy.entries())
     .filter(([, d]) => (lctd ? d !== lctd : true))
@@ -188,7 +164,12 @@ export async function runDiagnosticsWithClient(supabase: any): Promise<Diagnosti
         .limit(1)
     : ({ data: [] } as any);
   const regimeRow = regimeExact?.[0] ?? null;
-  const regime_stale = !lctd || !regimeRow;
+  const regimeFreshness = getFreshnessStatus({
+    lctd,
+    latestScanDate: lctd,
+    regimeDate: regimeRow?.date ? String(regimeRow.date) : null,
+  });
+  const regime_stale = regimeFreshness.is_stale;
 
   const checks: DiagnosticsResult["checks"] = {
     lctd_vs_scans: {
@@ -196,7 +177,7 @@ export async function runDiagnosticsWithClient(supabase: any): Promise<Diagnosti
       details: {
         lctd,
         lctd_source,
-        latest_by_strategy: Object.fromEntries(latestByStrategy.entries()),
+        latest_by_strategy: latestByStrategyObj,
         mismatches: strategyDateMismatches,
       },
     },

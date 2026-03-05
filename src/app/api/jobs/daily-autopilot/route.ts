@@ -11,6 +11,7 @@ import {
   type ScanEngineClient,
 } from "@/lib/scan_engine";
 import { getLCTD } from "@/lib/scan_date";
+import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 
 const UNIVERSE_SLUG = "core_800";
 const STATUS_KEY = "daily_autopilot_core_800";
@@ -291,6 +292,16 @@ async function runAutopilot() {
     total_members: symbols.length,
   });
 
+  const diagnostics = await runDiagnosticsWithClient(supa);
+  const diagnostics_summary = {
+    ok: diagnostics.ok,
+    lctd_vs_scans_ok: diagnostics.checks.lctd_vs_scans.ok,
+    caps_ok: diagnostics.checks.caps.ok,
+  };
+  if (!diagnostics_summary.lctd_vs_scans_ok || !diagnostics_summary.caps_ok) {
+    throw new Error(`Autopilot diagnostics failed: ${JSON.stringify(diagnostics_summary)}`);
+  }
+
   return {
     ok: true,
     scan_date: scanDate,
@@ -308,6 +319,7 @@ async function runAutopilot() {
       buys: Number((trendRun.finalization as any)?.buy_count ?? 0),
       watch: Number((trendRun.finalization as any)?.watch_count ?? 0),
     },
+    diagnostics_summary,
     duration_ms: Date.now() - startedAt,
   };
 }
@@ -327,6 +339,7 @@ export async function GET() {
       watch_count: result.momentum.watch,
       trend_buy_count: result.trend.buys,
       trend_watch_count: result.trend.watch,
+      diagnostics_summary: result.diagnostics_summary,
       duration_ms: result.duration_ms,
       error: null,
     });

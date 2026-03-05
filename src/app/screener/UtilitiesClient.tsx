@@ -202,6 +202,22 @@ export default function UtilitiesClient({
     );
   }
 
+  async function runRepairLatestScanState() {
+    const { res, json } = await callJson(
+      "Repair latest scan state",
+      "/api/jobs/repair-latest-scan-state",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      },
+      120000
+    );
+
+    if (res?.ok && json?.ok) {
+      await callJson("Diagnostics after repair", "/api/diagnostics", undefined, 60000);
+    }
+  }
+
   async function runAutopilotNow() {
     const title = "Run daily autopilot now";
     const beforeUpdatedAt = autopilotStatusLive?.updated_at ?? autopilotStatus?.updated_at ?? null;
@@ -378,12 +394,15 @@ export default function UtilitiesClient({
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
         <div className="text-sm font-semibold text-slate-900">Daily workflow</div>
         <div className="text-sm text-slate-600">
-          Daily: you typically do nothing. Autopilot runs each weekday ~7am SG. Use "Rescan now" if you want to refresh manually.
+          Daily: you typically do nothing. Autopilot runs each weekday ~7am SG. Use &quot;Rescan now&quot; if you want to refresh manually.
         </div>
 
         <div className="flex flex-wrap gap-2">
           <Button onClick={runRescanNow} disabled={!!busy}>
             {busy?.startsWith("Rescan latest completed day") ? "Rescanning..." : "Rescan now"}
+          </Button>
+          <Button variant="secondary" onClick={runRepairLatestScanState} disabled={!!busy}>
+            {busy === "Repair latest scan state" ? "Repairing..." : "Repair latest scan state"}
           </Button>
           <a
             href="/diagnostics"
