@@ -6,6 +6,7 @@ import { ClosedTradeSummary, formatPct } from "@/lib/analytics/closedTradeSummar
 
 type PositionRow = {
   id: string;
+  portfolio_id?: string | null;
   symbol: string;
   status: "OPEN" | "CLOSED" | string;
   strategy_version?: string | null;
@@ -38,6 +39,7 @@ type PositionRow = {
 };
 
 type GroupedOpenRow = {
+  portfolio_id: string | null;
   symbol: string;
   strategy_version: string;
   maxHoldDays: number | null;
@@ -285,6 +287,7 @@ export default function PositionsClient({
   const [exitReasonInput, setExitReasonInput] = useState<"TP1" | "TP2" | "STOP" | "MANUAL" | "TIME">("MANUAL");
   const [closeError, setCloseError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
+  const [closingGroupKey, setClosingGroupKey] = useState<string | null>(null);
 
   // Manual add modal state
   const [manualOpen, setManualOpen] = useState(false);
@@ -403,6 +406,44 @@ export default function PositionsClient({
       setCloseError(e?.message ?? "Close failed.");
     } finally {
       setClosing(false);
+    }
+  }
+
+  async function submitCloseGrouped(row: GroupedOpenRow) {
+    const portfolioId = String(row.portfolio_id ?? "").trim();
+    if (!portfolioId) {
+      showToast("Missing portfolio id for grouped position.");
+      return;
+    }
+    const lotsCount = row.lotIds.length;
+    const ok = window.confirm(
+      `Close all lots for ${row.symbol} (${lotsCount} lot${lotsCount === 1 ? "" : "s"}, total qty ${Math.round(
+        row.qty
+      )})?`
+    );
+    if (!ok) return;
+
+    const groupKey = `${row.portfolio_id ?? ""}:${row.symbol}`;
+    try {
+      setClosingGroupKey(groupKey);
+      const res = await fetch("/api/portfolio/close-symbol", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          portfolio_id: portfolioId,
+          symbol: row.symbol,
+        }),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(payload?.error || "Close symbol failed.");
+      }
+      showToast(`Closed ${payload?.closed_count ?? lotsCount} lot(s) for ${row.symbol} ✅`);
+      setTimeout(() => window.location.reload(), 500);
+    } catch (e: any) {
+      showToast(e?.message ?? "Close symbol failed.");
+    } finally {
+      setClosingGroupKey(null);
     }
   }
 
@@ -776,6 +817,7 @@ export default function PositionsClient({
       const tpPlanSummary = planSet.size === 1 ? (Array.from(planSet)[0] ?? null) : "Mixed";
 
       rows.push({
+        portfolio_id: lots[0]?.portfolio_id ?? null,
         symbol,
         strategy_version: lots[0]?.strategy_version ?? "v2_core_momentum",
         maxHoldDays: lots[0]?.max_hold_days ?? defaultMaxHold,
@@ -1021,6 +1063,14 @@ export default function PositionsClient({
                                 title={g.lotIds.length !== 1 ? "Switch to Lots mode to edit per-lot TP plan" : "Edit TP plan"}
                               >
                                 Edit TP plan
+                              </button>
+                              <button
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                                onClick={() => submitCloseGrouped(g)}
+                                disabled={closingGroupKey === `${g.portfolio_id ?? ""}:${g.symbol}`}
+                                title="Close all open lots for this symbol"
+                              >
+                                {closingGroupKey === `${g.portfolio_id ?? ""}:${g.symbol}` ? "Closing..." : "Close"}
                               </button>
                               <span className="self-center">
                                 {g.lotIds.length} lot{g.lotIds.length === 1 ? "" : "s"}
