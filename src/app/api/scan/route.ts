@@ -27,6 +27,13 @@ type ScanBody = {
   scan_date?: string;
 };
 
+function sma(values: number[], period: number) {
+  if (values.length < period) return null;
+  let sum = 0;
+  for (let i = values.length - period; i < values.length; i += 1) sum += values[i];
+  return sum / period;
+}
+
 function admin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -40,17 +47,73 @@ async function getRegimeByDate(opts: {
 }) {
   const { supabase, scanDate } = opts;
 
-  const { data, error } = await supabase
+  const { data: exactData, error: exactErr } = await supabase
     .from("market_regime")
     .select("date,state")
     .eq("symbol", "SPY")
-    .lte("date", scanDate)
+    .eq("date", scanDate)
+    .limit(1);
+  if (exactErr) throw exactErr;
+
+  const exact = exactData?.[0];
+  if (exact?.state) {
+    return {
+      regimeState: (exact.state as RegimeState) ?? "FAVORABLE",
+      regimeDateUsed: String(exact.date),
+      regimeStale: String(exact.date) !== scanDate,
+    };
+  }
+
+  const { data: latestRegimeData, error: latestRegimeErr } = await supabase
+    .from("market_regime")
+    .select("date,state")
+    .eq("symbol", "SPY")
     .order("date", { ascending: false })
     .limit(1);
 
-  if (error) throw error;
-  const state = (data?.[0]?.state as RegimeState | undefined) ?? "CAUTION";
-  return state;
+  if (latestRegimeErr) throw latestRegimeErr;
+  const latestRegime = latestRegimeData?.[0];
+  if (latestRegime?.state) {
+    return {
+      regimeState: (latestRegime.state as RegimeState) ?? "FAVORABLE",
+      regimeDateUsed: String(latestRegime.date),
+      regimeStale: String(latestRegime.date) !== scanDate,
+    };
+  }
+
+  const { data: spyBars, error: spyErr } = await supabase
+    .from("price_bars")
+    .select("date,close")
+    .eq("symbol", "SPY")
+    .eq("source", "polygon")
+    .lte("date", scanDate)
+    .order("date", { ascending: false })
+    .limit(260);
+
+  if (spyErr) throw spyErr;
+
+  if (spyBars && spyBars.length >= 200) {
+    const latestSpyDate = String(spyBars[0]?.date ?? "");
+    const asc = [...spyBars].reverse();
+    const closes = asc.map((b) => Number(b.close)).filter((x) => Number.isFinite(x));
+    if (closes.length >= 200) {
+      const sma200Slice = closes.slice(-200);
+      const sma200 = sma200Slice.reduce((sum, v) => sum + v, 0) / 200;
+      const latestClose = closes[closes.length - 1];
+      const regimeState: RegimeState = latestClose > sma200 ? "FAVORABLE" : "DEFENSIVE";
+      return {
+        regimeState,
+        regimeDateUsed: latestSpyDate || scanDate,
+        regimeStale: (latestSpyDate || scanDate) !== scanDate,
+      };
+    }
+  }
+
+  return {
+    regimeState: "FAVORABLE" as RegimeState,
+    regimeDateUsed: scanDate,
+    regimeStale: true,
+  };
 }
 
 async function enforceGlobalCaps(opts: {
@@ -172,7 +235,10 @@ export async function POST(req: Request) {
     const expectedTradingDate = lastCompletedUsTradingDay();
     const staleScan = scanDate < expectedTradingDate;
 
-    const regime = await getRegimeByDate({ supabase, scanDate });
+    const { regimeState, regimeDateUsed, regimeStale } = await getRegimeByDate({
+      supabase,
+      scanDate,
+    });
 
     const { data: universe, error: uErr } = await supabase
       .from("universes")
@@ -275,7 +341,7 @@ export async function POST(req: Request) {
               close: Number(bar.close),
               volume: Number(bar.volume),
             })),
-            regime,
+            regime: regimeState,
             spy252Return,
           })
         : evaluateCoreMomentumSwing({
@@ -287,7 +353,7 @@ export async function POST(req: Request) {
               close: Number(bar.close),
               volume: Number(bar.volume),
             })),
-            regime,
+            regime: regimeState,
           });
       if (!computed) continue;
       scored += 1;
@@ -353,7 +419,10 @@ export async function POST(req: Request) {
       date: scanDate,
       stale_scan: staleScan,
       last_completed_trading_day: expectedTradingDate,
-      regime,
+      regime: regimeState,
+      regime_state: regimeState,
+      regime_date_used: regimeDateUsed,
+      regime_stale: regimeStale,
       offset,
       limit,
       processed,
