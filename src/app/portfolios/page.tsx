@@ -3,7 +3,6 @@ import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import Link from "next/link";
 import PortfoliosClient from "./PortfoliosClient";
-import { computePortfolioMath } from "@/lib/portfolio_math";
 
 export const dynamic = "force-dynamic";
 
@@ -83,22 +82,28 @@ export default async function PortfoliosPage() {
       unknown_open_positions_count: number;
     }
   >();
-  await Promise.all(
-    portfolioIds.map(async (portfolioId) => {
-      const math = await computePortfolioMath({
-        supabase: supabase as any,
-        portfolio_id: String(portfolioId),
-      });
-      if (math) {
-        mathByPortfolio.set(String(portfolioId), {
-          deployed_cost_basis: math.deployed_cost_basis,
-          open_count: math.open_count,
-          account_size: math.account_size,
-          unknown_open_positions_count: math.unknown_open_positions_count,
-        });
-      }
-    })
-  );
+  for (const p of portfolios ?? []) {
+    mathByPortfolio.set(String((p as any).id), {
+      deployed_cost_basis: 0,
+      open_count: 0,
+      account_size: typeof (p as any).account_size === "number" ? (p as any).account_size : 0,
+      unknown_open_positions_count: 0,
+    });
+  }
+  for (const row of positions) {
+    if (row.status !== "OPEN") continue;
+    const key = String(row.portfolio_id);
+    const cur = mathByPortfolio.get(key);
+    if (!cur) continue;
+    cur.open_count += 1;
+    const qty = resolveQty(row);
+    const entry = typeof row.entry_price === "number" ? row.entry_price : null;
+    if (!(qty > 0) || entry == null || !Number.isFinite(entry)) {
+      cur.unknown_open_positions_count += 1;
+      continue;
+    }
+    cur.deployed_cost_basis += qty * entry;
+  }
 
   const portfoliosWithStats =
     (portfolios ?? []).map((p: any) => {

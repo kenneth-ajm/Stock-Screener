@@ -4,6 +4,7 @@ import {
   getLCTD,
   getLatestScanDatesByStrategy,
 } from "@/lib/scan_status";
+import { getPortfolioSnapshot } from "@/lib/portfolio_snapshot";
 
 type AnyObj = Record<string, unknown>;
 
@@ -18,6 +19,7 @@ export type DiagnosticsResult = {
     value_sanity: { ok: boolean; invalid_count: number; examples: AnyObj[] };
     universe_integrity: { ok: boolean; invalid_count: number; examples: AnyObj[] };
     regime_freshness: { ok: boolean; stale: boolean; details: AnyObj };
+    portfolio_consistency: { ok: boolean; details: AnyObj };
   };
 };
 
@@ -171,6 +173,45 @@ export async function runDiagnosticsWithClient(supabase: any): Promise<Diagnosti
   });
   const regime_stale = regimeFreshness.is_stale;
 
+  let portfolioConsistency = {
+    ok: true,
+    details: {
+      checked: false,
+      note: "No default portfolio found to validate",
+    } as AnyObj,
+  };
+  const { data: anyDefaultPortfolio } = await supa
+    .from("portfolios")
+    .select("id,user_id,is_default")
+    .eq("is_default", true)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (anyDefaultPortfolio?.id) {
+    const snapshot = await getPortfolioSnapshot(supa, String(anyDefaultPortfolio.id), false);
+    if (snapshot) {
+      const expectedEstimated = snapshot.account_size - snapshot.deployed_cost_basis;
+      const delta = Math.abs(expectedEstimated - snapshot.estimated_cash);
+      const manualValid = snapshot.cash_source !== "manual" || snapshot.cash_balance !== null;
+      portfolioConsistency = {
+        ok: delta <= 0.01 && manualValid,
+        details: {
+          checked: true,
+          portfolio_id: snapshot.portfolio_id,
+          account_size: snapshot.account_size,
+          deployed_cost_basis: snapshot.deployed_cost_basis,
+          estimated_cash: snapshot.estimated_cash,
+          expected_estimated_cash: expectedEstimated,
+          delta,
+          cash_source: snapshot.cash_source,
+          cash_balance: snapshot.cash_balance,
+          open_count: snapshot.open_count,
+          unknown_open_positions_count: snapshot.unknown_open_positions_count,
+        },
+      };
+    }
+  }
+
   const checks: DiagnosticsResult["checks"] = {
     lctd_vs_scans: {
       ok: lctd_vs_scans_ok,
@@ -214,6 +255,7 @@ export async function runDiagnosticsWithClient(supabase: any): Promise<Diagnosti
         regime_state: regimeRow?.state ?? null,
       },
     },
+    portfolio_consistency: portfolioConsistency,
   };
 
   const ok =
@@ -221,7 +263,8 @@ export async function runDiagnosticsWithClient(supabase: any): Promise<Diagnosti
     checks.caps.ok &&
     checks.required_fields.ok &&
     checks.value_sanity.ok &&
-    checks.universe_integrity.ok;
+    checks.universe_integrity.ok &&
+    checks.portfolio_consistency.ok;
 
   return {
     ok,

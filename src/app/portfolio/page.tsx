@@ -6,6 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 
 import PositionsClient from "./PositionsClient";
 import { computeClosedTradeSummary } from "@/lib/analytics/closedTradeSummary";
+import { getPortfolioSnapshot } from "@/lib/portfolio_snapshot";
 
 export const dynamic = "force-dynamic";
 
@@ -279,46 +280,25 @@ export default async function PortfolioPage() {
   const realizedTrades = realizedWins + realizedLosses;
   const winRate = realizedTrades ? realizedWins / realizedTrades : 0;
 
+  const snapshot = await getPortfolioSnapshot(supabase as any, String(portfolio.id), false);
+
   // Exposure
-  let deployedCostBasis = 0;
+  const deployedCostBasis = snapshot?.deployed_cost_basis ?? 0;
   let marketValue = 0;
-  const debugLots: Array<{
-    symbol: string;
-    qty: number;
-    entry_price: number | null;
-    contribution: number | null;
-  }> = [];
-  let unknownOpenCount = 0;
+  const debugLots = snapshot?.open_rows ?? [];
+  const unknownOpenCount = snapshot?.unknown_open_positions_count ?? 0;
   for (const p of open) {
     const qty = resolveQty(p);
-    const entry = typeof p.entry_price === "number" && Number.isFinite(p.entry_price) ? p.entry_price : null;
     const symbol = String(p.symbol ?? "").trim().toUpperCase();
-    const contribution = entry !== null && qty > 0 ? entry * qty : null;
-    debugLots.push({
-      symbol,
-      qty,
-      entry_price: entry,
-      contribution,
-    });
-    if (contribution === null) {
-      unknownOpenCount += 1;
-    } else {
-      deployedCostBasis += contribution;
-    }
-
     const last = symbol ? latestPriceBySymbol[symbol] : null;
     if (typeof last === "number" && Number.isFinite(last) && last > 0 && qty > 0) {
       marketValue += last * qty;
     }
   }
 
-  const acctSize = portfolio.account_size ?? null;
-  const hasManualCash = typeof portfolio.cash_balance === "number" && Number.isFinite(portfolio.cash_balance);
-  const estimatedCash = hasManualCash
-    ? Number(portfolio.cash_balance)
-    : typeof acctSize === "number" && Number.isFinite(acctSize)
-      ? acctSize - deployedCostBasis
-      : null;
+  const acctSize = snapshot?.account_size ?? portfolio.account_size ?? null;
+  const hasManualCash = snapshot?.cash_source === "manual";
+  const estimatedCash = snapshot?.cash_available ?? null;
   const capitalDeployed = deployedCostBasis;
   const deployedTooHigh =
     typeof acctSize === "number" &&

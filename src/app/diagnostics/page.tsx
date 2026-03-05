@@ -55,6 +55,13 @@ export default async function DiagnosticsPage() {
       details: result.checks.regime_freshness.details,
       examples: [] as unknown[],
     },
+    {
+      key: "portfolio_consistency",
+      title: "Portfolio Consistency",
+      ok: result.checks.portfolio_consistency.ok,
+      details: result.checks.portfolio_consistency.details,
+      examples: [] as unknown[],
+    },
   ];
 
   return (
