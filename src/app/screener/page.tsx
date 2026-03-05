@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { getFreshnessStatus, getLCTD } from "@/lib/scan_status";
 import { runDiagnosticsWithClient } from "@/lib/diagnostics";
+import { getActivePortfolioCapacity } from "@/lib/portfolio_capacity";
+import { computePortfolioAwareAction } from "@/lib/execution_action";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +30,14 @@ type ScanRow = {
   tp1: number;
   tp2: number;
   reason_json?: unknown;
+  portfolio_action?: "BUY_NOW" | "WAIT" | "SKIP";
+  action_reason?: string;
+  sizing?: {
+    shares: number;
+    est_cost: number;
+    risk_per_share: number;
+    risk_budget: number;
+  };
 };
 
 function rankRows(rows: ScanRow[]) {
@@ -161,6 +171,8 @@ export default async function ScreenerPage({
   const diagnostics = await runDiagnosticsWithClient(supabase as any);
 
   let scanRows: ScanRow[] = [];
+  let capacity = null as Awaited<ReturnType<typeof getActivePortfolioCapacity>>;
+  let todaysActionable = 0;
   if (latestScanDate) {
     const { data: rows } = await supabase
       .from("daily_scans")
@@ -173,6 +185,46 @@ export default async function ScreenerPage({
       .limit(200);
 
     scanRows = applyDisplayCaps((rows ?? []) as ScanRow[]);
+
+    capacity = await getActivePortfolioCapacity({
+      supabase: supabase as any,
+      userId: user.id,
+    });
+    scanRows = scanRows.map((row) => {
+      const action = computePortfolioAwareAction(
+        {
+          signal: row.signal,
+          entry: Number(row.entry),
+          stop: Number(row.stop),
+          confidence: Number(row.confidence),
+          rank_score: typeof row.rank_score === "number" ? row.rank_score : null,
+        },
+        capacity
+      );
+      return {
+        ...row,
+        portfolio_action: action.action,
+        action_reason: action.action_reason,
+        sizing: action.sizing,
+      };
+    });
+
+    const buyNowSorted = [...scanRows]
+      .filter((r) => r.portfolio_action === "BUY_NOW")
+      .sort((a, b) => {
+        const ar = typeof a.rank_score === "number" ? a.rank_score : Number(a.confidence ?? 0);
+        const br = typeof b.rank_score === "number" ? b.rank_score : Number(b.confidence ?? 0);
+        if (br !== ar) return br - ar;
+        return String(a.symbol).localeCompare(String(b.symbol));
+      });
+    const keepBuyNow = new Set(buyNowSorted.slice(0, 3).map((r) => r.symbol));
+    scanRows = scanRows.map((row) => {
+      if (row.portfolio_action === "BUY_NOW" && !keepBuyNow.has(row.symbol)) {
+        return { ...row, portfolio_action: "WAIT", action_reason: "Prioritize top 3 actionable today" };
+      }
+      return row;
+    });
+    todaysActionable = scanRows.filter((r) => r.portfolio_action === "BUY_NOW").length;
   }
 
   const regimeBadge =
@@ -246,6 +298,15 @@ export default async function ScreenerPage({
                 </button>
               </a>
             </div>
+            {capacity ? (
+              <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                Today&apos;s Plan • Slots left: <span className="font-semibold">{capacity.slots_left}</span>
+                {" • "}
+                Cash available: <span className="font-semibold">{Number(capacity.cash_available).toFixed(2)}</span>
+                {" • "}
+                Actionable today: <span className="font-semibold">{todaysActionable}</span>
+              </div>
+            ) : null}
             {!latestScanDate ? (
               <div className="text-sm muted">
                 No Core 800 scan results yet. Use Utilities below:

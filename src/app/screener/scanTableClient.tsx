@@ -14,6 +14,14 @@ type Row = {
   entry: number;
   stop: number;
   reason_json?: any;
+  portfolio_action?: "BUY_NOW" | "WAIT" | "SKIP";
+  action_reason?: string;
+  sizing?: {
+    shares: number;
+    est_cost: number;
+    risk_per_share: number;
+    risk_budget: number;
+  };
 };
 
 type QuoteValue = {
@@ -412,6 +420,17 @@ export default function ScanTableClient({
               confidence: Number(row.confidence),
               strategyVersion,
             });
+      const portfolioAction = row.portfolio_action;
+      const portfolioReason = row.action_reason;
+      const mergedExecution = portfolioAction
+        ? {
+            ...execution,
+            action: portfolioAction,
+            reasons: portfolioReason
+              ? [portfolioReason, ...execution.reasons.filter((r) => r !== portfolioReason)]
+              : execution.reasons,
+          }
+        : execution;
       const eventRisk = Boolean(row?.reason_json?.flags?.event_risk);
       const newsRisk = Boolean(row?.reason_json?.flags?.news_risk);
       return {
@@ -422,7 +441,7 @@ export default function ScanTableClient({
         divergencePct,
         priceMismatch,
         atr14,
-        execution,
+        execution: mergedExecution,
         staleScan,
         eventRisk,
         newsRisk,
@@ -1440,6 +1459,10 @@ export default function ScanTableClient({
                   if (isExtended) notes.push("Extended");
                   if (r.execution.flags.stopVeryWide && !r.execution.flags.stopTooWide) notes.push("Stop very wide");
                   if (live === null) notes.push("No live");
+                  if (r.action_reason) notes.push(r.action_reason);
+                  if (r.sizing?.shares && r.sizing.shares > 0) {
+                    notes.push(`Size ${fmtInt(r.sizing.shares)} • Cost ${fmtMoney(r.sizing.est_cost)}`);
+                  }
                   notes.push(strategyVersion === "v1_trend_hold" ? "Hold: 3-8w" : "Hold: 3-7d");
 
                   return (
