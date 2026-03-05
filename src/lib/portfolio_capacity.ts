@@ -4,7 +4,9 @@ type CapacityArgs = {
 };
 
 export type PortfolioCapacity = {
+  portfolio_id: string;
   portfolio_value: number;
+  deployed_value: number;
   cash_available: number;
   cash_source: "manual" | "estimated";
   cash_updated_at: string | null;
@@ -21,12 +23,27 @@ function toNum(v: unknown, fallback = 0) {
 
 export async function getActivePortfolioCapacity(opts: CapacityArgs): Promise<PortfolioCapacity | null> {
   const supa = opts.supabase as any;
-  const { data: portfolio, error: pErr } = await supa
+  const { data: activePortfolio, error: activeErr } = await supa
     .from("portfolios")
     .select("id,account_size,risk_per_trade,max_positions,cash_balance,cash_updated_at")
     .eq("user_id", opts.userId)
-    .eq("is_default", true)
+    .eq("active", true)
+    .limit(1)
     .maybeSingle();
+
+  let portfolio = activePortfolio;
+  let pErr = activeErr;
+  if (!portfolio) {
+    const fallback = await supa
+      .from("portfolios")
+      .select("id,account_size,risk_per_trade,max_positions,cash_balance,cash_updated_at")
+      .eq("user_id", opts.userId)
+      .eq("is_default", true)
+      .limit(1)
+      .maybeSingle();
+    portfolio = fallback.data;
+    pErr = fallback.error;
+  }
 
   if (pErr || !portfolio?.id) return null;
 
@@ -66,7 +83,9 @@ export async function getActivePortfolioCapacity(opts: CapacityArgs): Promise<Po
   const cashSource = hasManualCash ? "manual" : "estimated";
 
   return {
+    portfolio_id: String(portfolio.id),
     portfolio_value: portfolioValue,
+    deployed_value: deployed,
     cash_available: cashAvailable,
     cash_source: cashSource,
     cash_updated_at: portfolio?.cash_updated_at ? String(portfolio.cash_updated_at) : null,

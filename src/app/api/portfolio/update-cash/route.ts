@@ -13,13 +13,42 @@ export async function POST(req: Request) {
 
     const body = (await req.json().catch(() => ({}))) as { cash_balance?: unknown };
     const raw = body?.cash_balance;
+    const activeRow = await supabase
+      .from("portfolios")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("active", true)
+      .limit(1)
+      .maybeSingle();
+    if (activeRow.error) {
+      return NextResponse.json({ ok: false, error: activeRow.error.message }, { status: 500 });
+    }
+    let portfolioId = activeRow.data?.id ?? null;
+    if (!portfolioId) {
+      const defaultRow = await supabase
+        .from("portfolios")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("is_default", true)
+        .limit(1)
+        .maybeSingle();
+      if (defaultRow.error) {
+        return NextResponse.json({ ok: false, error: defaultRow.error.message }, { status: 500 });
+      }
+      portfolioId = defaultRow.data?.id ?? null;
+    }
+    if (!portfolioId) {
+      return NextResponse.json({ ok: false, error: "No active portfolio" }, { status: 404 });
+    }
+
     if (raw == null || String(raw).trim() === "") {
-      const { error } = await supabase
+      const clearResult = await supabase
         .from("portfolios")
         .update({ cash_balance: null, cash_updated_at: null })
-        .eq("user_id", user.id)
-        .eq("is_default", true);
-      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+        .eq("id", portfolioId);
+      if (clearResult.error) {
+        return NextResponse.json({ ok: false, error: clearResult.error.message }, { status: 500 });
+      }
       return NextResponse.json({ ok: true, cash_balance: null, cash_updated_at: null });
     }
 
@@ -32,15 +61,17 @@ export async function POST(req: Request) {
     }
 
     const now = new Date().toISOString();
-    const { data, error } = await supabase
+    const updateResult = await supabase
       .from("portfolios")
       .update({ cash_balance: cashBalance, cash_updated_at: now })
-      .eq("user_id", user.id)
-      .eq("is_default", true)
+      .eq("id", portfolioId)
       .select("id,cash_balance,cash_updated_at")
       .maybeSingle();
-    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-    if (!data) return NextResponse.json({ ok: false, error: "No default portfolio" }, { status: 404 });
+    const data = updateResult.data;
+    if (updateResult.error) {
+      return NextResponse.json({ ok: false, error: updateResult.error.message }, { status: 500 });
+    }
+    if (!data) return NextResponse.json({ ok: false, error: "No active portfolio" }, { status: 404 });
 
     return NextResponse.json({
       ok: true,
@@ -53,4 +84,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }
-

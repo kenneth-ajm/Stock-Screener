@@ -47,12 +47,22 @@ export default async function ScreenerPage({
 
   if (!user) redirect("/auth?next=/screener");
 
-  const { data: defaultPortfolio } = await supabase
+  const { data: activePortfolio } = await supabase
     .from("portfolios")
-    .select("id, name, account_currency, account_size, risk_per_trade, max_positions,cash_balance,cash_updated_at")
-    .eq("is_default", true)
+    .select("id, name, account_currency, account_size, risk_per_trade, max_positions,cash_balance,cash_updated_at,active,is_default")
+    .eq("active", true)
     .limit(1)
     .maybeSingle();
+  let defaultPortfolio = activePortfolio;
+  if (!defaultPortfolio) {
+    const fallback = await supabase
+      .from("portfolios")
+      .select("id, name, account_currency, account_size, risk_per_trade, max_positions,cash_balance,cash_updated_at,active,is_default")
+      .eq("is_default", true)
+      .limit(1)
+      .maybeSingle();
+    defaultPortfolio = fallback.data ?? null;
+  }
 
   const { data: regimeRows } = await supabase
     .from("market_regime")
@@ -141,7 +151,7 @@ export default async function ScreenerPage({
         </Card>
 
         <Card>
-          <CardHeader title="Active portfolio" subtitle="Sizing uses the default portfolio" />
+          <CardHeader title="Active portfolio" subtitle="Sizing uses the active portfolio" />
           <CardContent>
             {defaultPortfolio ? (
               <div className="space-y-2 text-sm">
@@ -209,7 +219,7 @@ export default async function ScreenerPage({
                 </div>
               </div>
             ) : (
-              <div className="text-sm muted">No default portfolio found.</div>
+              <div className="text-sm muted">No active portfolio found.</div>
             )}
           </CardContent>
         </Card>
