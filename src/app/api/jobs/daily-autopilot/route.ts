@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { POST as scanPost } from "@/app/api/scan/route";
-import { lastCompletedUsTradingDay } from "@/lib/tradingDay";
 
 const UNIVERSE_SLUG = "core_800";
 const STATUS_KEY = "daily_autopilot_core_800";
@@ -53,6 +52,18 @@ async function ingestGroupedForDate(opts: {
   const groupedRows = Array.isArray(json?.results) ? json.results : [];
 
   const symbolSet = new Set(opts.symbols);
+  const { data: existingRows, error: existingErr } = await supa
+    .from("price_bars")
+    .select("symbol")
+    .eq("date", opts.date)
+    .in("symbol", Array.from(symbolSet))
+    .eq("source", "polygon");
+  if (existingErr) throw existingErr;
+  const alreadyPresent = new Set(
+    (existingRows ?? [])
+      .map((r: { symbol?: string | null }) => String(r.symbol ?? "").toUpperCase())
+      .filter(Boolean)
+  );
   const upserts: Array<{
     symbol: string;
     date: string;
@@ -67,6 +78,7 @@ async function ingestGroupedForDate(opts: {
   for (const row of groupedRows) {
     const symbol = String(row.T ?? "").toUpperCase();
     if (!symbolSet.has(symbol)) continue;
+    if (alreadyPresent.has(symbol)) continue;
     const open = Number(row.o);
     const high = Number(row.h);
     const low = Number(row.l);
@@ -172,8 +184,15 @@ async function runAutopilot() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
   const supa = supabase as any;
-
-  const dateUsed = lastCompletedUsTradingDay();
+  const { data: latestSpyRows, error: latestSpyErr } = await supa
+    .from("price_bars")
+    .select("date")
+    .eq("symbol", "SPY")
+    .order("date", { ascending: false })
+    .limit(1);
+  if (latestSpyErr) throw new Error(latestSpyErr.message ?? "Failed to determine scan date");
+  const dateUsed = latestSpyRows?.[0]?.date ? String(latestSpyRows[0].date) : null;
+  if (!dateUsed) throw new Error("No SPY bars available in price_bars");
 
   const { data: universe, error: universeErr } = await supa
     .from("universes")
@@ -200,46 +219,61 @@ async function runAutopilot() {
   const barsUpserted = await ingestGroupedForDate({ supabase: supa, date: dateUsed, symbols: symbolsWithSpy });
   const regime = await updateSpyRegimeForDate({ supabase: supa, date: dateUsed });
 
-  const scanReq = new Request("http://localhost/api/scan", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      universe_slug: UNIVERSE_SLUG,
-      strategy_version: "v2_core_momentum",
-      scan_date: dateUsed,
-      offset: 0,
-      limit: 1200,
-    }),
-  });
-  const scanRes = await scanPost(scanReq);
-  const scanJson = await scanRes.json().catch(() => null);
-  if (!scanRes.ok || !scanJson?.ok) {
-    throw new Error(scanJson?.error || `Scan failed with status ${scanRes.status}`);
+  async function runStrategyScan(strategyVersion: string) {
+    const scanReq = new Request("http://localhost/api/scan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        universe_slug: UNIVERSE_SLUG,
+        strategy_version: strategyVersion,
+        scan_date: dateUsed,
+        offset: 0,
+        limit: 1200,
+      }),
+    });
+    const scanRes = await scanPost(scanReq);
+    const scanJson = await scanRes.json().catch(() => null);
+    if (!scanRes.ok || !scanJson?.ok) {
+      throw new Error(
+        scanJson?.error || `Scan failed (${strategyVersion}) with status ${scanRes.status}`
+      );
+    }
+    const { data: counts, error: countErr } = await supa
+      .from("daily_scans")
+      .select("signal")
+      .eq("universe_slug", UNIVERSE_SLUG)
+      .eq("strategy_version", strategyVersion)
+      .eq("date", dateUsed)
+      .in("signal", ["BUY", "WATCH"]);
+    if (countErr) throw new Error(countErr.message);
+
+    return {
+      buys: (counts ?? []).filter((r: { signal?: string | null }) => r.signal === "BUY").length,
+      watch: (counts ?? []).filter((r: { signal?: string | null }) => r.signal === "WATCH").length,
+      scan_upserted: Number(scanJson?.upserted ?? 0),
+    };
   }
 
-  const { data: counts, error: countErr } = await supa
-    .from("daily_scans")
-    .select("signal")
-    .eq("universe_slug", UNIVERSE_SLUG)
-    .eq("strategy_version", "v2_core_momentum")
-    .eq("date", dateUsed)
-    .in("signal", ["BUY", "WATCH"]);
-  if (countErr) throw new Error(countErr.message);
-
-  const buyCount = (counts ?? []).filter((r: { signal?: string | null }) => r.signal === "BUY").length;
-  const watchCount = (counts ?? []).filter((r: { signal?: string | null }) => r.signal === "WATCH").length;
+  const momentum = await runStrategyScan("v2_core_momentum");
+  const trend = await runStrategyScan("v1_trend_hold");
 
   return {
     ok: true,
+    scan_date: dateUsed,
     date_used: dateUsed,
     bars_upserted: barsUpserted,
     regime_state: regime.state,
     regime_date_used: regime.regime_date_used,
     spy_regime_stale: regime.spy_regime_stale,
-    scan_written: Number(scanJson?.upserted ?? 0),
-    scan_upserted: scanJson?.upserted ?? 0,
-    buy_count: buyCount,
-    watch_count: watchCount,
+    momentum: {
+      buys: momentum.buys,
+      watch: momentum.watch,
+    },
+    trend: {
+      buys: trend.buys,
+      watch: trend.watch,
+    },
+    scan_written: momentum.scan_upserted + trend.scan_upserted,
     duration_ms: Date.now() - startedAt,
   };
 }
@@ -268,13 +302,17 @@ export async function GET() {
     const result = await runAutopilot();
     await writeStatus({
       ok: true,
+      scan_date: result.scan_date,
       date_used: result.date_used,
       bars_upserted: result.bars_upserted,
+      regime_state: result.regime_state,
       regime_date_used: result.regime_date_used,
       spy_regime_stale: result.spy_regime_stale,
       scan_written: result.scan_written,
-      buy_count: result.buy_count,
-      watch_count: result.watch_count,
+      buy_count: result.momentum.buys,
+      watch_count: result.momentum.watch,
+      trend_buy_count: result.trend.buys,
+      trend_watch_count: result.trend.watch,
       duration_ms: result.duration_ms,
       error: null,
     });
@@ -285,11 +323,14 @@ export async function GET() {
     const detail = e instanceof Error ? e.stack ?? null : null;
     await writeStatus({
       ok: false,
+      scan_date: null,
       date_used: null,
       bars_upserted: 0,
       scan_written: 0,
       buy_count: 0,
       watch_count: 0,
+      trend_buy_count: 0,
+      trend_watch_count: 0,
       duration_ms: 0,
       error,
     });
