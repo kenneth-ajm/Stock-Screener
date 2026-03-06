@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+import { runMomentumBacktest } from "@/lib/backtest_momentum";
 
 type BacktestBody = {
   strategy_version?: string;
@@ -7,19 +9,45 @@ type BacktestBody = {
   end_date?: string;
 };
 
+function admin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("Missing Supabase env vars");
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+
 export async function POST(req: Request) {
   try {
     const body = (await req.json().catch(() => ({}))) as BacktestBody;
+    const strategy = String(body.strategy_version ?? "v2_core_momentum").trim() || "v2_core_momentum";
+    if (strategy !== "v2_core_momentum") {
+      return NextResponse.json(
+        { ok: false, error: "Backtesting v1 currently supports v2_core_momentum only" },
+        { status: 400 }
+      );
+    }
+    const supabase = admin() as any;
     const inputs = {
-      strategy_version: String(body.strategy_version ?? "v2_core_momentum"),
-      universe_slug: String(body.universe_slug ?? "core_800"),
-      start_date: String(body.start_date ?? ""),
-      end_date: String(body.end_date ?? ""),
+      strategy_version: "v2_core_momentum",
+      universe_slug: String(body.universe_slug ?? "core_800").trim() || "core_800",
+      start_date: String(body.start_date ?? "").slice(0, 10),
+      end_date: String(body.end_date ?? "").slice(0, 10),
     };
+    const result = await runMomentumBacktest({ supabase, input: inputs });
     return NextResponse.json({
       ok: true,
-      note: "Backtest scaffolding v1 (implementation next)",
       inputs,
+      summary: result.summary,
+      trades: result.trades,
+      assumptions: result.assumptions,
+      metrics: {
+        trades: result.summary.total_trades,
+        win_rate: result.summary.win_rate,
+        avg_return_pct: result.summary.avg_return_pct,
+        profit_factor: result.summary.profit_factor,
+        avg_hold_days: result.summary.avg_holding_days,
+        max_drawdown_pct: result.summary.max_drawdown_pct,
+      },
     });
   } catch (e: unknown) {
     console.error("backtest run error", e);
@@ -28,4 +56,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }
-

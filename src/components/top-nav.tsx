@@ -21,6 +21,7 @@ export default function TopNav({
     { href: "/ideas", label: "Ideas" },
     { href: "/positions", label: "Positions" },
     { href: "/review", label: "Review" },
+    { href: "/backtest", label: "Backtest" },
     { href: "/strategy", label: "Strategy" },
   ];
 
