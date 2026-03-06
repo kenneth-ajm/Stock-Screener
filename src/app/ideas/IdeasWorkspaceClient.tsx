@@ -87,6 +87,10 @@ export default function IdeasWorkspaceClient({
   const [tp2SizePct, setTp2SizePct] = useState("50");
 
   useEffect(() => {
+    setStrategy(initialStrategy);
+  }, [initialStrategy]);
+
+  useEffect(() => {
     let mounted = true;
     setLoading(true);
     fetch(`/api/screener-data?strategy_version=${strategy}&universe_slug=core_800`, {
@@ -154,11 +158,15 @@ export default function IdeasWorkspaceClient({
   }, [selected, quoteBySymbol]);
 
   useEffect(() => {
-    if (!initialSymbol || !data?.rows || selected) return;
+    if (!initialSymbol || !data?.rows) return;
     const target = String(initialSymbol).trim().toUpperCase();
     const found = (data.rows ?? []).find((r) => String(r.symbol ?? "").trim().toUpperCase() === target);
-    if (found) setSelected(found);
-  }, [initialSymbol, data?.rows, selected]);
+    if (found) {
+      setSelected(found);
+      return;
+    }
+    setSelected(null);
+  }, [initialSymbol, data?.rows]);
 
   const rows = useMemo(() => (data?.rows ?? []).slice(0, 10), [data]);
   const fillNum = Number(fill);
