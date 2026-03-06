@@ -3,6 +3,8 @@ import AppShell from "@/components/app-shell";
 import { getWorkspaceContext } from "@/lib/workspace_context";
 import { getPortfolioSnapshot } from "@/lib/portfolio_snapshot";
 import { getLCTD } from "@/lib/scan_status";
+import { POST as quotesPost } from "@/app/api/quotes/route";
+import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
 
 function money(v: number | null | undefined) {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
@@ -14,6 +16,26 @@ function signalPill(signal: "BUY" | "WATCH" | "AVOID") {
   if (signal === "WATCH") return "border-amber-200 bg-amber-50 text-amber-700";
   return "border-rose-200 bg-rose-50 text-rose-700";
 }
+
+function fmtPrice(v: number | null | undefined) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+  return v.toFixed(2);
+}
+
+function fmtSignedPct(v: number | null | undefined) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+  const s = v > 0 ? "+" : "";
+  return `${s}${v.toFixed(1)}%`;
+}
+
+type QuoteMap = Record<
+  string,
+  {
+    price: number;
+    asOf: string;
+    source: "snapshot" | "eod_close";
+  } | null
+>;
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +67,7 @@ export default async function DashboardPage() {
 
     const { data: rows } = await supabase
       .from("daily_scans")
-      .select("symbol,signal,confidence,rank,rank_score,reason_summary")
+      .select("symbol,signal,confidence,rank,rank_score,reason_summary,entry")
       .eq("universe_slug", "core_800")
       .eq("strategy_version", strategyVersion)
       .eq("date", date)
@@ -60,6 +82,7 @@ export default async function DashboardPage() {
       rank: number | null;
       rank_score: number | null;
       reason_summary: string | null;
+      entry: number | null;
     }>;
     return {
       date,
@@ -97,6 +120,26 @@ export default async function DashboardPage() {
     entry: Number(row.entry_price ?? 0),
   }));
   const topSignals = momentum.top.slice(0, 5);
+  const topSymbols = Array.from(
+    new Set(topSignals.map((row: any) => String(row.symbol ?? "").trim().toUpperCase()).filter(Boolean))
+  );
+  let topQuoteBySymbol: QuoteMap = {};
+  if (topSymbols.length > 0) {
+    try {
+      const qReq = new Request("http://localhost/api/quotes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ symbols: topSymbols }),
+      });
+      const qRes = await quotesPost(qReq);
+      const qJson = await qRes.json().catch(() => null);
+      if (qRes.ok && qJson?.ok && qJson?.quotes && typeof qJson.quotes === "object") {
+        topQuoteBySymbol = qJson.quotes as QuoteMap;
+      }
+    } catch {
+      topQuoteBySymbol = {};
+    }
+  }
 
   return (
     <AppShell currentPath="/dashboard" userEmail={user.email ?? ""} portfolios={portfolios}>
@@ -221,7 +264,43 @@ export default async function DashboardPage() {
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0 pr-4">
                         <div className="text-xl font-semibold text-slate-900">{row.symbol}</div>
-                        <div className="mt-1 truncate text-sm text-slate-600">{row.reason_summary ?? "—"}</div>
+                        <div className="mt-1 text-sm text-slate-600">
+                          {(() => {
+                            const symbol = String(row.symbol ?? "").trim().toUpperCase();
+                            const quote = topQuoteBySymbol[symbol];
+                            const live = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
+                            const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
+                            const delta =
+                              live !== null && entry !== null && entry > 0 ? ((live - entry) / entry) * 100 : null;
+                            return `Live ${fmtPrice(live)}  Entry ${fmtPrice(entry)}  ${fmtSignedPct(delta)}`;
+                          })()}
+                        </div>
+                        <div className="mt-1">
+                          {(() => {
+                            const symbol = String(row.symbol ?? "").trim().toUpperCase();
+                            const quote = topQuoteBySymbol[symbol];
+                            const live = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
+                            const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
+                            if (live === null || entry === null || entry <= 0) {
+                              return null;
+                            }
+                            const zone = getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry });
+                            const status = getEntryStatus({ price: live, zone_low: zone.zone_low, zone_high: zone.zone_high });
+                            const statusClass =
+                              status === "Within zone"
+                                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                : status === "Below trigger"
+                                  ? "border-sky-200 bg-sky-50 text-sky-700"
+                                  : status === "Extended"
+                                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                                    : "border-rose-200 bg-rose-50 text-rose-700";
+                            return (
+                              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass}`}>
+                                {status}
+                              </span>
+                            );
+                          })()}
+                        </div>
                       </div>
 
                       <span

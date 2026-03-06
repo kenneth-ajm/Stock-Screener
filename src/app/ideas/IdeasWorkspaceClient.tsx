@@ -56,6 +56,12 @@ function parseNullableNumber(v: string) {
   return Number.isFinite(n) ? n : null;
 }
 
+function fmtSignedPct(v: number | null) {
+  if (v === null || !Number.isFinite(v)) return "—";
+  const sign = v > 0 ? "+" : "";
+  return `${sign}${v.toFixed(1)}%`;
+}
+
 export default function IdeasWorkspaceClient({
   initialStrategy = "v2_core_momentum",
   initialSymbol = null,
@@ -416,48 +422,54 @@ export default function IdeasWorkspaceClient({
                 <th className="p-3">Signal</th>
                 <th className="p-3">Rank</th>
                 <th className="p-3">Entry</th>
+                <th className="p-3">Live</th>
+                <th className="p-3">Delta</th>
                 <th className="p-3">Stop</th>
                 <th className="p-3">TP1</th>
-                <th className="p-3">Position Cost</th>
                 <th className="p-3">Entry zone</th>
-                <th className="p-3">Notes</th>
+                <th className="p-3">Position Cost</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr
-                  key={row.symbol}
-                  className="cursor-pointer border-b border-[#efe5d6] transition hover:bg-[#fff9f0]"
-                  onClick={() => setSelected(row)}
-                >
-                  <td className="p-3 font-semibold tracking-tight">{row.symbol}</td>
-                  <td className="p-3">
-                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${signalPill(row.signal)}`}>
-                      {row.signal}
-                    </span>
-                  </td>
-                  <td className="p-3">{row.rank ?? "—"}</td>
-                  <td className="p-3">{Number(row.entry ?? 0).toFixed(2)}</td>
-                  <td className="p-3">{Number(row.stop ?? 0).toFixed(2)}</td>
-                  <td className="p-3">{Number(row.tp1 ?? 0).toFixed(2)}</td>
-                  <td className="p-3">{Number(row.sizing?.est_cost ?? 0).toFixed(2)}</td>
-                  <td className="p-3">
-                    {(() => {
-                      const q = quoteBySymbol[row.symbol];
-                      const live = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
-                      if (live == null) return <span className="text-slate-400">—</span>;
-                      const z = getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) });
-                      const s = getEntryStatus({ price: live, zone_low: z.zone_low, zone_high: z.zone_high });
-                      return (
-                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${entryStatusPill(s)}`}>
-                          {s}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                  <td className="max-w-[420px] truncate p-3 text-slate-600">{row.reason_summary ?? "—"}</td>
-                </tr>
-              ))}
+              {rows.map((row) => {
+                const q = quoteBySymbol[row.symbol];
+                const live = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
+                const entry = Number(row.entry ?? 0);
+                const deltaPct = live !== null && entry > 0 ? ((live - entry) / entry) * 100 : null;
+                return (
+                  <tr
+                    key={row.symbol}
+                    className="cursor-pointer border-b border-[#efe5d6] transition hover:bg-[#fff9f0]"
+                    onClick={() => setSelected(row)}
+                  >
+                    <td className="p-3 font-semibold tracking-tight">{row.symbol}</td>
+                    <td className="p-3">
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${signalPill(row.signal)}`}>
+                        {row.signal}
+                      </span>
+                    </td>
+                    <td className="p-3">{row.rank ?? "—"}</td>
+                    <td className="p-3">{entry.toFixed(2)}</td>
+                    <td className="p-3">{live !== null ? live.toFixed(2) : "—"}</td>
+                    <td className="p-3">{fmtSignedPct(deltaPct)}</td>
+                    <td className="p-3">{Number(row.stop ?? 0).toFixed(2)}</td>
+                    <td className="p-3">{Number(row.tp1 ?? 0).toFixed(2)}</td>
+                    <td className="p-3">
+                      {(() => {
+                        if (live == null) return <span className="text-slate-400">—</span>;
+                        const z = getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) });
+                        const s = getEntryStatus({ price: live, zone_low: z.zone_low, zone_high: z.zone_high });
+                        return (
+                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${entryStatusPill(s)}`}>
+                            {s}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                    <td className="p-3">{Number(row.sizing?.est_cost ?? 0).toFixed(2)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         ) : null}
