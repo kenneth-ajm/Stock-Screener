@@ -39,11 +39,17 @@ type BacktestTrade = {
   holding_days: number;
 };
 
+type EquityPoint = {
+  date: string;
+  equity: number;
+};
+
 type BacktestResponse = {
   ok?: boolean;
   error?: string;
   summary?: BacktestSummary;
   trades?: BacktestTrade[];
+  equity_curve?: EquityPoint[];
   assumptions?: {
     entry_mode?: "trigger" | "next_open" | "next_close" | string;
     max_wait_days?: number;
@@ -126,6 +132,33 @@ export default function BacktestClient() {
 
   const summary = result?.summary;
   const trades = result?.trades ?? [];
+  const equityCurve = result?.equity_curve ?? [];
+  const startEquity = equityCurve.length > 0 ? equityCurve[0].equity : 100;
+  const endEquity = equityCurve.length > 0 ? equityCurve[equityCurve.length - 1].equity : 100;
+  const curveReturnPct = startEquity > 0 ? ((endEquity - startEquity) / startEquity) * 100 : 0;
+
+  const chart = useMemo(() => {
+    const width = 840;
+    const height = 220;
+    const pad = 24;
+    if (equityCurve.length < 2) {
+      return { width, height, path: "", yMin: 0, yMax: 0 };
+    }
+    const ys = equityCurve.map((p) => p.equity);
+    let yMin = Math.min(...ys);
+    let yMax = Math.max(...ys);
+    if (yMin === yMax) {
+      yMin -= 1;
+      yMax += 1;
+    }
+    const xSpan = equityCurve.length - 1;
+    const toX = (i: number) => pad + (i / xSpan) * (width - pad * 2);
+    const toY = (v: number) => pad + ((yMax - v) / (yMax - yMin)) * (height - pad * 2);
+    const d = equityCurve
+      .map((p, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(2)} ${toY(p.equity).toFixed(2)}`)
+      .join(" ");
+    return { width, height, path: d, yMin, yMax };
+  }, [equityCurve]);
 
   return (
     <div className="space-y-4">
@@ -257,6 +290,26 @@ export default function BacktestClient() {
               Only {summary.candidate_rows} candidate BUY rows found for this strategy/date range.
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {summary ? (
+        <div className="rounded-xl border border-[#eadfce] bg-[#fffdf8] p-4">
+          <div className="mb-3 text-sm font-medium text-slate-700">Equity Curve</div>
+          <div className="mb-3 flex flex-wrap items-center gap-4 text-sm text-slate-700">
+            <span>Start equity: <b>{startEquity.toFixed(2)}</b></span>
+            <span>End equity: <b>{endEquity.toFixed(2)}</b></span>
+            <span>Total return: <b>{pct(curveReturnPct)}</b></span>
+            <span>Max drawdown: <b>{pct(summary.max_drawdown_pct)}</b></span>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-white p-2">
+            <svg viewBox={`0 0 ${chart.width} ${chart.height}`} className="h-56 w-full">
+              <rect x="0" y="0" width={chart.width} height={chart.height} fill="#fffdf8" />
+              <line x1="24" y1={chart.height - 24} x2={chart.width - 24} y2={chart.height - 24} stroke="#e6d9c5" />
+              <line x1="24" y1="24" x2="24" y2={chart.height - 24} stroke="#e6d9c5" />
+              {chart.path ? <path d={chart.path} fill="none" stroke="#4b5563" strokeWidth="2.5" /> : null}
+            </svg>
+          </div>
         </div>
       ) : null}
 

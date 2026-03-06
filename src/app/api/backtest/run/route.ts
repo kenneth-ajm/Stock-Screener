@@ -41,6 +41,7 @@ export async function POST(req: Request) {
       inputs,
       summary: result.summary,
       trades: result.trades,
+      equity_curve: result.equity_curve,
       assumptions: result.assumptions,
       metrics: {
         trades: result.summary.total_trades,

@@ -20,6 +20,11 @@ export type BacktestTrade = {
   holding_days: number;
 };
 
+export type EquityPoint = {
+  date: string;
+  equity: number;
+};
+
 export type BacktestSummary = {
   candidate_rows: number;
   total_trades: number;
@@ -44,6 +49,19 @@ export type BacktestSummary = {
     time_stop: number;
   };
 };
+
+function buildEquityCurve(startDate: string, trades: BacktestTrade[]): EquityPoint[] {
+  let equity = 100;
+  const curve: EquityPoint[] = [{ date: startDate, equity }];
+  for (const t of trades) {
+    equity = equity * (1 + t.return_pct / 100);
+    curve.push({
+      date: t.exit_date,
+      equity: Math.round(equity * 10000) / 10000,
+    });
+  }
+  return curve;
+}
 
 type Bar = {
   date: string;
@@ -202,6 +220,7 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
         invalid_signal_entry: 0,
       }),
       trades: [] as BacktestTrade[],
+      equity_curve: buildEquityCurve(start, []),
     };
   }
 
@@ -358,5 +377,6 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
       invalid_signal_entry: invalidSignalEntry,
     }),
     trades: sortedTrades,
+    equity_curve: buildEquityCurve(start, sortedTrades),
   };
 }
