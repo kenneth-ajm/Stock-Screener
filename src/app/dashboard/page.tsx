@@ -207,8 +207,9 @@ export default async function DashboardPage() {
             </div>
             <div className="space-y-2 text-sm">
               {momentum.top.slice(0, 5).map((row: any) => (
-                <div
+                <Link
                   key={row.symbol}
+                  href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol ?? ""))}`}
                   className="cursor-pointer rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3.5 py-2.5 transition hover:-translate-y-[1px] hover:border-[#dac9ab] hover:bg-[#fff9f0]"
                 >
                   <div className="flex items-center justify-between">
@@ -218,7 +219,7 @@ export default async function DashboardPage() {
                     </span>
                   </div>
                   <div className="mt-1 truncate text-xs text-slate-600">{row.reason_summary ?? "—"}</div>
-                </div>
+                </Link>
               ))}
             </div>
           </div>

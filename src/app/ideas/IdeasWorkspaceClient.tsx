@@ -43,8 +43,10 @@ type QuoteMap = Record<
 
 export default function IdeasWorkspaceClient({
   initialStrategy = "v2_core_momentum",
+  initialSymbol = null,
 }: {
   initialStrategy?: StrategyVersion;
+  initialSymbol?: string | null;
 }) {
   const [strategy, setStrategy] = useState<StrategyVersion>(initialStrategy);
   const [data, setData] = useState<Payload | null>(null);
@@ -59,6 +61,9 @@ export default function IdeasWorkspaceClient({
   const [toast, setToast] = useState<string | null>(null);
   const [quoteBySymbol, setQuoteBySymbol] = useState<QuoteMap>({});
   const [livePrice, setLivePrice] = useState<number | null>(null);
+  const [entryFee, setEntryFee] = useState("");
+  const [exitFee, setExitFee] = useState("");
+  const [tpPlan, setTpPlan] = useState<"tp1_only" | "tp1_tp2" | "none">("tp1_tp2");
 
   useEffect(() => {
     let mounted = true;
@@ -108,9 +113,19 @@ export default function IdeasWorkspaceClient({
     setShares(String(selected.sizing?.shares ?? 0));
     setDetails(null);
     setError(null);
+    setEntryFee("");
+    setExitFee("");
+    setTpPlan("tp1_tp2");
     const q = quoteBySymbol[selected.symbol];
     setLivePrice(typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null);
   }, [selected, quoteBySymbol]);
+
+  useEffect(() => {
+    if (!initialSymbol || !data?.rows || selected) return;
+    const target = String(initialSymbol).trim().toUpperCase();
+    const found = (data.rows ?? []).find((r) => String(r.symbol ?? "").trim().toUpperCase() === target);
+    if (found) setSelected(found);
+  }, [initialSymbol, data?.rows, selected]);
 
   const rows = useMemo(() => (data?.rows ?? []).slice(0, 10), [data]);
   const fillNum = Number(fill);
@@ -131,6 +146,14 @@ export default function IdeasWorkspaceClient({
     zone_low: zone.zone_low,
     zone_high: zone.zone_high,
   });
+  const modelTp1Pct =
+    selected && selected.entry > 0 ? (((selected.tp1 ?? selected.entry) / selected.entry - 1) * 100) : 0;
+  const modelTp2Pct =
+    selected && selected.entry > 0 ? (((selected.tp2 ?? selected.entry) / selected.entry - 1) * 100) : 0;
+  const feesTotal =
+    (Number.isFinite(Number(entryFee)) ? Number(entryFee) : 0) +
+    (Number.isFinite(Number(exitFee)) ? Number(exitFee) : 0);
+  const totalCostWithFees = positionCost + feesTotal;
 
   async function openDetails() {
     if (!selected || detailsLoading || details) return;
@@ -162,6 +185,41 @@ export default function IdeasWorkspaceClient({
     setSaving(true);
     setError(null);
     try {
+      const entryFeeValue =
+        entryFee.trim() === "" ? null : Number.isFinite(Number(entryFee)) ? Number(entryFee) : null;
+      const exitFeeValue =
+        exitFee.trim() === "" ? null : Number.isFinite(Number(exitFee)) ? Number(exitFee) : null;
+      const tpPayload =
+        tpPlan === "none"
+          ? {
+              tp_plan: "none" as const,
+              tp1_pct: null,
+              tp2_pct: null,
+              tp1_price: null,
+              tp2_price: null,
+              tp1_size_pct: null,
+              tp2_size_pct: null,
+            }
+          : tpPlan === "tp1_only"
+            ? {
+                tp_plan: "tp1_only" as const,
+                tp1_pct: Number(modelTp1Pct.toFixed(2)),
+                tp2_pct: null,
+                tp1_price: Number((selected.tp1 ?? 0).toFixed(2)),
+                tp2_price: null,
+                tp1_size_pct: 100,
+                tp2_size_pct: 0,
+              }
+            : {
+                tp_plan: "tp1_tp2" as const,
+                tp1_pct: Number(modelTp1Pct.toFixed(2)),
+                tp2_pct: Number(modelTp2Pct.toFixed(2)),
+                tp1_price: Number((selected.tp1 ?? 0).toFixed(2)),
+                tp2_price: Number((selected.tp2 ?? 0).toFixed(2)),
+                tp1_size_pct: 50,
+                tp2_size_pct: 50,
+              };
+
       const res = await fetch("/api/positions/add", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -173,6 +231,9 @@ export default function IdeasWorkspaceClient({
           strategy_version: strategy,
           max_hold_days: strategy === "v1_trend_hold" ? 45 : 7,
           tp_model: strategy === "v1_trend_hold" ? "percent_10_20" : "percent_5_10",
+          entry_fee: entryFeeValue,
+          exit_fee: exitFeeValue,
+          ...tpPayload,
         }),
       });
       const payload = await res.json().catch(() => null);
@@ -374,6 +435,28 @@ export default function IdeasWorkspaceClient({
                 <div className="text-xs text-slate-600">
                   Suggested shares (fill-aware): <span className="font-semibold">{suggestedShares}</span>
                 </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs text-slate-500">Entry fee</label>
+                    <input
+                      value={entryFee}
+                      onChange={(e) => setEntryFee(e.target.value)}
+                      className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
+                      inputMode="decimal"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500">Exit fee</label>
+                    <input
+                      value={exitFee}
+                      onChange={(e) => setExitFee(e.target.value)}
+                      className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
+                      inputMode="decimal"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
               </div>
 
               <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3 text-xs text-slate-600">
@@ -381,7 +464,51 @@ export default function IdeasWorkspaceClient({
                 <div>Risk budget: {Number.isFinite(riskBudget) ? riskBudget.toFixed(2) : "—"}</div>
                 <div>Risk used: {Number.isFinite(riskUsed) ? riskUsed.toFixed(2) : "—"}</div>
                 <div>Position cost: {Number.isFinite(positionCost) ? positionCost.toFixed(2) : "—"}</div>
-                <div>TP1 / TP2: {selected.tp1.toFixed(2)} / {selected.tp2.toFixed(2)}</div>
+                <div>Total cost (incl. fees): {Number.isFinite(totalCostWithFees) ? totalCostWithFees.toFixed(2) : "—"}</div>
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="mb-2 text-sm font-semibold tracking-tight text-slate-800">Targets</div>
+                <div className="mb-3">
+                  <label className="block text-xs text-slate-500">TP Plan</label>
+                  <select
+                    value={tpPlan}
+                    onChange={(e) => setTpPlan(e.target.value as "tp1_only" | "tp1_tp2" | "none")}
+                    className="mt-1 w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="tp1_only">TP1 only</option>
+                    <option value="tp1_tp2">TP1 + TP2</option>
+                    <option value="none">No TP</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div
+                    className={`rounded-xl border p-3 ${
+                      tpPlan === "none"
+                        ? "border-slate-200 bg-slate-50 text-slate-400"
+                        : "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    }`}
+                  >
+                    <div className="text-[11px] font-semibold uppercase tracking-wide">TP1</div>
+                    <div className="mt-1 text-lg font-semibold">{selected.tp1.toFixed(2)}</div>
+                    <div className="text-xs">+{modelTp1Pct.toFixed(1)}%</div>
+                  </div>
+                  <div
+                    className={`rounded-xl border p-3 ${
+                      tpPlan === "tp1_tp2"
+                        ? "border-amber-200 bg-amber-50 text-amber-800"
+                        : "border-slate-200 bg-slate-50 text-slate-400"
+                    }`}
+                  >
+                    <div className="text-[11px] font-semibold uppercase tracking-wide">TP2</div>
+                    <div className="mt-1 text-lg font-semibold">{selected.tp2.toFixed(2)}</div>
+                    <div className="text-xs">+{modelTp2Pct.toFixed(1)}%</div>
+                  </div>
+                </div>
+                {tpPlan === "none" ? (
+                  <div className="mt-2 text-xs text-slate-500">No TP will be saved for this position.</div>
+                ) : null}
               </div>
 
               <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
