@@ -4,6 +4,7 @@ import {
   CORE_MOMENTUM_DEFAULT_VERSION,
 } from "@/lib/strategy/coreMomentumSwing";
 import { makeScanEngineClient, runScanPipeline } from "@/lib/scan_engine";
+import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
 type ScanBody = {
   universe_slug?: string;
@@ -17,8 +18,9 @@ type ScanBody = {
 export async function POST(req: Request) {
   try {
     const body = (await req.json().catch(() => ({}))) as ScanBody;
-    const universe_slug = body.universe_slug ?? CORE_MOMENTUM_DEFAULT_UNIVERSE;
     const strategy_version = body.strategy_version ?? body.version ?? CORE_MOMENTUM_DEFAULT_VERSION;
+    const universe_slug =
+      body.universe_slug ?? defaultUniverseForStrategy(strategy_version) ?? CORE_MOMENTUM_DEFAULT_UNIVERSE;
     const offset = Number.isFinite(body.offset as number) ? Number(body.offset) : 0;
     const limit = Number.isFinite(body.limit as number) ? Number(body.limit) : 200;
 

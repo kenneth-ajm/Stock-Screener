@@ -10,8 +10,8 @@ import { computeMarketBreadth } from "@/lib/market_breadth";
 import {
   computeSectorMomentumCandidates,
   SECTOR_MOMENTUM_STRATEGY_VERSION,
-  SECTOR_MOMENTUM_UNIVERSE_SLUG,
 } from "@/lib/sector_momentum";
+import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY = "v2_core_momentum";
@@ -58,6 +58,7 @@ const loadScreenerDataCached = unstable_cache(
     ) as any;
 
     const lctd = await getLCTD(supabase as any);
+    const mappedUniverse = defaultUniverseForStrategy(strategyVersion) || universeSlug;
     const dateUsed = requestedDate && requestedDate.trim() ? requestedDate.trim() : lctd.lctd;
     const { data: regimeExactRows } = await supabase
       .from("market_regime")
@@ -83,7 +84,7 @@ const loadScreenerDataCached = unstable_cache(
     const breadth = await computeMarketBreadth({
       supabase: supabase as any,
       date: dateUsed ?? null,
-      universe_slug: universeSlug,
+      universe_slug: mappedUniverse,
       strategy_version: strategyVersion === SECTOR_MOMENTUM_STRATEGY_VERSION ? "v2_core_momentum" : strategyVersion,
       regime_state: regimeState,
     });
@@ -94,6 +95,7 @@ const loadScreenerDataCached = unstable_cache(
           supabase,
           scan_date: dateUsed,
           lctd_source: lctd.source,
+          universe_slug: mappedUniverse,
           top_group_count: 4,
           max_candidates: 12,
         })
@@ -121,7 +123,7 @@ const loadScreenerDataCached = unstable_cache(
             .select(
               "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary"
             )
-            .eq("universe_slug", universeSlug)
+            .eq("universe_slug", mappedUniverse)
             .eq("strategy_version", strategyVersion)
             .eq("date", dateUsed)
             .order("rank", { ascending: true, nullsFirst: false })
@@ -224,7 +226,8 @@ const loadScreenerDataCached = unstable_cache(
         sector_momentum:
           isSectorMomentum && sectorData?.ok
             ? {
-                universe_slug: SECTOR_MOMENTUM_UNIVERSE_SLUG,
+                universe_slug: mappedUniverse,
+                strategy_universe_slug: mappedUniverse,
                 top_group_count: 4,
                 groups: sectorData.top_groups?.map((g) => ({
                   key: g.key,
@@ -242,6 +245,7 @@ const loadScreenerDataCached = unstable_cache(
         breadth_sample_size: breadth.sampleSize,
       },
       capacity,
+      universe_slug: mappedUniverse,
       rows: rowsFinal,
     };
   },

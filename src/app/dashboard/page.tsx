@@ -10,6 +10,7 @@ import { applyEarningsRiskToAction, lookupEarningsRiskForSymbols } from "@/lib/e
 import { applyBreadthToAction, computeMarketBreadth } from "@/lib/market_breadth";
 import TickerCheckClient from "./TickerCheckClient";
 import { computeSectorMomentumCandidates } from "@/lib/sector_momentum";
+import { GROWTH_UNIVERSE_SLUG } from "@/lib/strategy_universe";
 
 function money(v: number | null | undefined) {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
@@ -151,6 +152,7 @@ export default async function DashboardPage() {
     supabase: supabase as any,
     scan_date: lctd.lctd,
     lctd_source: lctd.source,
+    universe_slug: GROWTH_UNIVERSE_SLUG,
     top_group_count: 4,
     max_candidates: 8,
   });

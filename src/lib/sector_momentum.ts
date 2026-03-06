@@ -33,7 +33,7 @@ export type SectorMomentumResult = {
 };
 
 export const SECTOR_MOMENTUM_STRATEGY_VERSION = "v1_sector_momentum";
-export const SECTOR_MOMENTUM_UNIVERSE_SLUG = "industry_groups_top4";
+export const SECTOR_MOMENTUM_UNIVERSE_SLUG = "growth_1500";
 
 type PriceBarLite = {
   symbol: string;
@@ -63,21 +63,86 @@ export type SectorMomentumCandidate = {
 const LOOKBACK_DAYS = 220;
 
 export const INDUSTRY_GROUPS: IndustryGroup[] = [
-  { key: "semiconductors", name: "Semiconductors", theme: "AI Hardware", symbols: ["NVDA", "AMD", "AVGO", "MU", "ON", "MRVL"] },
-  { key: "cybersecurity", name: "Cybersecurity", theme: "Security Software", symbols: ["CRWD", "PANW", "ZS", "FTNT", "CYBR"] },
-  { key: "cloud_software", name: "Cloud Software", theme: "SaaS Leaders", symbols: ["MSFT", "CRM", "NOW", "SNOW", "DDOG", "MDB"] },
-  { key: "defense", name: "Defense", theme: "Aerospace & Defense", symbols: ["LMT", "NOC", "RTX", "GD", "LHX"] },
-  { key: "biotech", name: "Biotech", theme: "Biotech Innovators", symbols: ["REGN", "VRTX", "ALNY", "BIIB", "MRNA"] },
-  { key: "pharma", name: "Pharma", theme: "Large Pharma", symbols: ["LLY", "NVO", "JNJ", "PFE", "MRK"] },
-  { key: "oil_gas", name: "Oil & Gas", theme: "Integrated Energy", symbols: ["XOM", "CVX", "COP", "EOG", "OXY"] },
-  { key: "oil_services", name: "Oil Services", theme: "Energy Services", symbols: ["SLB", "HAL", "BKR", "NOV", "FTI"] },
-  { key: "uranium", name: "Uranium", theme: "Nuclear Fuel", symbols: ["CCJ", "UEC", "UUUU", "NXE"] },
-  { key: "solar", name: "Solar", theme: "Solar Buildout", symbols: ["FSLR", "ENPH", "SEDG", "RUN"] },
-  { key: "brokers", name: "Brokers", theme: "Capital Markets", symbols: ["SCHW", "IBKR", "HOOD", "MS", "GS"] },
-  { key: "insurers", name: "Insurers", theme: "Insurance", symbols: ["PGR", "CB", "ALL", "TRV", "AIG"] },
-  { key: "homebuilders", name: "Homebuilders", theme: "Housing Cycle", symbols: ["DHI", "LEN", "NVR", "PHM", "TOL"] },
-  { key: "machinery_industrials", name: "Machinery / Industrials", theme: "Industrial Expansion", symbols: ["CAT", "DE", "ETN", "PH", "ROK"] },
-  { key: "metals_miners", name: "Metals / Miners", theme: "Materials", symbols: ["FCX", "NEM", "SCCO", "AA", "CLF"] },
+  {
+    key: "semiconductors",
+    name: "Semiconductors",
+    theme: "AI Hardware",
+    symbols: ["NVDA", "AMD", "AVGO", "MU", "ON", "MRVL", "QCOM", "TXN", "ADI", "NXPI", "AMAT", "LRCX", "KLAC", "MCHP", "TER"],
+  },
+  {
+    key: "cybersecurity",
+    name: "Cybersecurity",
+    theme: "Security Software",
+    symbols: ["CRWD", "PANW", "ZS", "FTNT", "CYBR", "S", "OKTA", "RPD", "TENB", "NET", "AKAM", "QLYS"],
+  },
+  {
+    key: "cloud_software",
+    name: "Cloud Software",
+    theme: "SaaS Leaders",
+    symbols: ["MSFT", "CRM", "NOW", "SNOW", "DDOG", "MDB", "HUBS", "TEAM", "WDAY", "SHOP", "ADBE", "ORCL", "INTU", "SMCI"],
+  },
+  {
+    key: "defense",
+    name: "Defense",
+    theme: "Aerospace & Defense",
+    symbols: ["LMT", "NOC", "RTX", "GD", "LHX", "BA", "TDG", "HII", "KTOS", "TXT", "CW", "HEI"],
+  },
+  {
+    key: "biotech",
+    name: "Biotech",
+    theme: "Biotech Innovators",
+    symbols: ["REGN", "VRTX", "ALNY", "BIIB", "MRNA", "GILD", "INCY", "SRPT", "EXEL", "BMRN", "NBIX", "RGEN"],
+  },
+  {
+    key: "pharma",
+    name: "Pharma",
+    theme: "Large Pharma",
+    symbols: ["LLY", "NVO", "JNJ", "PFE", "MRK", "BMY", "ABBV", "AZN", "GSK", "SNY", "ZTS"],
+  },
+  {
+    key: "oil_gas",
+    name: "Oil & Gas",
+    theme: "Integrated Energy",
+    symbols: ["XOM", "CVX", "COP", "EOG", "OXY", "DVN", "FANG", "MRO", "APA", "PXD", "HES", "EQT"],
+  },
+  {
+    key: "oil_services",
+    name: "Oil Services",
+    theme: "Energy Services",
+    symbols: ["SLB", "HAL", "BKR", "NOV", "FTI", "CHX", "NBR", "RIG", "HP", "PUMP", "LBRT"],
+  },
+  { key: "uranium", name: "Uranium", theme: "Nuclear Fuel", symbols: ["CCJ", "UEC", "UUUU", "NXE", "DNN", "LEU", "EU", "URG"] },
+  { key: "solar", name: "Solar", theme: "Solar Buildout", symbols: ["FSLR", "ENPH", "SEDG", "RUN", "NXT", "ARRY", "CSIQ", "SHLS"] },
+  {
+    key: "brokers",
+    name: "Brokers",
+    theme: "Capital Markets",
+    symbols: ["SCHW", "IBKR", "HOOD", "MS", "GS", "RJF", "SF", "LPLA", "JEF", "NDAQ", "CBOE"],
+  },
+  {
+    key: "insurers",
+    name: "Insurers",
+    theme: "Insurance",
+    symbols: ["PGR", "CB", "ALL", "TRV", "AIG", "MET", "PRU", "AFL", "HIG", "CINF", "WRB"],
+  },
+  {
+    key: "homebuilders",
+    name: "Homebuilders",
+    theme: "Housing Cycle",
+    symbols: ["DHI", "LEN", "NVR", "PHM", "TOL", "MTH", "KBH", "BZH", "TMHC", "BLD", "MAS"],
+  },
+  {
+    key: "machinery_industrials",
+    name: "Machinery / Industrials",
+    theme: "Industrial Expansion",
+    symbols: ["CAT", "DE", "ETN", "PH", "ROK", "EMR", "ITW", "TT", "XYL", "PCAR", "CMI", "IR"],
+  },
+  {
+    key: "metals_miners",
+    name: "Metals / Miners",
+    theme: "Materials",
+    symbols: ["FCX", "NEM", "SCCO", "AA", "CLF", "TECK", "MP", "X", "NUE", "STLD", "CMC", "GOLD"],
+  },
 ];
 
 function toNum(v: unknown) {
@@ -271,11 +336,13 @@ export async function computeSectorMomentumCandidates(opts: {
   supabase: any;
   scan_date: string | null;
   lctd_source?: LctdSource | "none";
+  universe_slug?: string;
   top_group_count?: number;
   max_candidates?: number;
 }) {
   const topGroupCount = Number.isFinite(opts.top_group_count as number) ? Math.max(1, Number(opts.top_group_count)) : 4;
   const maxCandidates = Number.isFinite(opts.max_candidates as number) ? Math.max(1, Number(opts.max_candidates)) : 12;
+  const universeSlug = String(opts.universe_slug ?? SECTOR_MOMENTUM_UNIVERSE_SLUG).trim() || SECTOR_MOMENTUM_UNIVERSE_SLUG;
 
   const ranked = await computeSectorMomentum({
     supabase: opts.supabase,
@@ -318,6 +385,27 @@ export async function computeSectorMomentumCandidates(opts: {
   );
 
   const supa = opts.supabase as any;
+  const { data: universeRow } = await supa
+    .from("universes")
+    .select("id")
+    .eq("slug", universeSlug)
+    .maybeSingle();
+  let universeSet: Set<string> | null = null;
+  if (universeRow?.id) {
+    const { data: universeMembers } = await supa
+      .from("universe_members")
+      .select("symbol")
+      .eq("universe_id", universeRow.id)
+      .eq("active", true)
+      .order("symbol", { ascending: true })
+      .limit(5000);
+    universeSet = new Set(
+      (universeMembers ?? [])
+        .map((m: any) => String(m.symbol ?? "").trim().toUpperCase())
+        .filter(Boolean)
+    );
+  }
+
   const { data, error } = await supa
     .from("price_bars")
     .select("symbol,date,close,volume,source")
@@ -363,6 +451,7 @@ export async function computeSectorMomentumCandidates(opts: {
     const groupStats: Array<{ symbol: string; ret20: number }> = [];
 
     for (const symbol of groupDef.symbols.map((s) => s.trim().toUpperCase())) {
+      if (universeSet && !universeSet.has(symbol)) continue;
       const bars = bySymbol.get(symbol) ?? [];
       if (bars.length < 60) continue;
       const latest = bars[bars.length - 1];
@@ -374,6 +463,7 @@ export async function computeSectorMomentumCandidates(opts: {
     const groupRet20 = groupStats.length ? avg(groupStats.map((x) => x.ret20)) : 0;
 
     for (const symbol of groupDef.symbols.map((s) => s.trim().toUpperCase())) {
+      if (universeSet && !universeSet.has(symbol)) continue;
       const bars = bySymbol.get(symbol) ?? [];
       if (bars.length < 60) continue;
       const latest = bars[bars.length - 1];
@@ -526,6 +616,7 @@ export async function computeSectorMomentumCandidates(opts: {
     ok: true as const,
     scan_date: scanDate,
     lctd_source: ranked.lctd_source,
+    universe_slug: universeSlug,
     groups: ranked.groups,
     top_groups: topGroups,
     candidates: capped,

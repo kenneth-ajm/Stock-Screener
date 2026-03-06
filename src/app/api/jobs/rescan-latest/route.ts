@@ -10,6 +10,7 @@ import { finalizeSignals } from "@/lib/finalize_signals";
 import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
 import { refreshSpyRegimeForLctd } from "@/lib/spy_regime";
+import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
 type Body = {
   universe_slug?: string;
@@ -20,9 +21,11 @@ export async function POST(req: Request) {
   const startedAt = Date.now();
   try {
     const body = (await req.json().catch(() => ({}))) as Body;
-    const universe_slug = String(body?.universe_slug ?? CORE_MOMENTUM_DEFAULT_UNIVERSE).trim() || CORE_MOMENTUM_DEFAULT_UNIVERSE;
     const strategy_version =
       String(body?.strategy_version ?? CORE_MOMENTUM_DEFAULT_VERSION).trim() || CORE_MOMENTUM_DEFAULT_VERSION;
+    const universe_slug =
+      String(body?.universe_slug ?? defaultUniverseForStrategy(strategy_version) ?? CORE_MOMENTUM_DEFAULT_UNIVERSE).trim() ||
+      CORE_MOMENTUM_DEFAULT_UNIVERSE;
 
     const supa = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,

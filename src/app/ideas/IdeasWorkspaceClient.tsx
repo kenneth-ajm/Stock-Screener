@@ -5,6 +5,7 @@ import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
 import { mapExecutionState } from "@/lib/execution_state";
 import { applyEarningsRiskToAction, type EarningsRisk } from "@/lib/earnings_risk";
 import { applyBreadthToAction } from "@/lib/market_breadth";
+import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
 type StrategyVersion = "v2_core_momentum" | "v1_sector_momentum" | "v1_trend_hold";
 
@@ -119,7 +120,8 @@ export default function IdeasWorkspaceClient({
   useEffect(() => {
     let mounted = true;
     setLoading(true);
-    fetch(`/api/screener-data?strategy_version=${strategy}&universe_slug=core_800`, {
+    const universeSlug = defaultUniverseForStrategy(strategy);
+    fetch(`/api/screener-data?strategy_version=${strategy}&universe_slug=${encodeURIComponent(universeSlug)}`, {
       cache: "no-store",
     })
       .then((r) => r.json())
@@ -261,7 +263,7 @@ export default function IdeasWorkspaceClient({
       const query = new URLSearchParams({
         symbol: selected.symbol,
         strategy_version: strategy,
-        universe_slug: "core_800",
+        universe_slug: defaultUniverseForStrategy(strategy),
         date: data?.meta?.lctd ?? "",
       });
       const res = await fetch(`/api/scan-row-detail?${query.toString()}`, { cache: "no-store" });

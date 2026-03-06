@@ -1,0 +1,14 @@
+import { CORE_MOMENTUM_DEFAULT_VERSION } from "@/lib/strategy/coreMomentumSwing";
+import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
+import { SECTOR_MOMENTUM_STRATEGY_VERSION } from "@/lib/sector_momentum";
+
+export const CORE_UNIVERSE_SLUG = "core_800";
+export const GROWTH_UNIVERSE_SLUG = "growth_1500";
+
+export function defaultUniverseForStrategy(strategyVersion: string) {
+  const strategy = String(strategyVersion ?? "").trim();
+  if (strategy === SECTOR_MOMENTUM_STRATEGY_VERSION) return GROWTH_UNIVERSE_SLUG;
+  if (strategy === TREND_HOLD_DEFAULT_VERSION) return CORE_UNIVERSE_SLUG;
+  if (strategy === CORE_MOMENTUM_DEFAULT_VERSION) return CORE_UNIVERSE_SLUG;
+  return CORE_UNIVERSE_SLUG;
+}
