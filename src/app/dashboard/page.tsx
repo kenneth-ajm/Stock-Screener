@@ -96,6 +96,7 @@ export default async function DashboardPage() {
     qty: Number(row.shares ?? row.quantity ?? row.position_size ?? 0),
     entry: Number(row.entry_price ?? 0),
   }));
+  const topSignals = momentum.top.slice(0, 5);
 
   return (
     <AppShell currentPath="/dashboard" userEmail={user.email ?? ""} portfolios={portfolios}>
@@ -198,24 +199,29 @@ export default async function DashboardPage() {
         </section>
 
         <section className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-5">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-base font-semibold tracking-tight">Top Ranked Signals</div>
-              <Link href="/ideas" className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]">
+          <section className="rounded-[28px] border border-[#e8decd] bg-[#f8f3e8] p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-2xl font-semibold text-slate-900">Top Ranked Signals</h2>
+              <Link
+                href="/ideas?strategy=momentum"
+                className="rounded-xl border border-[#d9ccb5] bg-[#efe6d6] px-4 py-2 text-sm font-medium text-slate-800 hover:bg-[#e8ddca]"
+              >
                 View all
               </Link>
             </div>
-            <div className="space-y-3 text-sm">
-              {momentum.top.slice(0, 5).map((row: any) => (
+
+            <div className="space-y-3">
+              {topSignals.map((row: any) => (
                 <Link
                   key={row.symbol}
-                  href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol ?? ""))}`}
-                  className="flex w-full items-center justify-between rounded-2xl border border-[#eadfce] bg-[#fffdf7] px-5 py-4 transition hover:bg-[#faf6ee]"
+                  href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol))}`}
+                  className="flex items-center justify-between rounded-2xl border border-[#eadfce] bg-[#fffdf7] px-5 py-4 transition hover:bg-[#faf6ee]"
                 >
-                  <div className="min-w-0 pr-3">
-                    <div className="text-2xl font-semibold text-slate-900">{row.symbol}</div>
+                  <div className="min-w-0 pr-4">
+                    <div className="text-xl font-semibold text-slate-900">{row.symbol}</div>
                     <div className="mt-1 truncate text-sm text-slate-600">{row.reason_summary ?? "—"}</div>
                   </div>
+
                   <span
                     className={
                       row.signal === "BUY"
@@ -230,7 +236,7 @@ export default async function DashboardPage() {
                 </Link>
               ))}
             </div>
-          </div>
+          </section>
           <div className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-5">
             <div className="mb-3 flex items-center justify-between">
               <div className="text-base font-semibold tracking-tight">Open Positions Snapshot</div>
