@@ -396,11 +396,12 @@ export async function runScanPipeline(opts: {
       .eq("symbol", "SPY")
       .eq("source", "polygon")
       .lte("date", scanDate)
-      .order("date", { ascending: true })
+      .order("date", { ascending: false })
       .limit(260);
-    if (spyBars && spyBars.length >= 252) {
-      const latest = Number(spyBars[spyBars.length - 1]?.close);
-      const start = Number(spyBars[spyBars.length - 252]?.close);
+    const spyBarsAsc = Array.isArray(spyBars) ? [...spyBars].reverse() : [];
+    if (spyBarsAsc.length >= 252) {
+      const latest = Number(spyBarsAsc[spyBarsAsc.length - 1]?.close);
+      const start = Number(spyBarsAsc[spyBarsAsc.length - 252]?.close);
       if (Number.isFinite(latest) && Number.isFinite(start) && start > 0) {
         spy252Return = latest / start - 1;
       }
@@ -418,13 +419,14 @@ export async function runScanPipeline(opts: {
       .eq("symbol", symbol)
       .eq("source", "polygon")
       .lte("date", scanDate)
-      .order("date", { ascending: true })
+      .order("date", { ascending: false })
       .limit(300);
     if (bErr || !bars || bars.length < 260) continue;
+    const barsAsc = [...bars].reverse();
 
     const scoredRow = scoreSymbol({
       symbol,
-      bars: bars.map((bar: any) => ({
+      bars: barsAsc.map((bar: any) => ({
         date: String(bar.date),
         open: Number(bar.open),
         high: Number(bar.high),

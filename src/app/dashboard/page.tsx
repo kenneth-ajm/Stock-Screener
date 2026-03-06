@@ -92,12 +92,33 @@ export default async function DashboardPage() {
       reason_summary: string | null;
       entry: number | null;
     }>;
+    const symbols = Array.from(new Set(list.map((r) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean)));
+    const { data: barsOnDate } = await supabase
+      .from("price_bars")
+      .select("symbol,close")
+      .eq("date", date)
+      .in("symbol", symbols);
+    const closeBySymbol = new Map<string, number>();
+    for (const row of barsOnDate ?? []) {
+      const sym = String((row as any)?.symbol ?? "").trim().toUpperCase();
+      const close = Number((row as any)?.close);
+      if (!sym || !Number.isFinite(close) || close <= 0) continue;
+      if (!closeBySymbol.has(sym)) closeBySymbol.set(sym, close);
+    }
+    const validated = list.filter((row) => {
+      const sym = String(row.symbol ?? "").trim().toUpperCase();
+      const scanClose = closeBySymbol.get(sym);
+      if (scanClose == null) return true;
+      const entry = Number(row.entry ?? 0);
+      if (!Number.isFinite(entry) || entry <= 0) return false;
+      return Math.abs((entry - scanClose) / scanClose) <= PRICE_MISMATCH_THRESHOLD_PCT;
+    });
     return {
       date,
-      buy: list.filter((r: any) => r.signal === "BUY").length,
-      watch: list.filter((r: any) => r.signal === "WATCH").length,
-      avoid: list.filter((r: any) => r.signal === "AVOID").length,
-      top: list.filter((r) => r.signal !== "AVOID").slice(0, 5),
+      buy: validated.filter((r: any) => r.signal === "BUY").length,
+      watch: validated.filter((r: any) => r.signal === "WATCH").length,
+      avoid: validated.filter((r: any) => r.signal === "AVOID").length,
+      top: validated.filter((r) => r.signal !== "AVOID").slice(0, 5),
     };
   }
 

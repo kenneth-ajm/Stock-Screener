@@ -11,6 +11,7 @@ const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY = "v2_core_momentum";
 const BUY_CAP = 5;
 const WATCH_CAP = 10;
+const ENTRY_MISMATCH_THRESHOLD_PCT = 0.6;
 
 type ScanRow = {
   symbol: string;
@@ -91,7 +92,34 @@ const loadScreenerDataCached = unstable_cache(
       userId,
     });
 
-    const cappedRows = applyDisplayCaps((rows ?? []) as ScanRow[]);
+    const rawRows = (rows ?? []) as ScanRow[];
+    let entryValidatedRows = rawRows;
+    if (dateUsed && rawRows.length > 0) {
+      const symbols = Array.from(new Set(rawRows.map((r) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean)));
+      const { data: barsOnDate } = await (supabase as any)
+        .from("price_bars")
+        .select("symbol,close,date")
+        .eq("date", dateUsed)
+        .in("symbol", symbols);
+      const closeBySymbol = new Map<string, number>();
+      for (const row of barsOnDate ?? []) {
+        const sym = String(row?.symbol ?? "").trim().toUpperCase();
+        const close = Number(row?.close);
+        if (!sym || !Number.isFinite(close) || close <= 0) continue;
+        if (!closeBySymbol.has(sym)) closeBySymbol.set(sym, close);
+      }
+      entryValidatedRows = rawRows.filter((row) => {
+        const sym = String(row.symbol ?? "").trim().toUpperCase();
+        const scanClose = closeBySymbol.get(sym);
+        if (scanClose == null) return true;
+        const entry = Number(row.entry);
+        if (!Number.isFinite(entry) || entry <= 0) return false;
+        const mismatch = Math.abs((entry - scanClose) / scanClose) > ENTRY_MISMATCH_THRESHOLD_PCT;
+        return !mismatch;
+      });
+    }
+
+    const cappedRows = applyDisplayCaps(entryValidatedRows);
     const withActions = cappedRows.map((row) => {
       const action = computePortfolioAwareAction(
         {
