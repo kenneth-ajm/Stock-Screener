@@ -37,6 +37,16 @@ function actionPill(action: "BUY NOW" | "WAIT" | "SKIP") {
   return "border-rose-200 bg-rose-50 text-rose-700";
 }
 
+function extractAtr14(reasonJson: any): number | null {
+  const metrics = reasonJson?.metrics ?? {};
+  const keys = ["atr14", "atr_14", "atr"];
+  for (const key of keys) {
+    const n = Number(metrics?.[key]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
 type QuoteMap = Record<
   string,
   {
@@ -83,7 +93,7 @@ export default async function DashboardPage() {
 
     const { data: rows } = await supabase
       .from("daily_scans")
-      .select("symbol,signal,confidence,rank,rank_score,reason_summary,entry")
+      .select("symbol,signal,confidence,rank,rank_score,reason_summary,reason_json,entry")
       .eq("universe_slug", "core_800")
       .eq("strategy_version", strategyVersion)
       .eq("date", date)
@@ -98,6 +108,7 @@ export default async function DashboardPage() {
       rank: number | null;
       rank_score: number | null;
       reason_summary: string | null;
+      reason_json: any;
       entry: number | null;
     }>;
     const symbols = Array.from(new Set(list.map((r) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean)));
@@ -406,172 +417,128 @@ export default async function DashboardPage() {
             </div>
 
             <div className="space-y-3">
-              {topSignals.map((row: any) => (
-                <Link
-                  key={row.symbol}
-                  href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol))}`}
-                  legacyBehavior
-                >
-                  <a className="block w-full cursor-pointer rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3.5 py-2.5 transition hover:-translate-y-[1px] hover:border-[#dac9ab] hover:bg-[#fff9f0]">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0 pr-4">
-                        <div className="text-xl font-semibold text-slate-900">{row.symbol}</div>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-600">
-                          {(() => {
-                            const symbol = String(row.symbol ?? "").trim().toUpperCase();
-                            const quote = topQuoteBySymbol[symbol];
-                            const rawLast = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
-                            const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
-                            const mismatch =
-                              rawLast !== null &&
-                              entry !== null &&
-                              entry > 0 &&
-                              Math.abs((rawLast - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
-                            const last = mismatch ? null : rawLast;
-                            const delta =
-                              last !== null && entry !== null && entry > 0 ? ((last - entry) / entry) * 100 : null;
-                            const sourceBadgeClass =
-                              quote?.source === "snapshot"
-                                ? "border-sky-200 bg-sky-50 text-sky-700"
-                                : "border-slate-200 bg-slate-50 text-slate-700";
-                            const sourceLabel =
-                              quote?.source === "snapshot"
-                                ? "LIVE"
-                                : quote?.source === "eod_close"
-                                  ? "EOD"
-                                  : null;
-                            return (
-                              <>
-                                <span>
-                                  Last <span className="font-semibold text-slate-800">{fmtPrice(last)}</span>
-                                </span>
-                                <span>
-                                  Entry <span className="font-semibold text-slate-800">{fmtPrice(entry)}</span>
-                                </span>
-                                <span>
-                                  Delta <span className="font-semibold text-slate-800">{fmtSignedPct(delta)}</span>
-                                </span>
-                                {sourceLabel ? (
-                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${sourceBadgeClass}`}>
-                                    {sourceLabel}
-                                  </span>
-                                ) : null}
-                                {mismatch ? (
-                                  <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
-                                    MISMATCH
-                                  </span>
-                                ) : null}
-                              </>
-                            );
-                          })()}
-                        </div>
-                        <div className="mt-1">
-                          {(() => {
-                            const symbol = String(row.symbol ?? "").trim().toUpperCase();
-                            const quote = topQuoteBySymbol[symbol];
-                            const rawLive = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
-                            const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
-                            const mismatch =
-                              rawLive !== null &&
-                              entry !== null &&
-                              entry > 0 &&
-                              Math.abs((rawLive - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
-                            const live = mismatch ? null : rawLive;
-                            const status =
-                              mismatch
-                                ? "Price mismatch"
-                                :
-                              live !== null && entry !== null && entry > 0
-                                ? getEntryStatus({
-                                    price: live,
-                                    zone_low: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_low,
-                                    zone_high: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_high,
-                                  })
-                                : "No live price";
-                            const baseExec = mapExecutionState(status);
-                            const exec = applyBreadthToAction(
-                              applyEarningsRiskToAction(baseExec, earningsRiskBySymbol[symbol] ?? null),
-                              breadth
-                            );
-                            const statusClass =
-                              status === "Within zone"
-                                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                : status === "Below trigger"
-                                  ? "border-sky-200 bg-sky-50 text-sky-700"
-                                  : status === "Extended"
-                                    ? "border-amber-200 bg-amber-50 text-amber-700"
-                                    : "border-rose-200 bg-rose-50 text-rose-700";
-                            return (
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
-                                  {exec.action}
-                                </span>
-                                {status !== "No live price" ? (
-                                  <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass}`}>
-                                    {status}
-                                  </span>
-                                ) : null}
-                                {earningsRiskBySymbol[symbol]?.earningsLabel ? (
-                                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
-                                    {earningsRiskBySymbol[symbol]?.earningsLabel}
-                                  </span>
-                                ) : null}
-                                {exec.breadthLabel ? (
-                                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
-                                    {exec.breadthLabel}
-                                  </span>
-                                ) : null}
-                              </div>
-                            );
-                          })()}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          {(() => {
-                            const symbol = String(row.symbol ?? "").trim().toUpperCase();
-                            const quote = topQuoteBySymbol[symbol];
-                            const rawLive = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
-                            const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
-                            const mismatch =
-                              rawLive !== null &&
-                              entry !== null &&
-                              entry > 0 &&
-                              Math.abs((rawLive - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
-                            const live = mismatch ? null : rawLive;
-                            const reason = mismatch
-                              ? "Price mismatch"
-                              : live !== null && entry !== null && entry > 0
-                              ? getEntryStatus({
-                                  price: live,
-                                  zone_low: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_low,
-                                  zone_high: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_high,
-                                })
-                              : "No live price";
-                            return applyBreadthToAction(
-                              applyEarningsRiskToAction(
-                                mapExecutionState(reason),
-                                earningsRiskBySymbol[symbol] ?? null
-                              ),
-                              breadth
-                            ).reasonLabel;
-                          })()}
-                        </div>
-                      </div>
+              {topSignals.map((row: any) => {
+                const symbol = String(row.symbol ?? "").trim().toUpperCase();
+                const quote = topQuoteBySymbol[symbol];
+                const rawLast = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
+                const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
+                const mismatch =
+                  rawLast !== null &&
+                  entry !== null &&
+                  entry > 0 &&
+                  Math.abs((rawLast - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
+                const last = mismatch ? null : rawLast;
+                const delta = last !== null && entry !== null && entry > 0 ? ((last - entry) / entry) * 100 : null;
+                const atr14 = extractAtr14(row.reason_json);
+                const atrDist =
+                  atr14 !== null && atr14 > 0 && last !== null && entry !== null ? Math.abs(last - entry) / atr14 : null;
+                const sourceBadgeClass =
+                  quote?.source === "snapshot"
+                    ? "border-sky-200 bg-sky-50 text-sky-700"
+                    : "border-slate-200 bg-slate-50 text-slate-700";
+                const sourceLabel = quote?.source === "snapshot" ? "LIVE" : quote?.source === "eod_close" ? "EOD" : null;
+                const status =
+                  mismatch
+                    ? "Price mismatch"
+                    : last !== null && entry !== null && entry > 0
+                      ? getEntryStatus({
+                          price: last,
+                          zone_low: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_low,
+                          zone_high: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_high,
+                        })
+                      : "No live price";
+                const exec = applyBreadthToAction(
+                  applyEarningsRiskToAction(mapExecutionState(status), earningsRiskBySymbol[symbol] ?? null),
+                  breadth
+                );
 
-                      <span
-                        className={
-                          row.signal === "BUY"
-                            ? "shrink-0 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
-                            : row.signal === "WATCH"
-                              ? "shrink-0 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700"
-                              : "shrink-0 rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
-                        }
-                      >
-                        {row.signal}
-                      </span>
-                    </div>
-                  </a>
-                </Link>
-              ))}
+                return (
+                  <Link
+                    key={row.symbol}
+                    href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol))}`}
+                    legacyBehavior
+                  >
+                    <a className="block w-full cursor-pointer rounded-xl border border-[#eadfce] bg-[#fffdf8] px-4 py-3 transition hover:-translate-y-[1px] hover:border-[#dac9ab] hover:bg-[#fff9f0]">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-xl font-semibold tracking-tight text-slate-900">{symbol}</div>
+                            {sourceLabel ? (
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${sourceBadgeClass}`}>
+                                {sourceLabel}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                            <div className="rounded-lg border border-[#e7dccb] bg-[#fffaf2] px-2.5 py-1.5">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">Last</div>
+                              <div className="font-semibold text-slate-800">{fmtPrice(last)}</div>
+                            </div>
+                            <div className="rounded-lg border border-[#e7dccb] bg-[#fffaf2] px-2.5 py-1.5">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">Entry</div>
+                              <div className="font-semibold text-slate-800">{fmtPrice(entry)}</div>
+                            </div>
+                            <div className="rounded-lg border border-[#e7dccb] bg-[#fffaf2] px-2.5 py-1.5">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">Delta</div>
+                              <div
+                                className={`font-semibold ${
+                                  typeof delta === "number" && Number.isFinite(delta)
+                                    ? delta >= 0
+                                      ? "text-emerald-700"
+                                      : "text-rose-700"
+                                    : "text-slate-800"
+                                }`}
+                              >
+                                {fmtSignedPct(delta)}
+                              </div>
+                            </div>
+                            <div className="rounded-lg border border-[#e7dccb] bg-[#fffaf2] px-2.5 py-1.5">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">ATR Dist</div>
+                              <div className="font-semibold text-slate-800">
+                                {atrDist !== null && Number.isFinite(atrDist) ? `${atrDist.toFixed(1)} ATR` : "—"}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
+                              {exec.action}
+                            </span>
+                            <span className="rounded-full border border-[#e4d7c3] bg-[#fff8ee] px-2 py-0.5 text-[11px] text-slate-600">
+                              {exec.reasonLabel}
+                            </span>
+                            {mismatch ? (
+                              <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">
+                                MISMATCH
+                              </span>
+                            ) : null}
+                            {earningsRiskBySymbol[symbol]?.earningsLabel ? (
+                              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                                {earningsRiskBySymbol[symbol]?.earningsLabel}
+                              </span>
+                            ) : null}
+                            {exec.breadthLabel ? (
+                              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                                {exec.breadthLabel}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                        <span
+                          className={
+                            row.signal === "BUY"
+                              ? "shrink-0 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
+                              : row.signal === "WATCH"
+                                ? "shrink-0 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700"
+                                : "shrink-0 rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
+                          }
+                        >
+                          {row.signal}
+                        </span>
+                      </div>
+                    </a>
+                  </Link>
+                );
+              })}
             </div>
           </section>
           <div className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-5">
