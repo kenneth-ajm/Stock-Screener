@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
 import { mapExecutionState } from "@/lib/execution_state";
+import { applyEarningsRiskToAction, type EarningsRisk } from "@/lib/earnings_risk";
 
 type StrategyVersion = "v2_core_momentum" | "v1_trend_hold";
 
@@ -41,6 +42,7 @@ type QuoteMap = Record<
     source: "snapshot" | "eod_close";
   } | null
 >;
+type EarningsRiskMap = Record<string, EarningsRisk>;
 const PRICE_MISMATCH_THRESHOLD_PCT = 0.6;
 
 function round1(n: number) {
@@ -83,6 +85,7 @@ export default function IdeasWorkspaceClient({
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [quoteBySymbol, setQuoteBySymbol] = useState<QuoteMap>({});
+  const [earningsBySymbol, setEarningsBySymbol] = useState<EarningsRiskMap>({});
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [entryFee, setEntryFee] = useState("");
   const [exitFee, setExitFee] = useState("");
@@ -134,6 +137,34 @@ export default function IdeasWorkspaceClient({
       .catch(() => {
         if (!mounted) return;
         setQuoteBySymbol({});
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [data?.rows]);
+
+  useEffect(() => {
+    const symbols = (data?.rows ?? []).slice(0, 10).map((r) => r.symbol).filter(Boolean);
+    if (symbols.length === 0) {
+      setEarningsBySymbol({});
+      return;
+    }
+    let mounted = true;
+    fetch("/api/earnings-risk", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ symbols }),
+      cache: "no-store",
+    })
+      .then((r) => r.json())
+      .then((payload) => {
+        if (!mounted) return;
+        const map = (payload?.earnings ?? {}) as EarningsRiskMap;
+        setEarningsBySymbol(map);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setEarningsBySymbol({});
       });
     return () => {
       mounted = false;
@@ -434,6 +465,8 @@ export default function IdeasWorkspaceClient({
             <tbody>
               {rows.map((row) => {
                 const q = quoteBySymbol[row.symbol];
+                const sym = String(row.symbol ?? "").trim().toUpperCase();
+                const earnings = earningsBySymbol[sym] ?? null;
                 const rawLive = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
                 const entry = Number(row.entry ?? 0);
                 const mismatch =
@@ -451,7 +484,7 @@ export default function IdeasWorkspaceClient({
                         zone_high: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_high,
                       })
                     : "No live price";
-                const exec = mapExecutionState(reason);
+                const exec = applyEarningsRiskToAction(mapExecutionState(reason), earnings);
                 return (
                   <tr
                     key={row.symbol}
@@ -479,6 +512,11 @@ export default function IdeasWorkspaceClient({
                           {exec.action}
                         </span>
                         <div className="text-[11px] text-slate-500">{exec.reasonLabel}</div>
+                        {earnings?.earningsLabel ? (
+                          <div className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                            {earnings.earningsLabel}
+                          </div>
+                        ) : null}
                       </div>
                     </td>
                     <td className="p-3">{Number(row.sizing?.est_cost ?? 0).toFixed(2)}</td>
@@ -534,18 +572,25 @@ export default function IdeasWorkspaceClient({
                   </div>
                   <div className="mt-2 space-y-1">
                     {(() => {
+                      const sym = String(selected.symbol ?? "").trim().toUpperCase();
+                      const earnings = earningsBySymbol[sym] ?? null;
                       const mismatch =
                         livePrice != null &&
                         selected.entry > 0 &&
                         Math.abs((livePrice - selected.entry) / selected.entry) > PRICE_MISMATCH_THRESHOLD_PCT;
                       const reason = mismatch ? "Price mismatch" : livePrice != null ? entryStatus : "No live price";
-                      const exec = mapExecutionState(reason);
+                      const exec = applyEarningsRiskToAction(mapExecutionState(reason), earnings);
                       return (
                         <>
                           <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
                             {exec.action}
                           </span>
                           <div className="text-[11px] text-slate-500">{exec.reasonLabel}</div>
+                          {earnings?.earningsLabel ? (
+                            <div className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                              {earnings.earningsLabel}
+                            </div>
+                          ) : null}
                         </>
                       );
                     })()}

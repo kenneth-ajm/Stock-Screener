@@ -6,6 +6,7 @@ import { getLCTD } from "@/lib/scan_status";
 import { POST as quotesPost } from "@/app/api/quotes/route";
 import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
 import { mapExecutionState } from "@/lib/execution_state";
+import { applyEarningsRiskToAction, lookupEarningsRiskForSymbols } from "@/lib/earnings_risk";
 
 function money(v: number | null | undefined) {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
@@ -206,6 +207,7 @@ export default async function DashboardPage() {
       topQuoteBySymbol = {};
     }
   }
+  const earningsRiskBySymbol = await lookupEarningsRiskForSymbols(topSymbols);
   if (topSymbols.length > 0) {
     for (const symbol of topSymbols) {
       const existing = topQuoteBySymbol[symbol];
@@ -456,7 +458,8 @@ export default async function DashboardPage() {
                                     zone_high: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_high,
                                   })
                                 : "No live price";
-                            const exec = mapExecutionState(status);
+                            const baseExec = mapExecutionState(status);
+                            const exec = applyEarningsRiskToAction(baseExec, earningsRiskBySymbol[symbol] ?? null);
                             const statusClass =
                               status === "Within zone"
                                 ? "border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -473,6 +476,11 @@ export default async function DashboardPage() {
                                 {status !== "No live price" ? (
                                   <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass}`}>
                                     {status}
+                                  </span>
+                                ) : null}
+                                {earningsRiskBySymbol[symbol]?.earningsLabel ? (
+                                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                                    {earningsRiskBySymbol[symbol]?.earningsLabel}
                                   </span>
                                 ) : null}
                               </div>
@@ -500,7 +508,10 @@ export default async function DashboardPage() {
                                   zone_high: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_high,
                                 })
                               : "No live price";
-                            return mapExecutionState(reason).reasonLabel;
+                            return applyEarningsRiskToAction(
+                              mapExecutionState(reason),
+                              earningsRiskBySymbol[symbol] ?? null
+                            ).reasonLabel;
                           })()}
                         </div>
                       </div>
