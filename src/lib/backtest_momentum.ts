@@ -21,6 +21,8 @@ export type BacktestTrade = {
 
 export type BacktestSummary = {
   total_trades: number;
+  triggered_trades: number;
+  not_triggered_trades: number;
   skipped_trades: number;
   win_rate: number;
   avg_return_pct: number;
@@ -54,6 +56,7 @@ type SignalRow = {
 const DEFAULT_UNIVERSE = "core_800";
 const MOMENTUM_STRATEGY = "v2_core_momentum";
 const DEFAULT_MAX_HOLD_DAYS = 7;
+const MAX_WAIT_DAYS = 5;
 
 function toNum(v: unknown) {
   const n = Number(v);
@@ -74,7 +77,11 @@ function diffDays(a: string, b: string) {
   return Math.max(0, Math.round(ms / (24 * 60 * 60 * 1000)));
 }
 
-function summarizeTrades(trades: BacktestTrade[], skipped_trades: number): BacktestSummary {
+function summarizeTrades(
+  trades: BacktestTrade[],
+  skipped_trades: number,
+  not_triggered_trades: number
+): BacktestSummary {
   const total = trades.length;
   const wins = trades.filter((t) => t.return_pct > 0).length;
   const winRate = total > 0 ? wins / total : 0;
@@ -109,6 +116,8 @@ function summarizeTrades(trades: BacktestTrade[], skipped_trades: number): Backt
 
   return {
     total_trades: total,
+    triggered_trades: total,
+    not_triggered_trades,
     skipped_trades,
     win_rate: clamp(winRate, 0, 1),
     avg_return_pct: avgReturn,
@@ -150,11 +159,12 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
       assumptions: {
         source: "daily_scans BUY signals",
         strategy_version: strategy,
-        entry_rule: "next_day_open_else_next_day_close",
+        entry_rule: "wait_up_to_5_days_for_high_to_reach_signal_entry",
         exits: "stop, tp1, time_stop",
         max_hold_days_fallback: DEFAULT_MAX_HOLD_DAYS,
+        max_wait_days: MAX_WAIT_DAYS,
       },
-      summary: summarizeTrades([], 0),
+      summary: summarizeTrades([], 0, 0),
       trades: [] as BacktestTrade[],
     };
   }
@@ -187,6 +197,7 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
 
   const trades: BacktestTrade[] = [];
   let skipped = 0;
+  let notTriggered = 0;
 
   for (const s of signals) {
     const sym = String(s.symbol ?? "").trim().toUpperCase();
@@ -195,13 +206,34 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
       skipped += 1;
       continue;
     }
-    const entryIdx = bars.findIndex((b) => b.date > s.date);
-    if (entryIdx < 0) {
+    const signalEntry = toNum(s.entry);
+    if (signalEntry === null || !(signalEntry > 0)) {
       skipped += 1;
       continue;
     }
+
+    const waitStartIdx = bars.findIndex((b) => b.date > s.date);
+    if (waitStartIdx < 0) {
+      skipped += 1;
+      continue;
+    }
+
+    const waitEndIdx = Math.min(bars.length - 1, waitStartIdx + MAX_WAIT_DAYS - 1);
+    let entryIdx = -1;
+    for (let i = waitStartIdx; i <= waitEndIdx; i++) {
+      const high = toNum(bars[i]?.high);
+      if (high !== null && high >= signalEntry) {
+        entryIdx = i;
+        break;
+      }
+    }
+    if (entryIdx < 0) {
+      notTriggered += 1;
+      continue;
+    }
+
     const entryBar = bars[entryIdx];
-    const entry = toNum(entryBar?.open) ?? toNum(entryBar?.close);
+    const entry = signalEntry;
     const stop = toNum(s.stop);
     const tp1 = toNum(s.tp1);
     if (entry === null || !(entry > 0) || stop === null || !(stop > 0) || tp1 === null || !(tp1 > 0)) {
@@ -265,11 +297,12 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
     assumptions: {
       source: "daily_scans BUY signals",
       strategy_version: strategy,
-      entry_rule: "next_day_open_else_next_day_close",
+      entry_rule: "wait_up_to_5_days_for_high_to_reach_signal_entry",
       exits: "stop, tp1, time_stop",
       max_hold_days_fallback: DEFAULT_MAX_HOLD_DAYS,
+      max_wait_days: MAX_WAIT_DAYS,
     },
-    summary: summarizeTrades(sortedTrades, skipped),
+    summary: summarizeTrades(sortedTrades, skipped, notTriggered),
     trades: sortedTrades,
   };
 }
