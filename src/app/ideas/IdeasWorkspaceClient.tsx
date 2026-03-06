@@ -41,6 +41,21 @@ type QuoteMap = Record<
   } | null
 >;
 
+function round1(n: number) {
+  return Math.round(n * 10) / 10;
+}
+
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
+function parseNullableNumber(v: string) {
+  const t = v.trim();
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
 export default function IdeasWorkspaceClient({
   initialStrategy = "v2_core_momentum",
   initialSymbol = null,
@@ -64,6 +79,12 @@ export default function IdeasWorkspaceClient({
   const [entryFee, setEntryFee] = useState("");
   const [exitFee, setExitFee] = useState("");
   const [tpPlan, setTpPlan] = useState<"tp1_only" | "tp1_tp2" | "none">("tp1_tp2");
+  const [tp1Pct, setTp1Pct] = useState("");
+  const [tp1Price, setTp1Price] = useState("");
+  const [tp1SizePct, setTp1SizePct] = useState("50");
+  const [tp2Pct, setTp2Pct] = useState("");
+  const [tp2Price, setTp2Price] = useState("");
+  const [tp2SizePct, setTp2SizePct] = useState("50");
 
   useEffect(() => {
     let mounted = true;
@@ -109,6 +130,12 @@ export default function IdeasWorkspaceClient({
 
   useEffect(() => {
     if (!selected) return;
+    const modelEntry = Number(selected.entry ?? 0);
+    const modelTp1 = Number(selected.tp1 ?? 0);
+    const modelTp2 = Number(selected.tp2 ?? 0);
+    const defaultTp1Pct = modelEntry > 0 ? round1(((modelTp1 / modelEntry) - 1) * 100) : 0;
+    const defaultTp2Pct = modelEntry > 0 ? round1(((modelTp2 / modelEntry) - 1) * 100) : 0;
+
     setFill(String(selected.entry ?? ""));
     setShares(String(selected.sizing?.shares ?? 0));
     setDetails(null);
@@ -116,6 +143,12 @@ export default function IdeasWorkspaceClient({
     setEntryFee("");
     setExitFee("");
     setTpPlan("tp1_tp2");
+    setTp1Pct(defaultTp1Pct > 0 ? String(defaultTp1Pct) : "");
+    setTp2Pct(defaultTp2Pct > 0 ? String(defaultTp2Pct) : "");
+    setTp1Price(modelTp1 > 0 ? modelTp1.toFixed(2) : "");
+    setTp2Price(modelTp2 > 0 ? modelTp2.toFixed(2) : "");
+    setTp1SizePct("50");
+    setTp2SizePct("50");
     const q = quoteBySymbol[selected.symbol];
     setLivePrice(typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null);
   }, [selected, quoteBySymbol]);
@@ -178,47 +211,108 @@ export default function IdeasWorkspaceClient({
     const entry = Number(fill);
     const stop = Number(selected.stop);
     const qty = Math.floor(Number(shares));
+    const tpAnchorEntry = Number(selected.entry);
     if (!(entry > 0) || !(stop > 0) || !(qty > 0) || !(entry > stop)) {
       setError("Enter valid entry, stop, and shares.");
+      return;
+    }
+    if (!Number.isFinite(tpAnchorEntry) || tpAnchorEntry <= 0) {
+      setError("Model entry is invalid for TP planning.");
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      const entryFeeValue =
-        entryFee.trim() === "" ? null : Number.isFinite(Number(entryFee)) ? Number(entryFee) : null;
-      const exitFeeValue =
-        exitFee.trim() === "" ? null : Number.isFinite(Number(exitFee)) ? Number(exitFee) : null;
-      const tpPayload =
-        tpPlan === "none"
-          ? {
-              tp_plan: "none" as const,
-              tp1_pct: null,
-              tp2_pct: null,
-              tp1_price: null,
-              tp2_price: null,
-              tp1_size_pct: null,
-              tp2_size_pct: null,
+      const entryFeeValue = parseNullableNumber(entryFee);
+      const exitFeeValue = parseNullableNumber(exitFee);
+      if (entryFeeValue !== null && entryFeeValue < 0) {
+        setError("Entry fee must be blank or >= 0.");
+        return;
+      }
+      if (exitFeeValue !== null && exitFeeValue < 0) {
+        setError("Exit fee must be blank or >= 0.");
+        return;
+      }
+
+      let finalTp1Pct: number | null = null;
+      let finalTp1Price: number | null = null;
+      let finalTp1SizePct: number | null = null;
+      let finalTp2Pct: number | null = null;
+      let finalTp2Price: number | null = null;
+      let finalTp2SizePct: number | null = null;
+
+      if (tpPlan !== "none") {
+        const tp1PctInput = parseNullableNumber(tp1Pct);
+        const tp1PriceInput = parseNullableNumber(tp1Price);
+        if (tp1PriceInput !== null) {
+          const derivedPct = round1(((tp1PriceInput / tpAnchorEntry) - 1) * 100);
+          if (derivedPct <= 0 || tp1PriceInput <= tpAnchorEntry) {
+            setError("TP1 must be above entry.");
+            return;
+          }
+          finalTp1Pct = derivedPct;
+          finalTp1Price = round2(tp1PriceInput);
+        } else if (tp1PctInput !== null && tp1PctInput > 0) {
+          finalTp1Pct = round1(tp1PctInput);
+          finalTp1Price = round2(tpAnchorEntry * (1 + finalTp1Pct / 100));
+        } else {
+          setError("TP1 % or TP1 price must be provided.");
+          return;
+        }
+
+        if (tpPlan === "tp1_only") {
+          const size = parseNullableNumber(tp1SizePct);
+          finalTp1SizePct = size == null ? 100 : Math.round(size);
+          finalTp2SizePct = 0;
+        }
+
+        if (tpPlan === "tp1_tp2") {
+          const tp2PctInput = parseNullableNumber(tp2Pct);
+          const tp2PriceInput = parseNullableNumber(tp2Price);
+          if (tp2PriceInput !== null) {
+            const derivedPct = round1(((tp2PriceInput / tpAnchorEntry) - 1) * 100);
+            if (derivedPct <= 0 || tp2PriceInput <= tpAnchorEntry) {
+              setError("TP2 must be above entry.");
+              return;
             }
-          : tpPlan === "tp1_only"
-            ? {
-                tp_plan: "tp1_only" as const,
-                tp1_pct: Number(modelTp1Pct.toFixed(2)),
-                tp2_pct: null,
-                tp1_price: Number((selected.tp1 ?? 0).toFixed(2)),
-                tp2_price: null,
-                tp1_size_pct: 100,
-                tp2_size_pct: 0,
-              }
-            : {
-                tp_plan: "tp1_tp2" as const,
-                tp1_pct: Number(modelTp1Pct.toFixed(2)),
-                tp2_pct: Number(modelTp2Pct.toFixed(2)),
-                tp1_price: Number((selected.tp1 ?? 0).toFixed(2)),
-                tp2_price: Number((selected.tp2 ?? 0).toFixed(2)),
-                tp1_size_pct: 50,
-                tp2_size_pct: 50,
-              };
+            finalTp2Pct = derivedPct;
+            finalTp2Price = round2(tp2PriceInput);
+          } else if (tp2PctInput !== null && tp2PctInput > 0) {
+            finalTp2Pct = round1(tp2PctInput);
+            finalTp2Price = round2(tpAnchorEntry * (1 + finalTp2Pct / 100));
+          } else {
+            setError("TP2 % or TP2 price must be provided.");
+            return;
+          }
+
+          const size1 = parseNullableNumber(tp1SizePct);
+          const size2 = parseNullableNumber(tp2SizePct);
+          if (
+            size1 === null ||
+            size2 === null ||
+            size1 < 0 ||
+            size1 > 100 ||
+            size2 < 0 ||
+            size2 > 100 ||
+            Math.round(size1) + Math.round(size2) !== 100
+          ) {
+            setError("TP1 size % + TP2 size % must sum to 100.");
+            return;
+          }
+          finalTp1SizePct = Math.round(size1);
+          finalTp2SizePct = Math.round(size2);
+        }
+      }
+
+      const tpPayload = {
+        tp_plan: tpPlan,
+        tp1_pct: finalTp1Pct,
+        tp2_pct: finalTp2Pct,
+        tp1_price: finalTp1Price,
+        tp2_price: finalTp2Price,
+        tp1_size_pct: finalTp1SizePct,
+        tp2_size_pct: finalTp2SizePct,
+      };
 
       const res = await fetch("/api/positions/add", {
         method: "POST",
@@ -473,7 +567,35 @@ export default function IdeasWorkspaceClient({
                   <label className="block text-xs text-slate-500">TP Plan</label>
                   <select
                     value={tpPlan}
-                    onChange={(e) => setTpPlan(e.target.value as "tp1_only" | "tp1_tp2" | "none")}
+                    onChange={(e) => {
+                      const nextPlan = e.target.value as "tp1_only" | "tp1_tp2" | "none";
+                      const anchor = Number(selected.entry ?? 0);
+                      const defaultTp1 = modelTp1Pct > 0 ? modelTp1Pct : strategy === "v1_trend_hold" ? 10 : 5;
+                      const defaultTp2 = modelTp2Pct > 0 ? modelTp2Pct : strategy === "v1_trend_hold" ? 20 : 10;
+                      setTpPlan(nextPlan);
+                      if (nextPlan === "none") {
+                        setTp1Pct("");
+                        setTp1Price("");
+                        setTp2Pct("");
+                        setTp2Price("");
+                        setTp1SizePct("");
+                        setTp2SizePct("");
+                        return;
+                      }
+                      setTp1Pct(String(round1(defaultTp1)));
+                      setTp1Price(Number.isFinite(anchor) && anchor > 0 ? round2(anchor * (1 + defaultTp1 / 100)).toFixed(2) : "");
+                      if (nextPlan === "tp1_only") {
+                        setTp1SizePct("100");
+                        setTp2Pct("");
+                        setTp2Price("");
+                        setTp2SizePct("0");
+                      } else {
+                        setTp2Pct(String(round1(defaultTp2)));
+                        setTp2Price(Number.isFinite(anchor) && anchor > 0 ? round2(anchor * (1 + defaultTp2 / 100)).toFixed(2) : "");
+                        setTp1SizePct("50");
+                        setTp2SizePct("50");
+                      }
+                    }}
                     className="mt-1 w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2 text-sm"
                   >
                     <option value="tp1_only">TP1 only</option>
@@ -481,6 +603,8 @@ export default function IdeasWorkspaceClient({
                     <option value="none">No TP</option>
                   </select>
                 </div>
+
+                <div className="mb-3 text-xs text-slate-500">Based on entry: {selected.entry.toFixed(2)}</div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div
@@ -491,8 +615,8 @@ export default function IdeasWorkspaceClient({
                     }`}
                   >
                     <div className="text-[11px] font-semibold uppercase tracking-wide">TP1</div>
-                    <div className="mt-1 text-lg font-semibold">{selected.tp1.toFixed(2)}</div>
-                    <div className="text-xs">+{modelTp1Pct.toFixed(1)}%</div>
+                    <div className="mt-1 text-lg font-semibold">{tp1Price || selected.tp1.toFixed(2)}</div>
+                    <div className="text-xs">+{tp1Pct || modelTp1Pct.toFixed(1)}%</div>
                   </div>
                   <div
                     className={`rounded-xl border p-3 ${
@@ -502,10 +626,104 @@ export default function IdeasWorkspaceClient({
                     }`}
                   >
                     <div className="text-[11px] font-semibold uppercase tracking-wide">TP2</div>
-                    <div className="mt-1 text-lg font-semibold">{selected.tp2.toFixed(2)}</div>
-                    <div className="text-xs">+{modelTp2Pct.toFixed(1)}%</div>
+                    <div className="mt-1 text-lg font-semibold">{tp2Price || selected.tp2.toFixed(2)}</div>
+                    <div className="text-xs">+{tp2Pct || modelTp2Pct.toFixed(1)}%</div>
                   </div>
                 </div>
+                {tpPlan !== "none" ? (
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-xs text-slate-500">TP1 %</label>
+                      <input
+                        value={tp1Pct}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setTp1Pct(v);
+                          const n = Number(v);
+                          const anchor = Number(selected.entry ?? 0);
+                          if (Number.isFinite(n) && n > 0 && Number.isFinite(anchor) && anchor > 0) {
+                            setTp1Price(round2(anchor * (1 + n / 100)).toFixed(2));
+                          }
+                        }}
+                        className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
+                        inputMode="decimal"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-500">TP1 price</label>
+                      <input
+                        value={tp1Price}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setTp1Price(v);
+                          const p = Number(v);
+                          const anchor = Number(selected.entry ?? 0);
+                          if (Number.isFinite(p) && p > 0 && Number.isFinite(anchor) && anchor > 0) {
+                            setTp1Pct(String(round1(((p / anchor) - 1) * 100)));
+                          }
+                        }}
+                        className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
+                        inputMode="decimal"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-500">TP1 size %</label>
+                      <input
+                        value={tp1SizePct}
+                        onChange={(e) => setTp1SizePct(e.target.value)}
+                        className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
+                        inputMode="numeric"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                {tpPlan === "tp1_tp2" ? (
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-xs text-slate-500">TP2 %</label>
+                      <input
+                        value={tp2Pct}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setTp2Pct(v);
+                          const n = Number(v);
+                          const anchor = Number(selected.entry ?? 0);
+                          if (Number.isFinite(n) && n > 0 && Number.isFinite(anchor) && anchor > 0) {
+                            setTp2Price(round2(anchor * (1 + n / 100)).toFixed(2));
+                          }
+                        }}
+                        className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
+                        inputMode="decimal"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-500">TP2 price</label>
+                      <input
+                        value={tp2Price}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setTp2Price(v);
+                          const p = Number(v);
+                          const anchor = Number(selected.entry ?? 0);
+                          if (Number.isFinite(p) && p > 0 && Number.isFinite(anchor) && anchor > 0) {
+                            setTp2Pct(String(round1(((p / anchor) - 1) * 100)));
+                          }
+                        }}
+                        className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
+                        inputMode="decimal"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-500">TP2 size %</label>
+                      <input
+                        value={tp2SizePct}
+                        onChange={(e) => setTp2SizePct(e.target.value)}
+                        className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
+                        inputMode="numeric"
+                      />
+                    </div>
+                  </div>
+                ) : null}
                 {tpPlan === "none" ? (
                   <div className="mt-2 text-xs text-slate-500">No TP will be saved for this position.</div>
                 ) : null}
