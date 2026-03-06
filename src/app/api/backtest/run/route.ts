@@ -20,15 +20,9 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json().catch(() => ({}))) as BacktestBody;
     const strategy = String(body.strategy_version ?? "v2_core_momentum").trim() || "v2_core_momentum";
-    if (strategy !== "v2_core_momentum") {
-      return NextResponse.json(
-        { ok: false, error: "Backtesting v1 currently supports v2_core_momentum only" },
-        { status: 400 }
-      );
-    }
     const supabase = admin() as any;
     const inputs = {
-      strategy_version: "v2_core_momentum",
+      strategy_version: strategy,
       universe_slug: String(body.universe_slug ?? "core_800").trim() || "core_800",
       start_date: String(body.start_date ?? "").slice(0, 10),
       end_date: String(body.end_date ?? "").slice(0, 10),

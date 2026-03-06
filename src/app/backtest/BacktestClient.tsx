@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 type BacktestSummary = {
+  candidate_rows: number;
   total_trades: number;
   triggered_trades: number;
   not_triggered_trades: number;
@@ -56,6 +57,20 @@ function pct(v: number | null | undefined, scale = 1) {
 }
 
 export default function BacktestClient() {
+  const DATASETS = [
+    {
+      key: "v2_core_momentum__core_800",
+      label: "Momentum (v2_core_momentum / core_800)",
+      strategy_version: "v2_core_momentum",
+      universe_slug: "core_800",
+    },
+    {
+      key: "v1__liquid_2000",
+      label: "Legacy Momentum (v1 / liquid_2000)",
+      strategy_version: "v1",
+      universe_slug: "liquid_2000",
+    },
+  ] as const;
   const now = useMemo(() => new Date(), []);
   const [startDate, setStartDate] = useState(() => {
     const d = new Date(now);
@@ -63,8 +78,12 @@ export default function BacktestClient() {
     return isoDate(d);
   });
   const [endDate, setEndDate] = useState(() => isoDate(now));
+  const [datasetKey, setDatasetKey] = useState<(typeof DATASETS)[number]["key"]>(
+    "v2_core_momentum__core_800"
+  );
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestResponse | null>(null);
+  const selectedDataset = DATASETS.find((d) => d.key === datasetKey) ?? DATASETS[0];
 
   async function runBacktest() {
     setLoading(true);
@@ -74,8 +93,8 @@ export default function BacktestClient() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          strategy_version: "v2_core_momentum",
-          universe_slug: "core_800",
+          strategy_version: selectedDataset.strategy_version,
+          universe_slug: selectedDataset.universe_slug,
           start_date: startDate,
           end_date: endDate,
         }),
@@ -120,10 +139,18 @@ export default function BacktestClient() {
             />
           </div>
           <div>
-            <label className="block text-xs text-slate-500">Strategy</label>
-            <div className="mt-1 rounded-lg border border-[#eadfce] bg-[#f9f2e6] px-3 py-2 text-sm font-medium text-slate-700">
-              Momentum (v2_core_momentum)
-            </div>
+            <label className="block text-xs text-slate-500">Dataset</label>
+            <select
+              value={datasetKey}
+              onChange={(e) => setDatasetKey(e.target.value as (typeof DATASETS)[number]["key"])}
+              className="mt-1 rounded-lg border border-[#eadfce] bg-white px-3 py-2 text-sm font-medium text-slate-700"
+            >
+              {DATASETS.map((d) => (
+                <option key={d.key} value={d.key}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
           </div>
           <button
             onClick={runBacktest}
@@ -146,6 +173,10 @@ export default function BacktestClient() {
 
       {summary ? (
         <div className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-xl border border-[#eadfce] bg-[#fffdf8] p-4">
+            <div className="text-xs text-slate-500">Candidate BUY rows</div>
+            <div className="mt-1 text-2xl font-semibold">{summary.candidate_rows}</div>
+          </div>
           <div className="rounded-xl border border-[#eadfce] bg-[#fffdf8] p-4">
             <div className="text-xs text-slate-500">Total trades</div>
             <div className="mt-1 text-2xl font-semibold">{summary.total_trades}</div>
@@ -181,6 +212,11 @@ export default function BacktestClient() {
               <span>Time stop: <b>{summary.exit_reason_counts.time_stop}</b></span>
             </div>
           </div>
+          {summary.candidate_rows <= 5 ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700 md:col-span-3">
+              Only {summary.candidate_rows} candidate BUY rows found for this strategy/date range.
+            </div>
+          ) : null}
         </div>
       ) : null}
 

@@ -20,6 +20,7 @@ export type BacktestTrade = {
 };
 
 export type BacktestSummary = {
+  candidate_rows: number;
   total_trades: number;
   triggered_trades: number;
   not_triggered_trades: number;
@@ -78,6 +79,7 @@ function diffDays(a: string, b: string) {
 }
 
 function summarizeTrades(
+  candidate_rows: number,
   trades: BacktestTrade[],
   skipped_trades: number,
   not_triggered_trades: number
@@ -115,6 +117,7 @@ function summarizeTrades(
   };
 
   return {
+    candidate_rows,
     total_trades: total,
     triggered_trades: total,
     not_triggered_trades,
@@ -134,7 +137,7 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
   const start = String(opts.input.start_date ?? "").slice(0, 10);
   const end = String(opts.input.end_date ?? "").slice(0, 10);
   const universe = String(opts.input.universe_slug ?? DEFAULT_UNIVERSE).trim() || DEFAULT_UNIVERSE;
-  const strategy = MOMENTUM_STRATEGY;
+  const strategy = String(opts.input.strategy_version ?? MOMENTUM_STRATEGY).trim() || MOMENTUM_STRATEGY;
 
   if (!start || !end) {
     throw new Error("start_date and end_date are required");
@@ -164,7 +167,7 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
         max_hold_days_fallback: DEFAULT_MAX_HOLD_DAYS,
         max_wait_days: MAX_WAIT_DAYS,
       },
-      summary: summarizeTrades([], 0, 0),
+      summary: summarizeTrades(0, [], 0, 0),
       trades: [] as BacktestTrade[],
     };
   }
@@ -302,7 +305,7 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
       max_hold_days_fallback: DEFAULT_MAX_HOLD_DAYS,
       max_wait_days: MAX_WAIT_DAYS,
     },
-    summary: summarizeTrades(sortedTrades, skipped, notTriggered),
+    summary: summarizeTrades(signals.length, sortedTrades, skipped, notTriggered),
     trades: sortedTrades,
   };
 }
