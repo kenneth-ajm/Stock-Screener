@@ -1,5 +1,6 @@
 import Link from "next/link";
 import BacktestClient from "./BacktestClient";
+import MomentumBackfillClient from "./MomentumBackfillClient";
 import AppShell from "@/components/app-shell";
 import { getWorkspaceContext } from "@/lib/workspace_context";
 
@@ -110,6 +111,7 @@ export default async function StrategyPage() {
       </section>
 
         <BacktestClient />
+        <MomentumBackfillClient />
       </div>
     </AppShell>
   );

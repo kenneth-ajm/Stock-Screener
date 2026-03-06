@@ -71,7 +71,31 @@ export async function resolveScanDate(opts: {
   supabase: ScanEngineClient;
   requestedScanDate?: string | null;
 }): Promise<ResolveScanDateResult> {
+  const requested = String(opts.requestedScanDate ?? "").trim();
   const resolved = await getLCTD(opts.supabase);
+  if (!resolved.ok || !resolved.scan_date) {
+    return {
+      ok: false,
+      scan_date_used: null,
+      lctd_source: resolved.lctd_source ?? "none",
+      error: resolved.error ?? "Unable to resolve scan date",
+    };
+  }
+  if (requested) {
+    if (requested > resolved.scan_date) {
+      return {
+        ok: false,
+        scan_date_used: null,
+        lctd_source: resolved.lctd_source,
+        error: `Requested scan_date ${requested} is after LCTD ${resolved.scan_date}`,
+      };
+    }
+    return {
+      ok: true,
+      scan_date_used: requested,
+      lctd_source: resolved.lctd_source,
+    };
+  }
   return {
     ok: resolved.ok,
     scan_date_used: resolved.scan_date,
@@ -336,7 +360,8 @@ export async function runScanPipeline(opts: {
   const strategy_version = opts.strategy_version ?? CORE_MOMENTUM_DEFAULT_VERSION;
   const startedAt = Date.now();
 
-  const dateResolved = await resolveScanDate({ supabase: supa });
+  const requestedScanDate = opts.scan_date ? String(opts.scan_date).slice(0, 10) : null;
+  const dateResolved = await resolveScanDate({ supabase: supa, requestedScanDate });
   if (!dateResolved.ok || !dateResolved.scan_date_used) {
     return {
       ok: false,
@@ -347,13 +372,15 @@ export async function runScanPipeline(opts: {
   }
   const scanDate = dateResolved.scan_date_used;
 
-  // Guardrail: remove impossible future scan rows for this universe/strategy.
-  await supa
-    .from("daily_scans")
-    .delete()
-    .eq("universe_slug", universe_slug)
-    .eq("strategy_version", strategy_version)
-    .gt("date", scanDate);
+  // Guardrail: remove impossible future scan rows only for current LCTD scans.
+  if (!requestedScanDate || requestedScanDate === scanDate) {
+    await supa
+      .from("daily_scans")
+      .delete()
+      .eq("universe_slug", universe_slug)
+      .eq("strategy_version", strategy_version)
+      .gt("date", scanDate);
+  }
 
   const symbolsResult = await loadUniverseSymbols({
     supabase: supa,
