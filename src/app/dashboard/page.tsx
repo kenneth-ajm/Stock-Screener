@@ -43,6 +43,7 @@ type QuoteMap = Record<
     source: "snapshot" | "eod_close";
   } | null
 >;
+const PRICE_MISMATCH_THRESHOLD_PCT = 0.6;
 
 export const dynamic = "force-dynamic";
 
@@ -297,8 +298,14 @@ export default async function DashboardPage() {
                           {(() => {
                             const symbol = String(row.symbol ?? "").trim().toUpperCase();
                             const quote = topQuoteBySymbol[symbol];
-                            const last = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
+                            const rawLast = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
                             const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
+                            const mismatch =
+                              rawLast !== null &&
+                              entry !== null &&
+                              entry > 0 &&
+                              Math.abs((rawLast - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
+                            const last = mismatch ? null : rawLast;
                             const delta =
                               last !== null && entry !== null && entry > 0 ? ((last - entry) / entry) * 100 : null;
                             const sourceBadgeClass =
@@ -327,6 +334,11 @@ export default async function DashboardPage() {
                                     {sourceLabel}
                                   </span>
                                 ) : null}
+                                {mismatch ? (
+                                  <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+                                    MISMATCH
+                                  </span>
+                                ) : null}
                               </>
                             );
                           })()}
@@ -335,9 +347,18 @@ export default async function DashboardPage() {
                           {(() => {
                             const symbol = String(row.symbol ?? "").trim().toUpperCase();
                             const quote = topQuoteBySymbol[symbol];
-                            const live = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
+                            const rawLive = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
                             const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
+                            const mismatch =
+                              rawLive !== null &&
+                              entry !== null &&
+                              entry > 0 &&
+                              Math.abs((rawLive - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
+                            const live = mismatch ? null : rawLive;
                             const status =
+                              mismatch
+                                ? "Price mismatch"
+                                :
                               live !== null && entry !== null && entry > 0
                                 ? getEntryStatus({
                                     price: live,
@@ -372,9 +393,17 @@ export default async function DashboardPage() {
                           {(() => {
                             const symbol = String(row.symbol ?? "").trim().toUpperCase();
                             const quote = topQuoteBySymbol[symbol];
-                            const live = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
+                            const rawLive = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
                             const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
-                            const reason = live !== null && entry !== null && entry > 0
+                            const mismatch =
+                              rawLive !== null &&
+                              entry !== null &&
+                              entry > 0 &&
+                              Math.abs((rawLive - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
+                            const live = mismatch ? null : rawLive;
+                            const reason = mismatch
+                              ? "Price mismatch"
+                              : live !== null && entry !== null && entry > 0
                               ? getEntryStatus({
                                   price: live,
                                   zone_low: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_low,

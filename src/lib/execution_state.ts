@@ -18,6 +18,7 @@ export function mapExecutionState(reasonInput: string | null | undefined): Execu
   }
 
   if (
+    reason.includes("mismatch") ||
     reason.includes("too extended") ||
     reason.includes("extended") ||
     reason.includes("stop too wide") ||
@@ -29,4 +30,3 @@ export function mapExecutionState(reasonInput: string | null | undefined): Execu
 
   return { action: "WAIT", reasonLabel };
 }
-

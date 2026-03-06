@@ -111,33 +111,27 @@ export async function POST(req: Request) {
 
   if (missing.length > 0) {
     const supabase = admin() as any;
-    const { data: bars, error } = await supabase
-      .from("price_bars")
-      .select("symbol,date,close")
-      .in("symbol", missing)
-      .eq("source", "polygon")
-      .order("symbol", { ascending: true })
-      .order("date", { ascending: false });
-
-    if (!error && Array.isArray(bars)) {
-      const latestBySymbol = new Map<string, { date: string; close: number }>();
-      for (const row of bars) {
-        const sym = String(row?.symbol ?? "").toUpperCase();
-        if (!sym || latestBySymbol.has(sym)) continue;
+    // Query each missing symbol individually to avoid accidental truncation/order artifacts.
+    const resolved = await Promise.all(
+      missing.map(async (sym) => {
+        const { data, error } = await supabase
+          .from("price_bars")
+          .select("symbol,date,close")
+          .eq("symbol", sym)
+          .order("date", { ascending: false })
+          .limit(1);
+        if (error || !Array.isArray(data) || data.length === 0) return [sym, null] as const;
+        const row = data[0];
         const close = Number(row?.close);
         const date = String(row?.date ?? "");
-        if (!Number.isFinite(close) || close <= 0 || !date) continue;
-        latestBySymbol.set(sym, { date, close });
-      }
-      for (const sym of missing) {
-        const latest = latestBySymbol.get(sym);
-        if (!latest) continue;
-        quotes[sym] = {
-          price: latest.close,
-          asOf: latest.date,
-          source: "eod_close",
-        };
-      }
+        if (!Number.isFinite(close) || close <= 0 || !date) return [sym, null] as const;
+        return [sym, { price: close, asOf: date, source: "eod_close" as const }] as const;
+      })
+    );
+
+    for (const [sym, quote] of resolved) {
+      if (!quote) continue;
+      quotes[sym] = quote;
     }
   }
 

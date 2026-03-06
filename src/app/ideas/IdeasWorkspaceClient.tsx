@@ -41,6 +41,7 @@ type QuoteMap = Record<
     source: "snapshot" | "eod_close";
   } | null
 >;
+const PRICE_MISMATCH_THRESHOLD_PCT = 0.6;
 
 function round1(n: number) {
   return Math.round(n * 10) / 10;
@@ -433,11 +434,17 @@ export default function IdeasWorkspaceClient({
             <tbody>
               {rows.map((row) => {
                 const q = quoteBySymbol[row.symbol];
-                const live = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
+                const rawLive = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
                 const entry = Number(row.entry ?? 0);
+                const mismatch =
+                  rawLive !== null &&
+                  entry > 0 &&
+                  Math.abs((rawLive - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
+                const live = mismatch ? null : rawLive;
                 const deltaPct = live !== null && entry > 0 ? ((live - entry) / entry) * 100 : null;
-                const reason =
-                  live !== null
+                const reason = mismatch
+                    ? "Price mismatch"
+                    : live !== null
                     ? getEntryStatus({
                         price: live,
                         zone_low: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_low,
@@ -459,7 +466,10 @@ export default function IdeasWorkspaceClient({
                     </td>
                     <td className="p-3">{row.rank ?? "—"}</td>
                     <td className="p-3">{entry.toFixed(2)}</td>
-                    <td className="p-3">{live !== null ? live.toFixed(2) : "—"}</td>
+                    <td className="p-3">
+                      {live !== null ? live.toFixed(2) : "—"}
+                      {mismatch ? <span className="ml-2 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">MISMATCH</span> : null}
+                    </td>
                     <td className="p-3">{fmtSignedPct(deltaPct)}</td>
                     <td className="p-3">{Number(row.stop ?? 0).toFixed(2)}</td>
                     <td className="p-3">{Number(row.tp1 ?? 0).toFixed(2)}</td>
@@ -518,11 +528,17 @@ export default function IdeasWorkspaceClient({
                 <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                   <div className="text-xs text-slate-500">Live price</div>
                   <div className="mt-1 font-semibold">
-                    {livePrice != null ? livePrice.toFixed(2) : "—"}
+                    {livePrice != null && selected.entry > 0 && Math.abs((livePrice - selected.entry) / selected.entry) <= PRICE_MISMATCH_THRESHOLD_PCT
+                      ? livePrice.toFixed(2)
+                      : "—"}
                   </div>
                   <div className="mt-2 space-y-1">
                     {(() => {
-                      const reason = livePrice != null ? entryStatus : "No live price";
+                      const mismatch =
+                        livePrice != null &&
+                        selected.entry > 0 &&
+                        Math.abs((livePrice - selected.entry) / selected.entry) > PRICE_MISMATCH_THRESHOLD_PCT;
+                      const reason = mismatch ? "Price mismatch" : livePrice != null ? entryStatus : "No live price";
                       const exec = mapExecutionState(reason);
                       return (
                         <>
