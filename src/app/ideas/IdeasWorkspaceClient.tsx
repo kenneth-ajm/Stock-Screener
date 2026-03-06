@@ -46,6 +46,7 @@ export default function IdeasWorkspaceClient({
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -79,6 +80,7 @@ export default function IdeasWorkspaceClient({
     riskPerShare > 0 && Number.isFinite(riskBudget) ? Math.max(0, Math.floor(riskBudget / riskPerShare)) : 0;
   const sharesNum = Number(shares);
   const positionCost = Number.isFinite(sharesNum) && Number.isFinite(fillNum) ? sharesNum * fillNum : 0;
+  const riskUsed = Number.isFinite(sharesNum) && Number.isFinite(riskPerShare) ? sharesNum * riskPerShare : 0;
 
   async function openDetails() {
     if (!selected || detailsLoading || details) return;
@@ -126,7 +128,8 @@ export default function IdeasWorkspaceClient({
       const payload = await res.json().catch(() => null);
       if (!res.ok || !payload?.ok) throw new Error(payload?.error ?? "Add position failed");
       setSelected(null);
-      window.location.href = "/positions";
+      setToast(`Position added: ${selected.symbol}`);
+      setTimeout(() => setToast(null), 1800);
     } catch (e: any) {
       setError(e?.message ?? "Add position failed");
     } finally {
@@ -142,6 +145,11 @@ export default function IdeasWorkspaceClient({
 
   return (
     <div className="space-y-4">
+      {toast ? (
+        <div className="fixed bottom-5 right-5 z-[60] rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl">
+          {toast}
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-3.5">
         <div className="flex items-center gap-2 rounded-xl border border-[#e5d8c4] bg-[#fbf6ee] p-1.5">
           <button
@@ -279,6 +287,7 @@ export default function IdeasWorkspaceClient({
               <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3 text-xs text-slate-600">
                 <div>Risk/share: {Number.isFinite(riskPerShare) ? riskPerShare.toFixed(2) : "—"}</div>
                 <div>Risk budget: {Number.isFinite(riskBudget) ? riskBudget.toFixed(2) : "—"}</div>
+                <div>Risk used: {Number.isFinite(riskUsed) ? riskUsed.toFixed(2) : "—"}</div>
                 <div>Position cost: {Number.isFinite(positionCost) ? positionCost.toFixed(2) : "—"}</div>
                 <div>TP1 / TP2: {selected.tp1.toFixed(2)} / {selected.tp2.toFixed(2)}</div>
               </div>
