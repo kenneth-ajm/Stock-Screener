@@ -9,6 +9,7 @@ import { mapExecutionState } from "@/lib/execution_state";
 import { applyEarningsRiskToAction, lookupEarningsRiskForSymbols } from "@/lib/earnings_risk";
 import { applyBreadthToAction, computeMarketBreadth } from "@/lib/market_breadth";
 import TickerCheckClient from "./TickerCheckClient";
+import { computeSectorMomentumCandidates } from "@/lib/sector_momentum";
 
 function money(v: number | null | undefined) {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
@@ -146,6 +147,13 @@ export default async function DashboardPage() {
     loadStrategySummary("v2_core_momentum"),
     loadStrategySummary("v1_trend_hold"),
   ]);
+  const sectorMomentum = await computeSectorMomentumCandidates({
+    supabase: supabase as any,
+    scan_date: lctd.lctd,
+    lctd_source: lctd.source,
+    top_group_count: 4,
+    max_candidates: 8,
+  });
   const breadth = await computeMarketBreadth({
     supabase: supabase as any,
     date: momentum.date ?? lctd.lctd ?? null,
@@ -405,6 +413,51 @@ export default async function DashboardPage() {
               <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${signalPill("AVOID")}`}>AVOID <span className="ml-1 text-sm">{trend.avoid}</span></span>
             </div>
           </div>
+        </section>
+
+        <section className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-5">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="text-base font-semibold tracking-tight">Sector Momentum (Preview)</div>
+            <Link href="/ideas?strategy=sector" className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]">
+              Open ideas
+            </Link>
+          </div>
+          {!sectorMomentum.ok ? (
+            <div className="text-sm text-amber-700">Unavailable: {sectorMomentum.error ?? "unknown"}</div>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Top Industry Groups</div>
+                {(sectorMomentum.top_groups ?? []).slice(0, 4).map((g) => (
+                  <div key={g.key} className="flex items-center justify-between rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3 py-2 text-sm">
+                    <div>
+                      <div className="font-medium text-slate-900">{g.name}</div>
+                      <div className="text-xs text-slate-500">{g.theme}</div>
+                    </div>
+                    <span className="text-xs font-semibold text-slate-700">{g.rank_score.toFixed(1)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Top Candidates</div>
+                {(sectorMomentum.candidates ?? []).slice(0, 2).map((c) => (
+                  <Link
+                    key={c.symbol}
+                    href={`/ideas?strategy=sector&symbol=${encodeURIComponent(String(c.symbol))}`}
+                    className="block rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3 py-2 hover:bg-[#fff9f0]"
+                  >
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-semibold text-slate-900">{c.symbol}</span>
+                      <span className="text-xs font-semibold text-slate-700">{c.signal}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-600">
+                      {c.industry_group} • Entry {Number(c.entry ?? 0).toFixed(2)} • Stop {Number(c.stop ?? 0).toFixed(2)}
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="grid gap-3 md:grid-cols-2">

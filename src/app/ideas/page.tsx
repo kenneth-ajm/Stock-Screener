@@ -15,6 +15,8 @@ export default async function IdeasPage({
   const initialStrategy =
     strategy === "v1_trend_hold" || strategy === "trend"
       ? "v1_trend_hold"
+      : strategy === "v1_sector_momentum" || strategy === "sector"
+        ? "v1_sector_momentum"
       : "v2_core_momentum";
   const initialSymbol = String(params.symbol ?? "").trim().toUpperCase() || null;
 

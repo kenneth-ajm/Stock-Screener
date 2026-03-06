@@ -6,7 +6,7 @@ import { mapExecutionState } from "@/lib/execution_state";
 import { applyEarningsRiskToAction, type EarningsRisk } from "@/lib/earnings_risk";
 import { applyBreadthToAction } from "@/lib/market_breadth";
 
-type StrategyVersion = "v2_core_momentum" | "v1_trend_hold";
+type StrategyVersion = "v2_core_momentum" | "v1_sector_momentum" | "v1_trend_hold";
 
 type IdeaRow = {
   symbol: string;
@@ -19,6 +19,9 @@ type IdeaRow = {
   tp1: number;
   tp2: number;
   reason_summary?: string | null;
+  reason_json?: Record<string, unknown> | null;
+  industry_group?: string | null;
+  theme?: string | null;
   action?: "BUY_NOW" | "WAIT" | "SKIP";
   sizing?: { shares: number; est_cost: number; risk_per_share: number; risk_budget: number };
 };
@@ -249,6 +252,10 @@ export default function IdeasWorkspaceClient({
 
   async function openDetails() {
     if (!selected || detailsLoading || details) return;
+    if (strategy === "v1_sector_momentum" && selected.reason_json) {
+      setDetails({ ok: true, row: selected, source: "sector_momentum_inline" });
+      return;
+    }
     setDetailsLoading(true);
     try {
       const query = new URLSearchParams({
@@ -433,6 +440,16 @@ export default function IdeasWorkspaceClient({
             Momentum Swing
           </button>
           <button
+            onClick={() => setStrategy("v1_sector_momentum")}
+            className={`rounded-xl border px-3 py-1.5 text-sm font-medium ${
+              strategy === "v1_sector_momentum"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f1e8da]"
+            }`}
+          >
+            Sector Momentum
+          </button>
+          <button
             onClick={() => setStrategy("v1_trend_hold")}
             className={`rounded-xl border px-3 py-1.5 text-sm font-medium ${
               strategy === "v1_trend_hold"
@@ -528,7 +545,12 @@ export default function IdeasWorkspaceClient({
                     className="cursor-pointer border-b border-[#efe5d6] transition hover:bg-[#fff9f0]"
                     onClick={() => setSelected(row)}
                   >
-                    <td className="p-3 font-semibold tracking-tight">{row.symbol}</td>
+                    <td className="p-3 font-semibold tracking-tight">
+                      <div>{row.symbol}</div>
+                      {row.industry_group ? (
+                        <div className="mt-0.5 text-[10px] font-normal text-slate-500">{row.industry_group}</div>
+                      ) : null}
+                    </td>
                     <td className="p-3">
                       <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${signalPill(row.signal)}`}>
                         {row.signal}
@@ -580,7 +602,9 @@ export default function IdeasWorkspaceClient({
             <div className="flex items-center justify-between border-b border-[#e3d2b6] px-4 py-3">
               <div>
                 <div className="text-lg font-semibold">{selected.symbol}</div>
-                <div className="text-xs text-slate-500">{strategy === "v1_trend_hold" ? "Trend Hold" : "Momentum Swing"}</div>
+                <div className="text-xs text-slate-500">
+                  {strategy === "v1_trend_hold" ? "Trend Hold" : strategy === "v1_sector_momentum" ? "Sector Momentum" : "Momentum Swing"}
+                </div>
               </div>
               <button onClick={() => setSelected(null)} className="rounded-lg border border-[#dcc9aa] bg-[#f3e7d3] px-2.5 py-1 text-xs font-medium">
                 Close

@@ -7,6 +7,11 @@ import { getLCTD } from "@/lib/scan_status";
 import { getActivePortfolioCapacity } from "@/lib/portfolio_capacity";
 import { computePortfolioAwareAction } from "@/lib/execution_action";
 import { computeMarketBreadth } from "@/lib/market_breadth";
+import {
+  computeSectorMomentumCandidates,
+  SECTOR_MOMENTUM_STRATEGY_VERSION,
+  SECTOR_MOMENTUM_UNIVERSE_SLUG,
+} from "@/lib/sector_momentum";
 
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY = "v2_core_momentum";
@@ -25,6 +30,9 @@ type ScanRow = {
   tp1: number;
   tp2: number;
   reason_summary?: string | null;
+  reason_json?: Record<string, unknown> | null;
+  industry_group?: string | null;
+  theme?: string | null;
 };
 
 function rankRows(rows: ScanRow[]) {
@@ -76,24 +84,51 @@ const loadScreenerDataCached = unstable_cache(
       supabase: supabase as any,
       date: dateUsed ?? null,
       universe_slug: universeSlug,
-      strategy_version: strategyVersion,
+      strategy_version: strategyVersion === SECTOR_MOMENTUM_STRATEGY_VERSION ? "v2_core_momentum" : strategyVersion,
       regime_state: regimeState,
     });
 
-    const { data: rows } = dateUsed
-      ? await (supabase as any)
-          .from("daily_scans")
-          .select(
-            "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary"
-          )
-          .eq("universe_slug", universeSlug)
-          .eq("strategy_version", strategyVersion)
-          .eq("date", dateUsed)
-          .order("rank", { ascending: true, nullsFirst: false })
-          .order("confidence", { ascending: false })
-          .order("symbol", { ascending: true })
-          .limit(200)
-      : ({ data: [] } as any);
+    const isSectorMomentum = strategyVersion === SECTOR_MOMENTUM_STRATEGY_VERSION;
+    const sectorData = isSectorMomentum
+      ? await computeSectorMomentumCandidates({
+          supabase,
+          scan_date: dateUsed,
+          lctd_source: lctd.source,
+          top_group_count: 4,
+          max_candidates: 12,
+        })
+      : null;
+
+    const { data: rows } = isSectorMomentum
+      ? ({ data: (sectorData?.candidates ?? []).map((c: any) => ({
+          symbol: c.symbol,
+          signal: c.signal,
+          confidence: c.confidence,
+          entry: c.entry,
+          stop: c.stop,
+          tp1: c.tp1,
+          tp2: c.tp2,
+          rank: c.rank,
+          rank_score: c.rank_score,
+          reason_summary: c.reason_summary,
+          reason_json: c.reason_json,
+          industry_group: c.industry_group,
+          theme: c.theme,
+        })) } as any)
+      : dateUsed
+        ? await (supabase as any)
+            .from("daily_scans")
+            .select(
+              "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary"
+            )
+            .eq("universe_slug", universeSlug)
+            .eq("strategy_version", strategyVersion)
+            .eq("date", dateUsed)
+            .order("rank", { ascending: true, nullsFirst: false })
+            .order("confidence", { ascending: false })
+            .order("symbol", { ascending: true })
+            .limit(200)
+        : ({ data: [] } as any);
 
     const capacity = await getActivePortfolioCapacity({
       supabase: supabase as any,
@@ -102,7 +137,7 @@ const loadScreenerDataCached = unstable_cache(
 
     const rawRows = (rows ?? []) as ScanRow[];
     let entryValidatedRows = rawRows;
-    if (dateUsed && rawRows.length > 0) {
+    if (dateUsed && rawRows.length > 0 && !isSectorMomentum) {
       const symbols = Array.from(new Set(rawRows.map((r) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean)));
       const { data: barsOnDate } = await (supabase as any)
         .from("price_bars")
@@ -150,6 +185,9 @@ const loadScreenerDataCached = unstable_cache(
         rank: row.rank ?? null,
         rank_score: row.rank_score ?? null,
         reason_summary: row.reason_summary ?? null,
+        reason_json: row.reason_json ?? null,
+        industry_group: row.industry_group ?? null,
+        theme: row.theme ?? null,
         atr14: null,
         event_risk: false,
         news_risk: false,
@@ -183,6 +221,20 @@ const loadScreenerDataCached = unstable_cache(
         regime_state: regimeState,
         regime_date: regimeDate,
         regime_stale: regimeStale,
+        sector_momentum:
+          isSectorMomentum && sectorData?.ok
+            ? {
+                universe_slug: SECTOR_MOMENTUM_UNIVERSE_SLUG,
+                top_group_count: 4,
+                groups: sectorData.top_groups?.map((g) => ({
+                  key: g.key,
+                  name: g.name,
+                  theme: g.theme,
+                  rank_score: g.rank_score,
+                  state: g.state,
+                })),
+              }
+            : null,
         breadth_state: breadth.breadthState,
         breadth_label: breadth.breadthLabel,
         pct_above_sma50: breadth.pctAboveSma50,
