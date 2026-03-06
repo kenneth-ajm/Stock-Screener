@@ -215,26 +215,28 @@ export default async function DashboardPage() {
                 <Link
                   key={row.symbol}
                   href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol))}`}
-                  className="block w-full cursor-pointer rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3.5 py-2.5 transition hover:-translate-y-[1px] hover:border-[#dac9ab] hover:bg-[#fff9f0]"
+                  legacyBehavior
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0 pr-4">
-                      <div className="text-xl font-semibold text-slate-900">{row.symbol}</div>
-                      <div className="mt-1 truncate text-sm text-slate-600">{row.reason_summary ?? "—"}</div>
-                    </div>
+                  <a className="block w-full cursor-pointer rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3.5 py-2.5 transition hover:-translate-y-[1px] hover:border-[#dac9ab] hover:bg-[#fff9f0]">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 pr-4">
+                        <div className="text-xl font-semibold text-slate-900">{row.symbol}</div>
+                        <div className="mt-1 truncate text-sm text-slate-600">{row.reason_summary ?? "—"}</div>
+                      </div>
 
-                    <span
-                      className={
-                        row.signal === "BUY"
-                          ? "shrink-0 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
-                          : row.signal === "WATCH"
-                            ? "shrink-0 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700"
-                            : "shrink-0 rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
-                      }
-                    >
-                      {row.signal}
-                    </span>
-                  </div>
+                      <span
+                        className={
+                          row.signal === "BUY"
+                            ? "shrink-0 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
+                            : row.signal === "WATCH"
+                              ? "shrink-0 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700"
+                              : "shrink-0 rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
+                        }
+                      >
+                        {row.signal}
+                      </span>
+                    </div>
+                  </a>
                 </Link>
               ))}
             </div>
