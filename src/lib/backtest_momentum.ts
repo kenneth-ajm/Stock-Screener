@@ -49,7 +49,6 @@ type SignalRow = {
   entry: number | null;
   stop: number | null;
   tp1: number | null;
-  max_hold_days: number | null;
 };
 
 const DEFAULT_UNIVERSE = "core_800";
@@ -134,7 +133,7 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
 
   const { data: scans, error: scanErr } = await supa
     .from("daily_scans")
-    .select("symbol,date,entry,stop,tp1,max_hold_days")
+    .select("symbol,date,entry,stop,tp1")
     .eq("universe_slug", universe)
     .eq("strategy_version", strategy)
     .eq("signal", "BUY")
@@ -210,7 +209,7 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
       continue;
     }
 
-    const maxHold = Math.max(1, Math.floor(toNum(s.max_hold_days) ?? DEFAULT_MAX_HOLD_DAYS));
+    const maxHold = DEFAULT_MAX_HOLD_DAYS;
     const maxIdx = Math.min(bars.length - 1, entryIdx + maxHold - 1);
     let exitPrice = toNum(bars[maxIdx]?.close) ?? entry;
     let exitDate = bars[maxIdx]?.date ?? entryBar.date;
@@ -274,4 +273,3 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
     trades: sortedTrades,
   };
 }
-
