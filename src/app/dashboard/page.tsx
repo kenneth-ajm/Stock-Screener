@@ -210,7 +210,7 @@ export default async function DashboardPage() {
                 <Link
                   key={row.symbol}
                   href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol ?? ""))}`}
-                  className="cursor-pointer rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3.5 py-2.5 transition hover:-translate-y-[1px] hover:border-[#dac9ab] hover:bg-[#fff9f0]"
+                  className="block w-full cursor-pointer rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3.5 py-2.5 text-left transition hover:border-[#dac9ab] hover:bg-[#fff9f0]"
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-medium">{row.symbol}</span>
