@@ -205,18 +205,26 @@ export default async function DashboardPage() {
                 View all
               </Link>
             </div>
-            <div className="space-y-2 text-sm">
+            <div className="space-y-3 text-sm">
               {momentum.top.slice(0, 5).map((row: any) => (
                 <Link
                   key={row.symbol}
                   href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol ?? ""))}`}
-                  className="flex w-full items-center justify-between cursor-pointer rounded-xl border border-[#eadfce] bg-[#fffdf7] px-4 py-3 hover:bg-[#faf6ee]"
+                  className="flex w-full items-center justify-between rounded-2xl border border-[#eadfce] bg-[#fffdf7] px-5 py-4 transition hover:bg-[#faf6ee]"
                 >
                   <div className="min-w-0 pr-3">
-                    <div className="font-medium">{row.symbol}</div>
-                    <div className="mt-1 truncate text-xs text-slate-600">{row.reason_summary ?? "—"}</div>
+                    <div className="text-2xl font-semibold text-slate-900">{row.symbol}</div>
+                    <div className="mt-1 truncate text-sm text-slate-600">{row.reason_summary ?? "—"}</div>
                   </div>
-                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${signalPill(row.signal)}`}>
+                  <span
+                    className={
+                      row.signal === "BUY"
+                        ? "shrink-0 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
+                        : row.signal === "WATCH"
+                          ? "shrink-0 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700"
+                          : "shrink-0 rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
+                    }
+                  >
                     {row.signal}
                   </span>
                 </Link>
