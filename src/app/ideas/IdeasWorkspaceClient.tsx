@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
+import { mapExecutionState } from "@/lib/execution_state";
 
 type StrategyVersion = "v2_core_momentum" | "v1_trend_hold";
 
@@ -362,10 +363,9 @@ export default function IdeasWorkspaceClient({
     return "border-rose-200 bg-rose-50 text-rose-700";
   }
 
-  function entryStatusPill(status: "Below trigger" | "Within zone" | "Extended" | "Too extended") {
-    if (status === "Within zone") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-    if (status === "Below trigger") return "border-sky-200 bg-sky-50 text-sky-700";
-    if (status === "Extended") return "border-amber-200 bg-amber-50 text-amber-700";
+  function actionPill(action: "BUY NOW" | "WAIT" | "SKIP") {
+    if (action === "BUY NOW") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    if (action === "WAIT") return "border-amber-200 bg-amber-50 text-amber-700";
     return "border-rose-200 bg-rose-50 text-rose-700";
   }
 
@@ -426,7 +426,7 @@ export default function IdeasWorkspaceClient({
                 <th className="p-3">Delta</th>
                 <th className="p-3">Stop</th>
                 <th className="p-3">TP1</th>
-                <th className="p-3">Entry zone</th>
+                <th className="p-3">Action</th>
                 <th className="p-3">Position Cost</th>
               </tr>
             </thead>
@@ -436,6 +436,15 @@ export default function IdeasWorkspaceClient({
                 const live = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
                 const entry = Number(row.entry ?? 0);
                 const deltaPct = live !== null && entry > 0 ? ((live - entry) / entry) * 100 : null;
+                const reason =
+                  live !== null
+                    ? getEntryStatus({
+                        price: live,
+                        zone_low: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_low,
+                        zone_high: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_high,
+                      })
+                    : "No live price";
+                const exec = mapExecutionState(reason);
                 return (
                   <tr
                     key={row.symbol}
@@ -455,16 +464,12 @@ export default function IdeasWorkspaceClient({
                     <td className="p-3">{Number(row.stop ?? 0).toFixed(2)}</td>
                     <td className="p-3">{Number(row.tp1 ?? 0).toFixed(2)}</td>
                     <td className="p-3">
-                      {(() => {
-                        if (live == null) return <span className="text-slate-400">—</span>;
-                        const z = getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) });
-                        const s = getEntryStatus({ price: live, zone_low: z.zone_low, zone_high: z.zone_high });
-                        return (
-                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${entryStatusPill(s)}`}>
-                            {s}
-                          </span>
-                        );
-                      })()}
+                      <div className="space-y-1">
+                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
+                          {exec.action}
+                        </span>
+                        <div className="text-[11px] text-slate-500">{exec.reasonLabel}</div>
+                      </div>
                     </td>
                     <td className="p-3">{Number(row.sizing?.est_cost ?? 0).toFixed(2)}</td>
                   </tr>
@@ -515,10 +520,19 @@ export default function IdeasWorkspaceClient({
                   <div className="mt-1 font-semibold">
                     {livePrice != null ? livePrice.toFixed(2) : "—"}
                   </div>
-                  <div className="mt-2">
-                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${entryStatusPill(entryStatus)}`}>
-                      {entryStatus}
-                    </span>
+                  <div className="mt-2 space-y-1">
+                    {(() => {
+                      const reason = livePrice != null ? entryStatus : "No live price";
+                      const exec = mapExecutionState(reason);
+                      return (
+                        <>
+                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
+                            {exec.action}
+                          </span>
+                          <div className="text-[11px] text-slate-500">{exec.reasonLabel}</div>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>

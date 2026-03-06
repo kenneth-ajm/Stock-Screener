@@ -5,6 +5,7 @@ import { getPortfolioSnapshot } from "@/lib/portfolio_snapshot";
 import { getLCTD } from "@/lib/scan_status";
 import { POST as quotesPost } from "@/app/api/quotes/route";
 import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
+import { mapExecutionState } from "@/lib/execution_state";
 
 function money(v: number | null | undefined) {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
@@ -26,6 +27,12 @@ function fmtSignedPct(v: number | null | undefined) {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
   const s = v > 0 ? "+" : "";
   return `${s}${v.toFixed(1)}%`;
+}
+
+function actionPill(action: "BUY NOW" | "WAIT" | "SKIP") {
+  if (action === "BUY NOW") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (action === "WAIT") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-rose-200 bg-rose-50 text-rose-700";
 }
 
 type QuoteMap = Record<
@@ -330,11 +337,15 @@ export default async function DashboardPage() {
                             const quote = topQuoteBySymbol[symbol];
                             const live = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
                             const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
-                            if (live === null || entry === null || entry <= 0) {
-                              return null;
-                            }
-                            const zone = getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry });
-                            const status = getEntryStatus({ price: live, zone_low: zone.zone_low, zone_high: zone.zone_high });
+                            const status =
+                              live !== null && entry !== null && entry > 0
+                                ? getEntryStatus({
+                                    price: live,
+                                    zone_low: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_low,
+                                    zone_high: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_high,
+                                  })
+                                : "No live price";
+                            const exec = mapExecutionState(status);
                             const statusClass =
                               status === "Within zone"
                                 ? "border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -344,10 +355,33 @@ export default async function DashboardPage() {
                                     ? "border-amber-200 bg-amber-50 text-amber-700"
                                     : "border-rose-200 bg-rose-50 text-rose-700";
                             return (
-                              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass}`}>
-                                {status}
-                              </span>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
+                                  {exec.action}
+                                </span>
+                                {status !== "No live price" ? (
+                                  <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass}`}>
+                                    {status}
+                                  </span>
+                                ) : null}
+                              </div>
                             );
+                          })()}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {(() => {
+                            const symbol = String(row.symbol ?? "").trim().toUpperCase();
+                            const quote = topQuoteBySymbol[symbol];
+                            const live = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
+                            const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
+                            const reason = live !== null && entry !== null && entry > 0
+                              ? getEntryStatus({
+                                  price: live,
+                                  zone_low: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_low,
+                                  zone_high: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_high,
+                                })
+                              : "No live price";
+                            return mapExecutionState(reason).reasonLabel;
                           })()}
                         </div>
                       </div>
