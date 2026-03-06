@@ -8,6 +8,12 @@ type BacktestSummary = {
   triggered_trades: number;
   not_triggered_trades: number;
   skipped_trades: number;
+  skip_reason_counts: {
+    triggered: number;
+    not_triggered_within_window: number;
+    no_day_after_signal: number;
+    invalid_signal_entry: number;
+  };
   win_rate: number;
   avg_return_pct: number;
   avg_holding_days: number;
@@ -207,6 +213,9 @@ export default function BacktestClient() {
               <span>Not triggered: <b>{summary.not_triggered_trades}</b></span>
               <span>Gross return: <b>{pct(summary.gross_return_pct)}</b></span>
               <span>Skipped: <b>{summary.skipped_trades}</b></span>
+              <span>Skip no-day-after-signal: <b>{summary.skip_reason_counts?.no_day_after_signal ?? 0}</b></span>
+              <span>Skip invalid entry: <b>{summary.skip_reason_counts?.invalid_signal_entry ?? 0}</b></span>
+              <span>Not triggered in window: <b>{summary.skip_reason_counts?.not_triggered_within_window ?? 0}</b></span>
               <span>Stop: <b>{summary.exit_reason_counts.stop}</b></span>
               <span>TP1: <b>{summary.exit_reason_counts.tp1}</b></span>
               <span>Time stop: <b>{summary.exit_reason_counts.time_stop}</b></span>
