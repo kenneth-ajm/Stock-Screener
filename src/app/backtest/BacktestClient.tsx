@@ -209,6 +209,7 @@ export default function BacktestClient() {
           </div>
           <div className="rounded-xl border border-[#eadfce] bg-[#fffdf8] p-4 md:col-span-3">
             <div className="flex flex-wrap items-center gap-4 text-sm text-slate-700">
+              <span>Trigger window: <b>10 days</b></span>
               <span>Triggered: <b>{summary.triggered_trades}</b></span>
               <span>Not triggered: <b>{summary.not_triggered_trades}</b></span>
               <span>Gross return: <b>{pct(summary.gross_return_pct)}</b></span>
