@@ -50,6 +50,47 @@ function applyDisplayCaps(rows: ScanRow[]) {
   return rankRows([...buyRanked, ...watchRanked]);
 }
 
+function getCheckOk(reasonJson: any, key: string): boolean | null {
+  const checks = Array.isArray(reasonJson?.checks) ? reasonJson.checks : [];
+  for (const check of checks) {
+    const checkKey = String(check?.key ?? check?.id ?? "").trim();
+    if (checkKey !== key) continue;
+    if (typeof check?.ok === "boolean") return check.ok;
+  }
+  return null;
+}
+
+function classifyBreadth(regimeState: string | null, pct50: number, pct200: number) {
+  const favorable = String(regimeState ?? "").toUpperCase() === "FAVORABLE";
+  if (favorable && pct50 >= 60 && pct200 >= 50) return { breadthState: "STRONG" as const, breadthLabel: "Breadth strong" };
+  if (!favorable || pct50 < 40 || pct200 < 35) return { breadthState: "WEAK" as const, breadthLabel: "Breadth weak" };
+  return { breadthState: "MIXED" as const, breadthLabel: "Breadth mixed" };
+}
+
+function computeSectorBreadth(rows: ScanRow[], regimeState: string | null) {
+  let sample = 0;
+  let above50 = 0;
+  let above200 = 0;
+  for (const row of rows) {
+    const c50 = getCheckOk(row.reason_json, "close_above_sma50");
+    const c200 = getCheckOk(row.reason_json, "close_above_sma200");
+    if (c50 === null && c200 === null) continue;
+    sample += 1;
+    if (c50 === true) above50 += 1;
+    if (c200 === true) above200 += 1;
+  }
+  const pct50 = sample > 0 ? (above50 / sample) * 100 : 0;
+  const pct200 = sample > 0 ? (above200 / sample) * 100 : 0;
+  const cls = classifyBreadth(regimeState, pct50, pct200);
+  return {
+    pctAboveSma50: pct50,
+    pctAboveSma200: pct200,
+    breadthState: cls.breadthState,
+    breadthLabel: cls.breadthLabel,
+    sampleSize: sample,
+  };
+}
+
 const loadScreenerDataCached = unstable_cache(
   async (userId: string, universeSlug: string, strategyVersion: string, requestedDate: string | null) => {
     const supabase = createClient(
@@ -81,16 +122,24 @@ const loadScreenerDataCached = unstable_cache(
         : null;
     const regimeState = regimeExact?.state ?? regimeRow?.state ?? null;
     const regimeStale = !lctd.lctd || !regimeDate || regimeDate < lctd.lctd;
-    const breadth = await computeMarketBreadth({
-      supabase: supabase as any,
-      date: dateUsed ?? null,
-      universe_slug: mappedUniverse,
-      strategy_version: strategyVersion === SECTOR_MOMENTUM_STRATEGY_VERSION ? "v2_core_momentum" : strategyVersion,
-      regime_state: regimeState,
-    });
-
     const isSectorMomentum = strategyVersion === SECTOR_MOMENTUM_STRATEGY_VERSION;
-    const sectorData = isSectorMomentum
+    const { data: persistedSectorRows } = isSectorMomentum && dateUsed
+      ? await (supabase as any)
+          .from("daily_scans")
+          .select(
+            "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json"
+          )
+          .eq("universe_slug", mappedUniverse)
+          .eq("strategy_version", strategyVersion)
+          .eq("date", dateUsed)
+          .order("rank_score", { ascending: false, nullsFirst: false })
+          .order("confidence", { ascending: false })
+          .order("symbol", { ascending: true })
+          .limit(200)
+      : ({ data: [] } as any);
+
+    const usePersistedSector = Array.isArray(persistedSectorRows) && persistedSectorRows.length > 0;
+    const sectorData = isSectorMomentum && !usePersistedSector
       ? await computeSectorMomentumCandidates({
           supabase,
           scan_date: dateUsed,
@@ -102,21 +151,27 @@ const loadScreenerDataCached = unstable_cache(
       : null;
 
     const { data: rows } = isSectorMomentum
-      ? ({ data: (sectorData?.candidates ?? []).map((c: any) => ({
-          symbol: c.symbol,
-          signal: c.signal,
-          confidence: c.confidence,
-          entry: c.entry,
-          stop: c.stop,
-          tp1: c.tp1,
-          tp2: c.tp2,
-          rank: c.rank,
-          rank_score: c.rank_score,
-          reason_summary: c.reason_summary,
-          reason_json: c.reason_json,
-          industry_group: c.industry_group,
-          theme: c.theme,
-        })) } as any)
+      ? usePersistedSector
+        ? ({ data: (persistedSectorRows ?? []).map((r: any) => ({
+            ...r,
+            industry_group: String(r?.reason_json?.group?.name ?? ""),
+            theme: String(r?.reason_json?.group?.theme ?? ""),
+          })) } as any)
+        : ({ data: (sectorData?.candidates ?? []).map((c: any) => ({
+            symbol: c.symbol,
+            signal: c.signal,
+            confidence: c.confidence,
+            entry: c.entry,
+            stop: c.stop,
+            tp1: c.tp1,
+            tp2: c.tp2,
+            rank: c.rank,
+            rank_score: c.rank_score,
+            reason_summary: c.reason_summary,
+            reason_json: c.reason_json,
+            industry_group: c.industry_group,
+            theme: c.theme,
+          })) } as any)
       : dateUsed
         ? await (supabase as any)
             .from("daily_scans")
@@ -131,6 +186,16 @@ const loadScreenerDataCached = unstable_cache(
             .order("symbol", { ascending: true })
             .limit(200)
         : ({ data: [] } as any);
+
+    const breadth = isSectorMomentum
+      ? computeSectorBreadth((rows ?? []) as ScanRow[], regimeState)
+      : await computeMarketBreadth({
+          supabase: supabase as any,
+          date: dateUsed ?? null,
+          universe_slug: mappedUniverse,
+          strategy_version: strategyVersion,
+          regime_state: regimeState,
+        });
 
     const capacity = await getActivePortfolioCapacity({
       supabase: supabase as any,
@@ -223,13 +288,13 @@ const loadScreenerDataCached = unstable_cache(
         regime_state: regimeState,
         regime_date: regimeDate,
         regime_stale: regimeStale,
-        sector_momentum:
-          isSectorMomentum && sectorData?.ok
-            ? {
+        sector_momentum: isSectorMomentum
+          ? {
                 universe_slug: mappedUniverse,
                 strategy_universe_slug: mappedUniverse,
                 top_group_count: 4,
-                groups: sectorData.top_groups?.map((g) => ({
+                source: usePersistedSector ? "daily_scans_cache" : "computed_live",
+                groups: (sectorData?.top_groups ?? []).map((g) => ({
                   key: g.key,
                   name: g.name,
                   theme: g.theme,
@@ -237,7 +302,7 @@ const loadScreenerDataCached = unstable_cache(
                   state: g.state,
                 })),
               }
-            : null,
+          : null,
         breadth_state: breadth.breadthState,
         breadth_label: breadth.breadthLabel,
         pct_above_sma50: breadth.pctAboveSma50,

@@ -177,6 +177,15 @@ function isoDate(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
+function lookbackReturn(closes: number[], lookback: number) {
+  const lb = Math.min(Math.max(1, lookback), closes.length - 1);
+  if (closes.length <= lb) return 0;
+  const latest = closes[closes.length - 1] ?? 0;
+  const base = closes[closes.length - 1 - lb] ?? 0;
+  if (!(latest > 0) || !(base > 0)) return 0;
+  return latest / base - 1;
+}
+
 function barsBySymbol(rows: any[]): Map<string, PriceBarLite[]> {
   const out = new Map<string, PriceBarLite[]>();
   for (const row of rows) {
@@ -247,7 +256,7 @@ export async function computeSectorMomentum(opts: {
 
   const bySymbol = barsBySymbol(Array.isArray(data) ? data : []);
   const spyBars = bySymbol.get("SPY") ?? [];
-  if (spyBars.length < 15) {
+  if (spyBars.length < 3) {
     return {
       ok: false,
       scan_date: scanDate,
@@ -257,11 +266,9 @@ export async function computeSectorMomentum(opts: {
     };
   }
 
-  const spyLatest = spyBars[spyBars.length - 1]?.close ?? 0;
-  const spy5 = spyBars[spyBars.length - 6]?.close ?? 0;
-  const spy10 = spyBars[spyBars.length - 11]?.close ?? 0;
-  const spyRet5 = spyLatest > 0 && spy5 > 0 ? spyLatest / spy5 - 1 : 0;
-  const spyRet10 = spyLatest > 0 && spy10 > 0 ? spyLatest / spy10 - 1 : 0;
+  const spyCloses = spyBars.map((b) => b.close);
+  const spyRet5 = lookbackReturn(spyCloses, 5);
+  const spyRet10 = lookbackReturn(spyCloses, 10);
 
   const groups: SectorMomentumRow[] = [];
   for (const group of INDUSTRY_GROUPS) {
@@ -273,26 +280,23 @@ export async function computeSectorMomentum(opts: {
 
     for (const symbol of group.symbols) {
       const bars = bySymbol.get(symbol.trim().toUpperCase()) ?? [];
-      if (bars.length < 55) continue;
+      if (bars.length < 3) continue;
       const closes = bars.map((b) => b.close);
       const vols = bars.map((b) => b.volume);
       const latest = bars[bars.length - 1];
-      const prev5 = bars[bars.length - 6];
-      const prev10 = bars[bars.length - 11];
-      if (!latest || !prev5 || !prev10 || prev5.close <= 0 || prev10.close <= 0 || latest.close <= 0) continue;
-
-      const ret5 = latest.close / prev5.close - 1;
-      const ret10 = latest.close / prev10.close - 1;
+      if (!latest || latest.close <= 0) continue;
+      const ret5 = lookbackReturn(closes, 5);
+      const ret10 = lookbackReturn(closes, 10);
       rs5.push(ret5 - spyRet5);
       rs10.push(ret10 - spyRet10);
 
-      const avgVol20 = sma(vols, 20);
+      const avgVol20 = sma(vols, Math.min(20, vols.length));
       if (avgVol20 != null && avgVol20 > 0) {
         volExp.push(latest.volume / avgVol20);
       }
 
-      const sma20 = sma(closes, 20);
-      const sma50 = sma(closes, 50);
+      const sma20 = sma(closes, Math.min(20, closes.length));
+      const sma50 = sma(closes, Math.min(50, closes.length));
       if (sma20 != null) above20.push(latest.close > sma20);
       if (sma50 != null) above50.push(latest.close > sma50);
     }
@@ -428,7 +432,7 @@ export async function computeSectorMomentumCandidates(opts: {
 
   const bySymbol = barsBySymbol(Array.isArray(data) ? data : []);
   const spyBars = bySymbol.get("SPY") ?? [];
-  if (spyBars.length < 60) {
+  if (spyBars.length < 3) {
     return {
       ok: false as const,
       scan_date: scanDate,
@@ -440,9 +444,8 @@ export async function computeSectorMomentumCandidates(opts: {
     };
   }
 
-  const spyLatest = spyBars[spyBars.length - 1].close;
-  const spy20Base = spyBars[spyBars.length - 21]?.close ?? 0;
-  const spy20Ret = spyLatest > 0 && spy20Base > 0 ? spyLatest / spy20Base - 1 : 0;
+  const spyCloses = spyBars.map((b) => b.close);
+  const spy20Ret = lookbackReturn(spyCloses, 20);
 
   const candidatesRaw: SectorMomentumCandidate[] = [];
   for (const group of topGroups) {
@@ -453,11 +456,10 @@ export async function computeSectorMomentumCandidates(opts: {
     for (const symbol of groupDef.symbols.map((s) => s.trim().toUpperCase())) {
       if (universeSet && !universeSet.has(symbol)) continue;
       const bars = bySymbol.get(symbol) ?? [];
-      if (bars.length < 60) continue;
+      if (bars.length < 3) continue;
       const latest = bars[bars.length - 1];
-      const base20 = bars[bars.length - 21]?.close ?? 0;
-      if (latest.close > 0 && base20 > 0) {
-        groupStats.push({ symbol, ret20: latest.close / base20 - 1 });
+      if (latest.close > 0) {
+        groupStats.push({ symbol, ret20: lookbackReturn(bars.map((b) => b.close), 20) });
       }
     }
     const groupRet20 = groupStats.length ? avg(groupStats.map((x) => x.ret20)) : 0;
@@ -465,22 +467,23 @@ export async function computeSectorMomentumCandidates(opts: {
     for (const symbol of groupDef.symbols.map((s) => s.trim().toUpperCase())) {
       if (universeSet && !universeSet.has(symbol)) continue;
       const bars = bySymbol.get(symbol) ?? [];
-      if (bars.length < 60) continue;
+      if (bars.length < 3) continue;
       const latest = bars[bars.length - 1];
       const closes = bars.map((b) => b.close);
       const vols = bars.map((b) => b.volume);
-      const sma20 = sma(closes, 20);
-      const sma50 = sma(closes, 50);
-      if (sma20 == null || sma50 == null || latest.close <= 0) continue;
+      const sma20 = sma(closes, Math.min(20, closes.length));
+      const sma50 = sma(closes, Math.min(50, closes.length));
+      const sma200 = sma(closes, Math.min(200, closes.length));
+      if (sma20 == null || sma50 == null || sma200 == null || latest.close <= 0) continue;
 
       const adv20 = sma(
-        bars.slice(-20).map((b) => b.close * b.volume),
-        20
+        bars.slice(-Math.min(20, bars.length)).map((b) => b.close * b.volume),
+        Math.min(20, bars.length)
       );
       const vol20 = sma(vols, 20);
       const volExp = vol20 && vol20 > 0 ? latest.volume / vol20 : 0;
 
-      const prior20 = closes.slice(-21, -1);
+      const prior20 = closes.slice(-Math.min(21, closes.length), -1);
       const trigger = prior20.length ? Math.max(...prior20) : latest.close;
       const nearTrigger = trigger > 0 ? latest.close / trigger : 0;
       const extendedPct = trigger > 0 ? (latest.close - trigger) / trigger : 0;
@@ -493,23 +496,23 @@ export async function computeSectorMomentumCandidates(opts: {
       const range20Max = prior20.length ? Math.max(...prior20) : latest.close;
       const range20Pct = range20Min > 0 ? (range20Max - range20Min) / range20Min : 1;
 
-      const base20 = bars[bars.length - 21]?.close ?? 0;
-      const ret20 = base20 > 0 ? latest.close / base20 - 1 : 0;
+      const ret20 = lookbackReturn(closes, 20);
       const rsVsSpy = ret20 - spy20Ret;
       const rsVsGroup = ret20 - groupRet20;
 
       const c1 = latest.close > sma20;
       const c2 = latest.close > sma50;
+      const c2b = latest.close > sma200;
       const c3 = (adv20 ?? 0) >= 15_000_000;
       const c4 = rsVsSpy > 0;
       const c5 = rsVsGroup > 0;
       const c6 = near52 >= 0.85;
       const c7 = nearTrigger <= 1.05;
-      const c8 = range20Pct <= 0.22;
+      const c8 = range20Pct <= (prior20.length >= 10 ? 0.22 : 0.35);
       const c9 = volExp >= 1.05;
       const c10 = nearTrigger >= 0.98;
 
-      const corePass = c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8;
+      const corePass = c1 && c2 && c2b && c3 && c4 && c5 && c6 && c7 && c8;
       const buyPass = corePass && c9 && c10;
 
       let signal: CandidateSignal = "AVOID";
@@ -564,6 +567,7 @@ export async function computeSectorMomentumCandidates(opts: {
             close: round2(latest.close),
             sma20: round2(sma20),
             sma50: round2(sma50),
+            sma200: round2(sma200),
             avg_dollar_volume_20: round2(adv20 ?? 0),
             volume_expansion: round2(volExp),
             ret20: round2(ret20),
@@ -578,6 +582,7 @@ export async function computeSectorMomentumCandidates(opts: {
           checks: [
             { key: "close_above_sma20", category: "trend", ok: c1, detail: `close ${round2(latest.close)} vs sma20 ${round2(sma20)}` },
             { key: "close_above_sma50", category: "trend", ok: c2, detail: `close ${round2(latest.close)} vs sma50 ${round2(sma50)}` },
+            { key: "close_above_sma200", category: "trend", ok: c2b, detail: `close ${round2(latest.close)} vs sma200 ${round2(sma200)}` },
             { key: "adv20_threshold", category: "liquidity", ok: c3, detail: `adv20 ${round2(adv20 ?? 0)}` },
             { key: "rs_vs_spy", category: "rs", ok: c4, detail: `rs_vs_spy ${(rsVsSpy * 100).toFixed(1)}%` },
             { key: "rs_vs_group", category: "rs", ok: c5, detail: `rs_vs_group ${(rsVsGroup * 100).toFixed(1)}%` },
