@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
 import { mapExecutionState } from "@/lib/execution_state";
 import { applyEarningsRiskToAction, type EarningsRisk } from "@/lib/earnings_risk";
+import { applyBreadthToAction } from "@/lib/market_breadth";
 
 type StrategyVersion = "v2_core_momentum" | "v1_trend_hold";
 
@@ -24,7 +25,14 @@ type IdeaRow = {
 
 type Payload = {
   ok: boolean;
-  meta?: { lctd: string | null; regime_state: string | null };
+  meta?: {
+    lctd: string | null;
+    regime_state: string | null;
+    breadth_state?: "STRONG" | "MIXED" | "WEAK" | null;
+    breadth_label?: string | null;
+    pct_above_sma50?: number | null;
+    pct_above_sma200?: number | null;
+  };
   capacity?: {
     cash_available: number;
     cash_source: "manual" | "estimated";
@@ -96,6 +104,10 @@ export default function IdeasWorkspaceClient({
   const [tp2Pct, setTp2Pct] = useState("");
   const [tp2Price, setTp2Price] = useState("");
   const [tp2SizePct, setTp2SizePct] = useState("50");
+  const breadth = {
+    breadthState: data?.meta?.breadth_state ?? "STRONG",
+    breadthLabel: data?.meta?.breadth_label ?? "Breadth strong",
+  } as const;
 
   useEffect(() => {
     setStrategy(initialStrategy);
@@ -435,6 +447,28 @@ export default function IdeasWorkspaceClient({
           <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
           <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">LCTD: {data?.meta?.lctd ?? "—"}</span>
           <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">
+            %&gt;SMA50: {Number(data?.meta?.pct_above_sma50 ?? 0).toFixed(1)}%
+          </span>
+          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">
+            %&gt;SMA200: {Number(data?.meta?.pct_above_sma200 ?? 0).toFixed(1)}%
+          </span>
+          <span
+            className={`rounded-full border px-2 py-1 font-semibold ${
+              breadth.breadthState === "STRONG"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                : breadth.breadthState === "MIXED"
+                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                  : "border-rose-200 bg-rose-50 text-rose-700"
+            }`}
+          >
+            {breadth.breadthState}
+          </span>
+          {breadth.breadthState !== "STRONG" ? (
+            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 font-semibold text-amber-700">
+              {breadth.breadthLabel}
+            </span>
+          ) : null}
+          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">
             Cash: {Number(data?.capacity?.cash_available ?? 0).toFixed(2)}
           </span>
           <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">
@@ -484,7 +518,10 @@ export default function IdeasWorkspaceClient({
                         zone_high: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_high,
                       })
                     : "No live price";
-                const exec = applyEarningsRiskToAction(mapExecutionState(reason), earnings);
+                const exec = applyBreadthToAction(
+                  applyEarningsRiskToAction(mapExecutionState(reason), earnings),
+                  breadth
+                );
                 return (
                   <tr
                     key={row.symbol}
@@ -515,6 +552,11 @@ export default function IdeasWorkspaceClient({
                         {earnings?.earningsLabel ? (
                           <div className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
                             {earnings.earningsLabel}
+                          </div>
+                        ) : null}
+                        {exec.breadthLabel ? (
+                          <div className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                            {exec.breadthLabel}
                           </div>
                         ) : null}
                       </div>
@@ -579,7 +621,10 @@ export default function IdeasWorkspaceClient({
                         selected.entry > 0 &&
                         Math.abs((livePrice - selected.entry) / selected.entry) > PRICE_MISMATCH_THRESHOLD_PCT;
                       const reason = mismatch ? "Price mismatch" : livePrice != null ? entryStatus : "No live price";
-                      const exec = applyEarningsRiskToAction(mapExecutionState(reason), earnings);
+                      const exec = applyBreadthToAction(
+                        applyEarningsRiskToAction(mapExecutionState(reason), earnings),
+                        breadth
+                      );
                       return (
                         <>
                           <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
@@ -589,6 +634,11 @@ export default function IdeasWorkspaceClient({
                           {earnings?.earningsLabel ? (
                             <div className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
                               {earnings.earningsLabel}
+                            </div>
+                          ) : null}
+                          {exec.breadthLabel ? (
+                            <div className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                              {exec.breadthLabel}
                             </div>
                           ) : null}
                         </>

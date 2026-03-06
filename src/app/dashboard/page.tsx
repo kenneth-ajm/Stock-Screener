@@ -7,6 +7,7 @@ import { POST as quotesPost } from "@/app/api/quotes/route";
 import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
 import { mapExecutionState } from "@/lib/execution_state";
 import { applyEarningsRiskToAction, lookupEarningsRiskForSymbols } from "@/lib/earnings_risk";
+import { applyBreadthToAction, computeMarketBreadth } from "@/lib/market_breadth";
 
 function money(v: number | null | undefined) {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
@@ -133,6 +134,13 @@ export default async function DashboardPage() {
     loadStrategySummary("v2_core_momentum"),
     loadStrategySummary("v1_trend_hold"),
   ]);
+  const breadth = await computeMarketBreadth({
+    supabase: supabase as any,
+    date: momentum.date ?? lctd.lctd ?? null,
+    universe_slug: "core_800",
+    strategy_version: "v2_core_momentum",
+    regime_state: regime?.state ?? null,
+  });
 
   const { data: openRows } =
     portfolioId
@@ -325,6 +333,28 @@ export default async function DashboardPage() {
             <span className="rounded-full border border-[#e5d9c8] bg-[#fffdf8] px-2 py-1 text-xs font-medium">
               SMA200: <span className="font-mono">{regime?.sma200 != null ? Number(regime.sma200).toFixed(2) : "—"}</span>
             </span>
+            <span className="rounded-full border border-[#e5d9c8] bg-[#fffdf8] px-2 py-1 text-xs font-medium">
+              %&gt;SMA50: <span className="font-mono">{breadth.pctAboveSma50.toFixed(1)}%</span>
+            </span>
+            <span className="rounded-full border border-[#e5d9c8] bg-[#fffdf8] px-2 py-1 text-xs font-medium">
+              %&gt;SMA200: <span className="font-mono">{breadth.pctAboveSma200.toFixed(1)}%</span>
+            </span>
+            <span
+              className={`rounded-full border px-2 py-1 text-xs font-semibold ${
+                breadth.breadthState === "STRONG"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : breadth.breadthState === "MIXED"
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : "border-rose-200 bg-rose-50 text-rose-700"
+              }`}
+            >
+              {breadth.breadthState}
+            </span>
+            {breadth.breadthState !== "STRONG" ? (
+              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
+                {breadth.breadthLabel}
+              </span>
+            ) : null}
           </div>
         </section>
 
@@ -459,7 +489,10 @@ export default async function DashboardPage() {
                                   })
                                 : "No live price";
                             const baseExec = mapExecutionState(status);
-                            const exec = applyEarningsRiskToAction(baseExec, earningsRiskBySymbol[symbol] ?? null);
+                            const exec = applyBreadthToAction(
+                              applyEarningsRiskToAction(baseExec, earningsRiskBySymbol[symbol] ?? null),
+                              breadth
+                            );
                             const statusClass =
                               status === "Within zone"
                                 ? "border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -481,6 +514,11 @@ export default async function DashboardPage() {
                                 {earningsRiskBySymbol[symbol]?.earningsLabel ? (
                                   <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
                                     {earningsRiskBySymbol[symbol]?.earningsLabel}
+                                  </span>
+                                ) : null}
+                                {exec.breadthLabel ? (
+                                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                                    {exec.breadthLabel}
                                   </span>
                                 ) : null}
                               </div>
@@ -508,9 +546,12 @@ export default async function DashboardPage() {
                                   zone_high: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_high,
                                 })
                               : "No live price";
-                            return applyEarningsRiskToAction(
-                              mapExecutionState(reason),
-                              earningsRiskBySymbol[symbol] ?? null
+                            return applyBreadthToAction(
+                              applyEarningsRiskToAction(
+                                mapExecutionState(reason),
+                                earningsRiskBySymbol[symbol] ?? null
+                              ),
+                              breadth
                             ).reasonLabel;
                           })()}
                         </div>

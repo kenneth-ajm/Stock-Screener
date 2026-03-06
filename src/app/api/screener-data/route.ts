@@ -6,6 +6,7 @@ import { unstable_cache } from "next/cache";
 import { getLCTD } from "@/lib/scan_status";
 import { getActivePortfolioCapacity } from "@/lib/portfolio_capacity";
 import { computePortfolioAwareAction } from "@/lib/execution_action";
+import { computeMarketBreadth } from "@/lib/market_breadth";
 
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY = "v2_core_momentum";
@@ -71,6 +72,13 @@ const loadScreenerDataCached = unstable_cache(
         : null;
     const regimeState = regimeExact?.state ?? regimeRow?.state ?? null;
     const regimeStale = !lctd.lctd || !regimeDate || regimeDate < lctd.lctd;
+    const breadth = await computeMarketBreadth({
+      supabase: supabase as any,
+      date: dateUsed ?? null,
+      universe_slug: universeSlug,
+      strategy_version: strategyVersion,
+      regime_state: regimeState,
+    });
 
     const { data: rows } = dateUsed
       ? await (supabase as any)
@@ -175,6 +183,11 @@ const loadScreenerDataCached = unstable_cache(
         regime_state: regimeState,
         regime_date: regimeDate,
         regime_stale: regimeStale,
+        breadth_state: breadth.breadthState,
+        breadth_label: breadth.breadthLabel,
+        pct_above_sma50: breadth.pctAboveSma50,
+        pct_above_sma200: breadth.pctAboveSma200,
+        breadth_sample_size: breadth.sampleSize,
       },
       capacity,
       rows: rowsFinal,
