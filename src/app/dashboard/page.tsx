@@ -47,6 +47,12 @@ const PRICE_MISMATCH_THRESHOLD_PCT = 0.6;
 
 export const dynamic = "force-dynamic";
 
+function resolveQty(row: any) {
+  const raw = row?.shares ?? row?.quantity ?? row?.position_size ?? row?.qty ?? null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 export default async function DashboardPage() {
   const { supabase, user, portfolios, defaultPortfolio } = await getWorkspaceContext("/dashboard");
   const portfolioId = String(defaultPortfolio?.id ?? "");
@@ -137,6 +143,15 @@ export default async function DashboardPage() {
           .limit(8)
       : ({ data: [] } as any);
 
+  const { data: openRiskRows } =
+    portfolioId
+      ? await supabase
+          .from("portfolio_positions")
+          .select("entry_price,stop_price,shares,quantity,position_size,status")
+          .eq("portfolio_id", portfolioId)
+          .eq("status", "OPEN")
+      : ({ data: [] } as any);
+
   const openPreview: Array<{ symbol: string; qty: number; entry: number }> = ((openRows ?? []) as Array<{
     symbol: string | null;
     shares?: number | null;
@@ -148,6 +163,28 @@ export default async function DashboardPage() {
     qty: Number(row.shares ?? row.quantity ?? row.position_size ?? 0),
     entry: Number(row.entry_price ?? 0),
   }));
+
+  const totalExposure = snapshot?.deployed_cost_basis ?? 0;
+  const cashAvailable = snapshot?.cash_available ?? null;
+  const riskPerTrade =
+    typeof (defaultPortfolio as any)?.risk_per_trade === "number" &&
+    Number.isFinite(Number((defaultPortfolio as any).risk_per_trade))
+      ? Number((defaultPortfolio as any).risk_per_trade)
+      : 0.02;
+  const accountSize = snapshot?.account_size ?? null;
+  let totalRiskDeployed = 0;
+  for (const row of (openRiskRows ?? []) as Array<any>) {
+    const entry = Number(row?.entry_price);
+    const stop = Number(row?.stop_price);
+    const qty = resolveQty(row);
+    if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0 || qty <= 0) continue;
+    totalRiskDeployed += Math.max(0, (entry - stop) * qty);
+  }
+  const maxLossIfAllStopsHit = totalRiskDeployed;
+  const accountRiskPct =
+    typeof accountSize === "number" && Number.isFinite(accountSize) && accountSize > 0
+      ? (totalRiskDeployed / accountSize) * 100
+      : null;
   const topSignals = momentum.top.slice(0, 5);
   const topSymbols = Array.from(
     new Set(topSignals.map((row: any) => String(row.symbol ?? "").trim().toUpperCase()).filter(Boolean))
@@ -230,6 +267,38 @@ export default async function DashboardPage() {
           <div className="rounded-2xl border border-[#dfceb0] bg-[#fff7eb] p-5 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Risk deployed</div>
             <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">—</div>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-[#dfceb0] bg-[#fff7eb] p-5 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
+          <div className="text-base font-semibold tracking-tight text-slate-900">Portfolio Risk</div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Total Exposure</div>
+              <div className="mt-1 text-xl font-semibold text-slate-900">{money(totalExposure)}</div>
+            </div>
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Cash Available</div>
+              <div className="mt-1 text-xl font-semibold text-slate-900">{money(cashAvailable)}</div>
+            </div>
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Risk / Trade</div>
+              <div className="mt-1 text-xl font-semibold text-slate-900">{(riskPerTrade * 100).toFixed(1)}%</div>
+            </div>
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Risk Deployed</div>
+              <div className="mt-1 text-xl font-semibold text-slate-900">{money(totalRiskDeployed)}</div>
+            </div>
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Max Stop Loss Risk</div>
+              <div className="mt-1 text-xl font-semibold text-slate-900">{money(maxLossIfAllStopsHit)}</div>
+            </div>
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Account Risk %</div>
+              <div className="mt-1 text-xl font-semibold text-slate-900">
+                {accountRiskPct != null && Number.isFinite(accountRiskPct) ? `${accountRiskPct.toFixed(1)}%` : "—"}
+              </div>
+            </div>
           </div>
         </section>
 
