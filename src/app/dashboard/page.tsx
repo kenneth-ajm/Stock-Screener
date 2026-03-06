@@ -8,6 +8,7 @@ import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
 import { mapExecutionState } from "@/lib/execution_state";
 import { applyEarningsRiskToAction, lookupEarningsRiskForSymbols } from "@/lib/earnings_risk";
 import { applyBreadthToAction, computeMarketBreadth } from "@/lib/market_breadth";
+import TickerCheckClient from "./TickerCheckClient";
 
 function money(v: number | null | undefined) {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
@@ -290,6 +291,8 @@ export default async function DashboardPage() {
             <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">—</div>
           </div>
         </section>
+
+        <TickerCheckClient breadthState={breadth.breadthState} breadthLabel={breadth.breadthLabel} />
 
         <section className="rounded-2xl border border-[#dfceb0] bg-[#fff7eb] p-5 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
           <div className="text-base font-semibold tracking-tight text-slate-900">Portfolio Risk</div>
