@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
 
 type StrategyVersion = "v2_core_momentum" | "v1_trend_hold";
 
@@ -31,6 +32,15 @@ type Payload = {
   error?: string;
 };
 
+type QuoteMap = Record<
+  string,
+  {
+    price: number;
+    asOf: string;
+    source: "snapshot" | "eod_close";
+  } | null
+>;
+
 export default function IdeasWorkspaceClient({
   initialStrategy = "v2_core_momentum",
 }: {
@@ -47,6 +57,8 @@ export default function IdeasWorkspaceClient({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [quoteBySymbol, setQuoteBySymbol] = useState<QuoteMap>({});
+  const [livePrice, setLivePrice] = useState<number | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -64,12 +76,41 @@ export default function IdeasWorkspaceClient({
   }, [strategy]);
 
   useEffect(() => {
+    const symbols = (data?.rows ?? []).slice(0, 10).map((r) => r.symbol).filter(Boolean);
+    if (symbols.length === 0) {
+      setQuoteBySymbol({});
+      return;
+    }
+    let mounted = true;
+    fetch("/api/quotes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ symbols }),
+    })
+      .then((r) => r.json())
+      .then((payload) => {
+        if (!mounted) return;
+        const map = (payload?.quotes ?? {}) as QuoteMap;
+        setQuoteBySymbol(map);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setQuoteBySymbol({});
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [data?.rows]);
+
+  useEffect(() => {
     if (!selected) return;
     setFill(String(selected.entry ?? ""));
     setShares(String(selected.sizing?.shares ?? 0));
     setDetails(null);
     setError(null);
-  }, [selected]);
+    const q = quoteBySymbol[selected.symbol];
+    setLivePrice(typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null);
+  }, [selected, quoteBySymbol]);
 
   const rows = useMemo(() => (data?.rows ?? []).slice(0, 10), [data]);
   const fillNum = Number(fill);
@@ -81,6 +122,15 @@ export default function IdeasWorkspaceClient({
   const sharesNum = Number(shares);
   const positionCost = Number.isFinite(sharesNum) && Number.isFinite(fillNum) ? sharesNum * fillNum : 0;
   const riskUsed = Number.isFinite(sharesNum) && Number.isFinite(riskPerShare) ? sharesNum * riskPerShare : 0;
+  const zone = selected
+    ? getBuyZone({ strategy_version: strategy, model_entry: Number(selected.entry) })
+    : { zone_low: 0, zone_high: 0 };
+  const statusPrice = livePrice ?? (Number.isFinite(fillNum) ? fillNum : null);
+  const entryStatus = getEntryStatus({
+    price: statusPrice,
+    zone_low: zone.zone_low,
+    zone_high: zone.zone_high,
+  });
 
   async function openDetails() {
     if (!selected || detailsLoading || details) return;
@@ -143,6 +193,13 @@ export default function IdeasWorkspaceClient({
     return "border-rose-200 bg-rose-50 text-rose-700";
   }
 
+  function entryStatusPill(status: "Below trigger" | "Within zone" | "Extended" | "Too extended") {
+    if (status === "Within zone") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    if (status === "Below trigger") return "border-sky-200 bg-sky-50 text-sky-700";
+    if (status === "Extended") return "border-amber-200 bg-amber-50 text-amber-700";
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+
   return (
     <div className="space-y-4">
       {toast ? (
@@ -199,6 +256,7 @@ export default function IdeasWorkspaceClient({
                 <th className="p-3">Stop</th>
                 <th className="p-3">TP1</th>
                 <th className="p-3">Position Cost</th>
+                <th className="p-3">Entry zone</th>
                 <th className="p-3">Notes</th>
               </tr>
             </thead>
@@ -220,6 +278,20 @@ export default function IdeasWorkspaceClient({
                   <td className="p-3">{Number(row.stop ?? 0).toFixed(2)}</td>
                   <td className="p-3">{Number(row.tp1 ?? 0).toFixed(2)}</td>
                   <td className="p-3">{Number(row.sizing?.est_cost ?? 0).toFixed(2)}</td>
+                  <td className="p-3">
+                    {(() => {
+                      const q = quoteBySymbol[row.symbol];
+                      const live = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
+                      if (live == null) return <span className="text-slate-400">—</span>;
+                      const z = getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) });
+                      const s = getEntryStatus({ price: live, zone_low: z.zone_low, zone_high: z.zone_high });
+                      return (
+                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${entryStatusPill(s)}`}>
+                          {s}
+                        </span>
+                      );
+                    })()}
+                  </td>
                   <td className="max-w-[420px] truncate p-3 text-slate-600">{row.reason_summary ?? "—"}</td>
                 </tr>
               ))}
@@ -253,6 +325,26 @@ export default function IdeasWorkspaceClient({
                 <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                   <div className="text-xs text-slate-500">Stop</div>
                   <div className="mt-1 font-semibold">{selected.stop.toFixed(2)}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                  <div className="text-xs text-slate-500">Buy zone</div>
+                  <div className="mt-1 font-semibold">
+                    {zone.zone_low.toFixed(2)} - {zone.zone_high.toFixed(2)}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                  <div className="text-xs text-slate-500">Live price</div>
+                  <div className="mt-1 font-semibold">
+                    {livePrice != null ? livePrice.toFixed(2) : "—"}
+                  </div>
+                  <div className="mt-2">
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${entryStatusPill(entryStatus)}`}>
+                      {entryStatus}
+                    </span>
+                  </div>
                 </div>
               </div>
 
