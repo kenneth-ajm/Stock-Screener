@@ -210,15 +210,15 @@ export default async function DashboardPage() {
                 <Link
                   key={row.symbol}
                   href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol ?? ""))}`}
-                  className="block w-full cursor-pointer rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3.5 py-2.5 text-left transition hover:border-[#dac9ab] hover:bg-[#fff9f0]"
+                  className="flex w-full items-center justify-between cursor-pointer rounded-xl border border-[#eadfce] bg-[#fffdf7] px-4 py-3 hover:bg-[#faf6ee]"
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">{row.symbol}</span>
-                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${signalPill(row.signal)}`}>
-                      {row.signal}
-                    </span>
+                  <div className="min-w-0 pr-3">
+                    <div className="font-medium">{row.symbol}</div>
+                    <div className="mt-1 truncate text-xs text-slate-600">{row.reason_summary ?? "—"}</div>
                   </div>
-                  <div className="mt-1 truncate text-xs text-slate-600">{row.reason_summary ?? "—"}</div>
+                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${signalPill(row.signal)}`}>
+                    {row.signal}
+                  </span>
                 </Link>
               ))}
             </div>
