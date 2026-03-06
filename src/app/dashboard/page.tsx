@@ -140,6 +140,28 @@ export default async function DashboardPage() {
       topQuoteBySymbol = {};
     }
   }
+  if (topSymbols.length > 0) {
+    for (const symbol of topSymbols) {
+      const existing = topQuoteBySymbol[symbol];
+      if (existing && typeof existing.price === "number" && Number.isFinite(existing.price)) continue;
+      const { data: barRows } = await supabase
+        .from("price_bars")
+        .select("date,close")
+        .eq("symbol", symbol)
+        .order("date", { ascending: false })
+        .limit(1);
+      const latest = Array.isArray(barRows) ? barRows[0] : null;
+      const close = Number((latest as any)?.close);
+      const date = String((latest as any)?.date ?? "");
+      if (Number.isFinite(close) && close > 0 && date) {
+        topQuoteBySymbol[symbol] = {
+          price: close,
+          asOf: date,
+          source: "eod_close",
+        };
+      }
+    }
+  }
 
   return (
     <AppShell currentPath="/dashboard" userEmail={user.email ?? ""} portfolios={portfolios}>
@@ -264,15 +286,42 @@ export default async function DashboardPage() {
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0 pr-4">
                         <div className="text-xl font-semibold text-slate-900">{row.symbol}</div>
-                        <div className="mt-1 text-sm text-slate-600">
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-600">
                           {(() => {
                             const symbol = String(row.symbol ?? "").trim().toUpperCase();
                             const quote = topQuoteBySymbol[symbol];
-                            const live = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
+                            const last = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
                             const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
                             const delta =
-                              live !== null && entry !== null && entry > 0 ? ((live - entry) / entry) * 100 : null;
-                            return `Live ${fmtPrice(live)}  Entry ${fmtPrice(entry)}  ${fmtSignedPct(delta)}`;
+                              last !== null && entry !== null && entry > 0 ? ((last - entry) / entry) * 100 : null;
+                            const sourceBadgeClass =
+                              quote?.source === "snapshot"
+                                ? "border-sky-200 bg-sky-50 text-sky-700"
+                                : "border-slate-200 bg-slate-50 text-slate-700";
+                            const sourceLabel =
+                              quote?.source === "snapshot"
+                                ? "LIVE"
+                                : quote?.source === "eod_close"
+                                  ? "EOD"
+                                  : null;
+                            return (
+                              <>
+                                <span>
+                                  Last <span className="font-semibold text-slate-800">{fmtPrice(last)}</span>
+                                </span>
+                                <span>
+                                  Entry <span className="font-semibold text-slate-800">{fmtPrice(entry)}</span>
+                                </span>
+                                <span>
+                                  Delta <span className="font-semibold text-slate-800">{fmtSignedPct(delta)}</span>
+                                </span>
+                                {sourceLabel ? (
+                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${sourceBadgeClass}`}>
+                                    {sourceLabel}
+                                  </span>
+                                ) : null}
+                              </>
+                            );
                           })()}
                         </div>
                         <div className="mt-1">
