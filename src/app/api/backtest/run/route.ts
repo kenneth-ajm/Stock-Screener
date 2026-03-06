@@ -7,7 +7,14 @@ type BacktestBody = {
   universe_slug?: string;
   start_date?: string;
   end_date?: string;
+  entry_mode?: "trigger" | "next_open" | "next_close" | string;
 };
+
+function normalizeEntryMode(v: unknown): "trigger" | "next_open" | "next_close" {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "next_open" || s === "next_close" || s === "trigger") return s;
+  return "trigger";
+}
 
 function admin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -26,6 +33,7 @@ export async function POST(req: Request) {
       universe_slug: String(body.universe_slug ?? "core_800").trim() || "core_800",
       start_date: String(body.start_date ?? "").slice(0, 10),
       end_date: String(body.end_date ?? "").slice(0, 10),
+      entry_mode: normalizeEntryMode(body.entry_mode),
     };
     const result = await runMomentumBacktest({ supabase, input: inputs });
     return NextResponse.json({

@@ -3,6 +3,7 @@ export type BacktestInput = {
   end_date: string;
   universe_slug?: string;
   strategy_version?: string;
+  entry_mode?: "trigger" | "next_open" | "next_close";
 };
 
 export type BacktestTrade = {
@@ -64,6 +65,18 @@ const DEFAULT_UNIVERSE = "core_800";
 const MOMENTUM_STRATEGY = "v2_core_momentum";
 const DEFAULT_MAX_HOLD_DAYS = 7;
 const MAX_WAIT_DAYS = 10;
+
+function normalizeEntryMode(v: unknown): "trigger" | "next_open" | "next_close" {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "next_open" || s === "next_close" || s === "trigger") return s;
+  return "trigger";
+}
+
+function entryRuleText(mode: "trigger" | "next_open" | "next_close") {
+  if (mode === "next_open") return "next_trading_day_open";
+  if (mode === "next_close") return "next_trading_day_close";
+  return "wait_up_to_10_days_for_high_to_reach_signal_entry";
+}
 
 function toNum(v: unknown) {
   const n = Number(v);
@@ -151,6 +164,7 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
   const end = String(opts.input.end_date ?? "").slice(0, 10);
   const universe = String(opts.input.universe_slug ?? DEFAULT_UNIVERSE).trim() || DEFAULT_UNIVERSE;
   const strategy = String(opts.input.strategy_version ?? MOMENTUM_STRATEGY).trim() || MOMENTUM_STRATEGY;
+  const entry_mode = normalizeEntryMode(opts.input.entry_mode);
 
   if (!start || !end) {
     throw new Error("start_date and end_date are required");
@@ -175,7 +189,8 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
       assumptions: {
         source: "daily_scans BUY signals",
         strategy_version: strategy,
-        entry_rule: "wait_up_to_10_days_for_high_to_reach_signal_entry",
+        entry_mode,
+        entry_rule: entryRuleText(entry_mode),
         exits: "stop, tp1, time_stop",
         max_hold_days_fallback: DEFAULT_MAX_HOLD_DAYS,
         max_wait_days: MAX_WAIT_DAYS,
@@ -229,13 +244,6 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
       skipped += 1;
       continue;
     }
-    const signalEntry = toNum(s.entry);
-    if (signalEntry === null || !(signalEntry > 0)) {
-      skipped += 1;
-      invalidSignalEntry += 1;
-      continue;
-    }
-
     const waitStartIdx = bars.findIndex((b) => b.date > s.date);
     if (waitStartIdx < 0) {
       skipped += 1;
@@ -243,22 +251,37 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
       continue;
     }
 
-    const waitEndIdx = Math.min(bars.length - 1, waitStartIdx + MAX_WAIT_DAYS - 1);
     let entryIdx = -1;
-    for (let i = waitStartIdx; i <= waitEndIdx; i++) {
-      const high = toNum(bars[i]?.high);
-      if (high !== null && high >= signalEntry) {
-        entryIdx = i;
-        break;
+    let entry: number | null = null;
+    if (entry_mode === "trigger") {
+      const signalEntry = toNum(s.entry);
+      if (signalEntry === null || !(signalEntry > 0)) {
+        skipped += 1;
+        invalidSignalEntry += 1;
+        continue;
       }
-    }
-    if (entryIdx < 0) {
-      notTriggered += 1;
-      continue;
+      const waitEndIdx = Math.min(bars.length - 1, waitStartIdx + MAX_WAIT_DAYS - 1);
+      for (let i = waitStartIdx; i <= waitEndIdx; i++) {
+        const high = toNum(bars[i]?.high);
+        if (high !== null && high >= signalEntry) {
+          entryIdx = i;
+          break;
+        }
+      }
+      if (entryIdx < 0) {
+        notTriggered += 1;
+        continue;
+      }
+      entry = signalEntry;
+    } else if (entry_mode === "next_open") {
+      entryIdx = waitStartIdx;
+      entry = toNum(bars[entryIdx]?.open);
+    } else {
+      entryIdx = waitStartIdx;
+      entry = toNum(bars[entryIdx]?.close);
     }
 
     const entryBar = bars[entryIdx];
-    const entry = signalEntry;
     const stop = toNum(s.stop);
     const tp1 = toNum(s.tp1);
     if (entry === null || !(entry > 0) || stop === null || !(stop > 0) || tp1 === null || !(tp1 > 0)) {
@@ -322,7 +345,8 @@ export async function runMomentumBacktest(opts: { supabase: any; input: Backtest
     assumptions: {
       source: "daily_scans BUY signals",
       strategy_version: strategy,
-      entry_rule: "wait_up_to_10_days_for_high_to_reach_signal_entry",
+      entry_mode,
+      entry_rule: entryRuleText(entry_mode),
       exits: "stop, tp1, time_stop",
       max_hold_days_fallback: DEFAULT_MAX_HOLD_DAYS,
       max_wait_days: MAX_WAIT_DAYS,

@@ -44,7 +44,11 @@ type BacktestResponse = {
   error?: string;
   summary?: BacktestSummary;
   trades?: BacktestTrade[];
-  assumptions?: Record<string, unknown>;
+  assumptions?: {
+    entry_mode?: "trigger" | "next_open" | "next_close" | string;
+    max_wait_days?: number;
+    [key: string]: unknown;
+  };
 };
 
 function isoDate(d: Date) {
@@ -87,6 +91,7 @@ export default function BacktestClient() {
   const [datasetKey, setDatasetKey] = useState<(typeof DATASETS)[number]["key"]>(
     "v2_core_momentum__core_800"
   );
+  const [entryMode, setEntryMode] = useState<"trigger" | "next_open" | "next_close">("trigger");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestResponse | null>(null);
   const selectedDataset = DATASETS.find((d) => d.key === datasetKey) ?? DATASETS[0];
@@ -103,6 +108,7 @@ export default function BacktestClient() {
           universe_slug: selectedDataset.universe_slug,
           start_date: startDate,
           end_date: endDate,
+          entry_mode: entryMode,
         }),
       });
       const payload = (await res.json().catch(() => null)) as BacktestResponse | null;
@@ -158,6 +164,18 @@ export default function BacktestClient() {
               ))}
             </select>
           </div>
+          <div>
+            <label className="block text-xs text-slate-500">Entry mode</label>
+            <select
+              value={entryMode}
+              onChange={(e) => setEntryMode(e.target.value as "trigger" | "next_open" | "next_close")}
+              className="mt-1 rounded-lg border border-[#eadfce] bg-white px-3 py-2 text-sm font-medium text-slate-700"
+            >
+              <option value="trigger">Breakout trigger</option>
+              <option value="next_open">Next-day open</option>
+              <option value="next_close">Next-day close</option>
+            </select>
+          </div>
           <button
             onClick={runBacktest}
             disabled={loading}
@@ -209,7 +227,19 @@ export default function BacktestClient() {
           </div>
           <div className="rounded-xl border border-[#eadfce] bg-[#fffdf8] p-4 md:col-span-3">
             <div className="flex flex-wrap items-center gap-4 text-sm text-slate-700">
-              <span>Trigger window: <b>10 days</b></span>
+              <span>
+                Entry mode:{" "}
+                <b>
+                  {result?.assumptions?.entry_mode === "next_open"
+                    ? "Next-day open"
+                    : result?.assumptions?.entry_mode === "next_close"
+                      ? "Next-day close"
+                      : "Breakout trigger"}
+                </b>
+              </span>
+              {result?.assumptions?.entry_mode === "trigger" ? (
+                <span>Trigger window: <b>{Number(result?.assumptions?.max_wait_days ?? 10)} days</b></span>
+              ) : null}
               <span>Triggered: <b>{summary.triggered_trades}</b></span>
               <span>Not triggered: <b>{summary.not_triggered_trades}</b></span>
               <span>Gross return: <b>{pct(summary.gross_return_pct)}</b></span>
