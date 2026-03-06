@@ -43,7 +43,7 @@ export default function HeaderPortfolioSelector({ portfolios }: { portfolios: Po
       value={selected}
       onChange={(e) => onChange(e.target.value)}
       disabled={busy || portfolios.length === 0}
-      className="rounded-xl border border-[#e8dcc8] bg-[#fffaf2] px-3 py-1.5 text-xs text-slate-700"
+      className="rounded-xl border border-[#dcc9aa] bg-[#f9f1e4] px-3 py-1.5 text-xs font-medium text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]"
     >
       {portfolios.map((p) => (
         <option key={p.id} value={p.id}>

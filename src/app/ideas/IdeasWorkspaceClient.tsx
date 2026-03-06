@@ -134,50 +134,56 @@ export default function IdeasWorkspaceClient({
     }
   }
 
+  function signalPill(signal: "BUY" | "WATCH" | "AVOID") {
+    if (signal === "BUY") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    if (signal === "WATCH") return "border-amber-200 bg-amber-50 text-amber-700";
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-3.5">
+        <div className="flex items-center gap-2 rounded-xl border border-[#e5d8c4] bg-[#fbf6ee] p-1.5">
           <button
             onClick={() => setStrategy("v2_core_momentum")}
-            className={`rounded-xl border px-3 py-1.5 text-sm ${
+            className={`rounded-xl border px-3 py-1.5 text-sm font-medium ${
               strategy === "v2_core_momentum"
-                ? "border-[#d8ccb9] bg-[#ede1cf] text-slate-900"
-                : "border-[#e8dcc8] bg-[#fffaf2] text-slate-700"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f1e8da]"
             }`}
           >
             Momentum Swing
           </button>
           <button
             onClick={() => setStrategy("v1_trend_hold")}
-            className={`rounded-xl border px-3 py-1.5 text-sm ${
+            className={`rounded-xl border px-3 py-1.5 text-sm font-medium ${
               strategy === "v1_trend_hold"
-                ? "border-[#d8ccb9] bg-[#ede1cf] text-slate-900"
-                : "border-[#e8dcc8] bg-[#fffaf2] text-slate-700"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f1e8da]"
             }`}
           >
             Trend Hold
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-          <span className="rounded-full border border-[#e8dcc8] bg-[#fffaf2] px-2 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
-          <span className="rounded-full border border-[#e8dcc8] bg-[#fffaf2] px-2 py-1">LCTD: {data?.meta?.lctd ?? "—"}</span>
-          <span className="rounded-full border border-[#e8dcc8] bg-[#fffaf2] px-2 py-1">
+          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
+          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">LCTD: {data?.meta?.lctd ?? "—"}</span>
+          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">
             Cash: {Number(data?.capacity?.cash_available ?? 0).toFixed(2)}
           </span>
-          <span className="rounded-full border border-[#e8dcc8] bg-[#fffaf2] px-2 py-1">
+          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">
             Slots: {data?.capacity?.slots_left ?? 0}
           </span>
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-[#e8dcc8] bg-[#fffaf2]">
+      <div className="overflow-hidden rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] shadow-[0_8px_24px_rgba(88,63,36,0.04)]">
         {loading ? <div className="p-4 text-sm text-slate-600">Loading ideas…</div> : null}
         {!loading && !data?.ok ? <div className="p-4 text-sm text-rose-600">Failed: {data?.error ?? "Unknown error"}</div> : null}
         {!loading && data?.ok ? (
           <table className="w-full text-sm">
             <thead className="text-left text-xs text-slate-500">
-              <tr className="border-b border-[#e8dcc8]">
+              <tr className="border-b border-[#e2d2b7]">
                 <th className="p-3">Symbol</th>
                 <th className="p-3">Signal</th>
                 <th className="p-3">Rank</th>
@@ -192,11 +198,15 @@ export default function IdeasWorkspaceClient({
               {rows.map((row) => (
                 <tr
                   key={row.symbol}
-                  className="cursor-pointer border-b border-[#efe5d6] hover:bg-[#f7efdf]"
+                  className="cursor-pointer border-b border-[#efe5d6] transition hover:bg-[#fff9f0]"
                   onClick={() => setSelected(row)}
                 >
-                  <td className="p-3 font-medium">{row.symbol}</td>
-                  <td className="p-3">{row.signal}</td>
+                  <td className="p-3 font-semibold tracking-tight">{row.symbol}</td>
+                  <td className="p-3">
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${signalPill(row.signal)}`}>
+                      {row.signal}
+                    </span>
+                  </td>
                   <td className="p-3">{row.rank ?? "—"}</td>
                   <td className="p-3">{Number(row.entry ?? 0).toFixed(2)}</td>
                   <td className="p-3">{Number(row.stop ?? 0).toFixed(2)}</td>
@@ -211,34 +221,34 @@ export default function IdeasWorkspaceClient({
       </div>
 
       <div
-        className={`fixed right-0 top-0 z-50 h-full w-full max-w-xl transform border-l border-[#e8dcc8] bg-[#fffaf2] shadow-2xl transition ${
+        className={`fixed right-0 top-0 z-50 h-full w-full max-w-xl transform border-l border-[#e0cfb1] bg-[#fff8ee] shadow-2xl transition ${
           selected ? "translate-x-0" : "translate-x-full"
         }`}
       >
         {selected ? (
           <div className="flex h-full flex-col">
-            <div className="flex items-center justify-between border-b border-[#e8dcc8] px-4 py-3">
+            <div className="flex items-center justify-between border-b border-[#e3d2b6] px-4 py-3">
               <div>
                 <div className="text-lg font-semibold">{selected.symbol}</div>
                 <div className="text-xs text-slate-500">{strategy === "v1_trend_hold" ? "Trend Hold" : "Momentum Swing"}</div>
               </div>
-              <button onClick={() => setSelected(null)} className="rounded-lg border border-[#e8dcc8] px-2 py-1 text-xs">
+              <button onClick={() => setSelected(null)} className="rounded-lg border border-[#dcc9aa] bg-[#f3e7d3] px-2.5 py-1 text-xs font-medium">
                 Close
               </button>
             </div>
             <div className="flex-1 space-y-4 overflow-y-auto p-4 text-sm">
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-xl border border-[#e8dcc8] bg-[#fffdf7] p-3">
+                <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                   <div className="text-xs text-slate-500">Model entry</div>
                   <div className="mt-1 font-semibold">{selected.entry.toFixed(2)}</div>
                 </div>
-                <div className="rounded-xl border border-[#e8dcc8] bg-[#fffdf7] p-3">
+                <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                   <div className="text-xs text-slate-500">Stop</div>
                   <div className="mt-1 font-semibold">{selected.stop.toFixed(2)}</div>
                 </div>
               </div>
 
-              <div className="space-y-2 rounded-xl border border-[#e8dcc8] bg-[#fffdf7] p-3">
+              <div className="space-y-2 rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                 <label className="block text-xs text-slate-500">Your entry</label>
                 <input
                   value={fill}
@@ -251,14 +261,14 @@ export default function IdeasWorkspaceClient({
                       if (nextRisk > 0) setShares(String(Math.floor(riskBudget / nextRisk)));
                     }
                   }}
-                  className="w-full rounded-lg border border-[#e8dcc8] px-3 py-2"
+                  className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
                   inputMode="decimal"
                 />
                 <label className="block text-xs text-slate-500">Shares</label>
                 <input
                   value={shares}
                   onChange={(e) => setShares(e.target.value)}
-                  className="w-full rounded-lg border border-[#e8dcc8] px-3 py-2"
+                  className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
                   inputMode="numeric"
                 />
                 <div className="text-xs text-slate-600">
@@ -266,14 +276,14 @@ export default function IdeasWorkspaceClient({
                 </div>
               </div>
 
-              <div className="rounded-xl border border-[#e8dcc8] bg-[#fffdf7] p-3 text-xs text-slate-600">
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3 text-xs text-slate-600">
                 <div>Risk/share: {Number.isFinite(riskPerShare) ? riskPerShare.toFixed(2) : "—"}</div>
                 <div>Risk budget: {Number.isFinite(riskBudget) ? riskBudget.toFixed(2) : "—"}</div>
                 <div>Position cost: {Number.isFinite(positionCost) ? positionCost.toFixed(2) : "—"}</div>
                 <div>TP1 / TP2: {selected.tp1.toFixed(2)} / {selected.tp2.toFixed(2)}</div>
               </div>
 
-              <div className="rounded-xl border border-[#e8dcc8] bg-[#fffdf7] p-3">
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                 <button
                   onClick={openDetails}
                   className="text-xs text-slate-600 underline"
@@ -289,7 +299,7 @@ export default function IdeasWorkspaceClient({
               </div>
               {error ? <div className="text-sm text-rose-600">{error}</div> : null}
             </div>
-            <div className="border-t border-[#e8dcc8] p-4">
+            <div className="border-t border-[#e3d2b6] p-4">
               <button
                 onClick={addPosition}
                 disabled={saving}

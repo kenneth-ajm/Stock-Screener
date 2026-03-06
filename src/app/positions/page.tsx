@@ -73,28 +73,29 @@ export default async function PositionsPage() {
     <AppShell currentPath="/positions" userEmail={user.email ?? ""} portfolios={portfolios}>
       <div className="space-y-4">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Positions</h1>
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Positions</h1>
           <p className="text-sm text-slate-600">Grouped-first open positions workspace with lot-level controls preserved.</p>
         </div>
 
         <div className="grid gap-3 md:grid-cols-4">
-          <div className="rounded-2xl border border-[#e8dcc8] bg-[#fffaf2] p-4">
-            <div className="text-xs text-slate-500">Account size</div>
-            <div className="mt-1 text-xl font-semibold">{money(snapshot?.account_size ?? null)}</div>
+          <div className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-4 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Account size</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight">{money(snapshot?.account_size ?? null)}</div>
           </div>
-          <div className="rounded-2xl border border-[#e8dcc8] bg-[#fffaf2] p-4">
-            <div className="text-xs text-slate-500">Deployed (cost basis)</div>
-            <div className="mt-1 text-xl font-semibold">{money(snapshot?.deployed_cost_basis ?? null)}</div>
+          <div className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-4 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Deployed</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight">{money(snapshot?.deployed_cost_basis ?? null)}</div>
+            <div className="text-xs text-slate-500">Cost basis</div>
           </div>
-          <div className="rounded-2xl border border-[#e8dcc8] bg-[#fffaf2] p-4">
-            <div className="text-xs text-slate-500">Market value</div>
-            <div className="mt-1 text-xl font-semibold">{money(snapshot?.market_value_optional ?? null)}</div>
+          <div className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-4 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Market value</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight">{money(snapshot?.market_value_optional ?? null)}</div>
           </div>
-          <div className="rounded-2xl border border-[#e8dcc8] bg-[#fffaf2] p-4">
-            <div className="text-xs text-slate-500">Cash available</div>
-            <div className="mt-1 text-xl font-semibold">
+          <div className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-4 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Cash available</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight">
               {money(snapshot?.cash_available ?? null)}{" "}
-              <span className="text-sm text-slate-500">({snapshot?.cash_source === "manual" ? "Exact" : "Estimated"})</span>
+              <span className="text-xs font-medium text-slate-500">({snapshot?.cash_source === "manual" ? "Exact" : "Estimated"})</span>
             </div>
           </div>
         </div>
