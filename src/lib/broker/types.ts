@@ -33,6 +33,7 @@ export type BrokerReadOnlyResult = {
   positions_count: number;
   warnings: string[];
   errors: string[];
+  debug?: Record<string, unknown> | null;
 };
 
 /**
@@ -47,5 +48,6 @@ export interface BrokerConnector {
   isConfigured(): boolean;
   fetchAccountReadOnly(): Promise<BrokerAccountSnapshot | null>;
   fetchPositionsReadOnly(): Promise<BrokerPositionSnapshot[]>;
+  getReadOnlyDebug?(): Record<string, unknown> | null;
   placeOrder(_payload: unknown): Promise<never>;
 }

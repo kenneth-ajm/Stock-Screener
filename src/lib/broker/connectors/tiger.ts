@@ -45,6 +45,77 @@ function pickFirst(obj: any, keys: string[]): unknown {
   return null;
 }
 
+function isObject(v: unknown): v is Record<string, unknown> {
+  return Boolean(v) && typeof v === "object" && !Array.isArray(v);
+}
+
+function shapeSummary(json: unknown) {
+  const root = isObject(json) ? json : {};
+  const data = (root as any).data;
+  const result = (root as any).result;
+  const results = (root as any).results;
+  return {
+    root_type: Array.isArray(json) ? "array" : typeof json,
+    root_keys: Object.keys(root).slice(0, 40),
+    data_type: Array.isArray(data) ? "array" : typeof data,
+    data_keys: isObject(data) ? Object.keys(data).slice(0, 40) : [],
+    result_type: Array.isArray(result) ? "array" : typeof result,
+    result_keys: isObject(result) ? Object.keys(result).slice(0, 40) : [],
+    results_type: Array.isArray(results) ? "array" : typeof results,
+    results_keys: isObject(results) ? Object.keys(results).slice(0, 40) : [],
+    code: (root as any).code ?? null,
+    status: (root as any).status ?? null,
+    message: (root as any).message ?? (root as any).msg ?? null,
+  };
+}
+
+function getByPath(obj: unknown, path: string): unknown {
+  const parts = path.split(".");
+  let cur: unknown = obj;
+  for (const part of parts) {
+    if (!isObject(cur)) return undefined;
+    cur = (cur as any)[part];
+  }
+  return cur;
+}
+
+function firstArrayByPaths(obj: unknown, paths: string[]) {
+  for (const path of paths) {
+    const v = getByPath(obj, path);
+    if (Array.isArray(v)) return { path, value: v as any[] };
+  }
+  return { path: null as string | null, value: [] as any[] };
+}
+
+function firstObjectByPaths(obj: unknown, paths: string[]) {
+  for (const path of paths) {
+    const v = getByPath(obj, path);
+    if (isObject(v)) return { path, value: v as Record<string, unknown> };
+  }
+  return { path: null as string | null, value: null as Record<string, unknown> | null };
+}
+
+function deepFindByKeys(obj: unknown, keys: string[], maxDepth = 6): unknown {
+  const wanted = new Set(keys.map((k) => k.toLowerCase()));
+  const queue: Array<{ value: unknown; depth: number }> = [{ value: obj, depth: 0 }];
+  const seen = new Set<unknown>();
+  while (queue.length > 0) {
+    const { value, depth } = queue.shift()!;
+    if (!value || depth > maxDepth || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const v of value.slice(0, 50)) queue.push({ value: v, depth: depth + 1 });
+      continue;
+    }
+    if (!isObject(value)) continue;
+    for (const [k, v] of Object.entries(value)) {
+      if (wanted.has(k.toLowerCase()) && v != null) return v;
+    }
+    for (const v of Object.values(value)) queue.push({ value: v, depth: depth + 1 });
+  }
+  return null;
+}
+
 function normalizePrivateKey(raw: string): string {
   let trimmed = String(raw ?? "").trim();
   if (
@@ -110,6 +181,10 @@ function parseTigerPrivateKey(raw: string): KeyObject {
 export class TigerReadOnlyConnector implements BrokerConnector {
   provider = "tiger" as const;
   mode = "read_only_live" as const;
+  private readonly debug: Record<string, unknown> = {
+    provider: "tiger",
+    mode: "read_only_live",
+  };
 
   private endpointUrl(pathOrUrl: string) {
     const env = readBrokerEnv();
@@ -174,6 +249,10 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     return tigerConfigured(readBrokerEnv());
   }
 
+  getReadOnlyDebug(): Record<string, unknown> | null {
+    return { ...this.debug };
+  }
+
   async fetchAccountReadOnly(): Promise<BrokerAccountSnapshot | null> {
     const env = readBrokerEnv();
     const configured = tigerConfigured(env);
@@ -190,22 +269,95 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       pathOrUrl: env.tiger.account_endpoint,
       body: accountBody,
     });
+    this.debug.account_request = {
+      endpoint: request.url,
+      method: "POST",
+      body_keys: Object.keys(accountBody),
+      account_id_present: Boolean(env.tiger.account_id),
+      base_url: env.tiger.base_url,
+    };
     const res = await fetchWithRetry(request.url, request.init);
+    this.debug.account_http = {
+      ok: res.ok,
+      status: res.status,
+      status_text: res.statusText,
+    };
     if (!res.ok) {
       throw new Error(`Tiger account request failed (${res.status})`);
     }
 
     const json = await res.json().catch(() => null);
-    const root = (json?.data ?? json?.result ?? json?.results ?? json) as any;
+    const rootObj = isObject(json) ? json : null;
+    const accountObj = firstObjectByPaths(json, [
+      "data.account",
+      "data.summary",
+      "data.assets",
+      "result.account",
+      "result.summary",
+      "results.account",
+      "account",
+      "data",
+      "result",
+      "results",
+    ]);
+
+    const fromObj = accountObj.value ?? (rootObj as any);
     const asOf = String(
-      pickFirst(root, ["as_of", "asOf", "updated_at", "timestamp"]) ?? nowIso()
+      pickFirst(fromObj, ["as_of", "asOf", "updated_at", "timestamp", "time"]) ??
+        deepFindByKeys(json, ["as_of", "updated_at", "timestamp", "time"]) ??
+        nowIso()
     );
-    const currency = String(pickFirst(root, ["currency", "base_currency"]) ?? "USD");
-    const cash = toNum(pickFirst(root, ["cash_available", "cash", "available_funds"]));
-    const equity = toNum(pickFirst(root, ["equity", "net_liquidation", "net_asset_value"]));
+    const currency = String(
+      pickFirst(fromObj, ["currency", "base_currency", "baseCurrency"]) ??
+        deepFindByKeys(json, ["currency", "base_currency"]) ??
+        "USD"
+    );
+    const cash = toNum(
+      pickFirst(fromObj, [
+        "cash_available",
+        "cash",
+        "available_funds",
+        "available_cash",
+        "cash_balance",
+        "availableBalance",
+      ]) ??
+        deepFindByKeys(json, [
+          "cash_available",
+          "available_funds",
+          "available_cash",
+          "cash_balance",
+          "cash",
+        ])
+    );
+    const equity = toNum(
+      pickFirst(fromObj, ["equity", "net_liquidation", "net_asset_value", "total_assets"]) ??
+        deepFindByKeys(json, ["equity", "net_liquidation", "net_asset_value", "total_assets"])
+    );
     const buyingPower = toNum(
-      pickFirst(root, ["buying_power", "buyingPower", "max_buying_power"])
+      pickFirst(fromObj, [
+        "buying_power",
+        "buyingPower",
+        "max_buying_power",
+        "available_buying_power",
+      ]) ??
+        deepFindByKeys(json, [
+          "buying_power",
+          "buyingPower",
+          "max_buying_power",
+          "available_buying_power",
+        ])
     );
+
+    this.debug.account_parse = {
+      selected_path: accountObj.path,
+      shape: shapeSummary(json),
+      mapped: {
+        currency,
+        cash_available: cash,
+        equity,
+        buying_power: buyingPower,
+      },
+    };
 
     return {
       account_id: env.tiger.account_id || "tiger_account",
@@ -232,28 +384,65 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       pathOrUrl: env.tiger.positions_endpoint,
       body: positionsBody,
     });
+    this.debug.positions_request = {
+      endpoint: request.url,
+      method: "POST",
+      body_keys: Object.keys(positionsBody),
+      account_id_present: Boolean(env.tiger.account_id),
+      base_url: env.tiger.base_url,
+    };
     const res = await fetchWithRetry(request.url, request.init);
+    this.debug.positions_http = {
+      ok: res.ok,
+      status: res.status,
+      status_text: res.statusText,
+    };
     if (!res.ok) {
       throw new Error(`Tiger positions request failed (${res.status})`);
     }
 
     const json = await res.json().catch(() => null);
-    const list = (json?.data ?? json?.result ?? json?.results ?? json?.positions ?? []) as any[];
+    const positionsList = firstArrayByPaths(json, [
+      "data.positions",
+      "data.items",
+      "data.holdings",
+      "data.rows",
+      "result.positions",
+      "result.items",
+      "results.positions",
+      "results.items",
+      "positions",
+      "data",
+      "result",
+      "results",
+    ]);
+    const list = positionsList.value;
+    this.debug.positions_parse = {
+      selected_path: positionsList.path,
+      shape: shapeSummary(json),
+      candidate_count: Array.isArray(list) ? list.length : 0,
+    };
     if (!Array.isArray(list)) return [];
     const asOf = nowIso();
-    return list
+    const normalized = list
       .map((row: any) => {
         const symbol = String(
-          pickFirst(row, ["symbol", "ticker", "contract", "instrument_id"]) ?? ""
+          pickFirst(row, ["symbol", "ticker", "contract", "instrument_id", "secuCode"]) ?? ""
         )
           .trim()
           .toUpperCase();
-        const quantity = toNum(pickFirst(row, ["quantity", "qty", "position", "shares"])) ?? 0;
-        const average_cost = toNum(pickFirst(row, ["average_cost", "avg_cost", "cost_price"]));
-        const market_price = toNum(pickFirst(row, ["market_price", "last_price", "price"]));
+        const quantity = toNum(
+          pickFirst(row, ["quantity", "qty", "position", "shares", "positionQty", "holdQty"])
+        ) ?? 0;
+        const average_cost = toNum(
+          pickFirst(row, ["average_cost", "avg_cost", "cost_price", "averagePrice", "costPrice"])
+        );
+        const market_price = toNum(
+          pickFirst(row, ["market_price", "last_price", "price", "latestPrice", "marketPrice"])
+        );
         const market_value = toNum(pickFirst(row, ["market_value", "value"]));
         const unrealized_pnl = toNum(
-          pickFirst(row, ["unrealized_pnl", "unrealized", "floating_pnl"])
+          pickFirst(row, ["unrealized_pnl", "unrealized", "floating_pnl", "unrealizedPnl"])
         );
         return {
           symbol,
@@ -267,6 +456,12 @@ export class TigerReadOnlyConnector implements BrokerConnector {
         };
       })
       .filter((row) => row.symbol && row.quantity !== 0);
+    this.debug.positions_parse = {
+      ...(this.debug.positions_parse as any),
+      normalized_count: normalized.length,
+      sample_symbols: normalized.slice(0, 5).map((r) => r.symbol),
+    };
+    return normalized;
   }
 
   async placeOrder(_payload: unknown): Promise<never> {

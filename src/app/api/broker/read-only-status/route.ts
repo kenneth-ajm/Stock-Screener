@@ -102,6 +102,7 @@ export async function GET() {
       positions_count: snapshot.positions_count,
       warnings: snapshot.warnings,
       errors: snapshot.errors,
+      broker_debug: snapshot.debug ?? null,
       broker: snapshot,
       portfolio: {
         default_portfolio_id: defaultPortfolio?.id ?? null,
