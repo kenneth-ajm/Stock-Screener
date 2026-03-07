@@ -8,7 +8,7 @@ import {
 
 const DEFAULT_STRATEGIES = ["v2_core_momentum", "v1_trend_hold", SECTOR_MOMENTUM_STRATEGY_VERSION];
 const DEFAULT_MAX_DAYS = 5;
-const MAX_SAFE_DAYS = 30;
+const MAX_SAFE_DAYS = 130;
 
 export type BackfillDerivedInput = {
   start_date: string;
@@ -39,6 +39,7 @@ export type BackfillDerivedSummary = {
     strategy_version: string;
     universe_slug: string;
     dates_processed: number;
+    dates_skipped_existing: number;
     rows_written: number;
     rows_pruned: number;
     breadth_preview: Array<{
@@ -148,10 +149,12 @@ export async function runDerivedScanBackfill(opts: {
 
   for (const strategy_version of strategies) {
     const universe_slug = defaultUniverseForStrategy(strategy_version) || "core_800";
+    let strategyDates = [...selectedDates];
     const item = {
       strategy_version,
       universe_slug,
       dates_processed: 0,
+      dates_skipped_existing: 0,
       rows_written: 0,
       rows_pruned: 0,
       breadth_preview: [] as Array<{
@@ -163,7 +166,38 @@ export async function runDerivedScanBackfill(opts: {
       errors: [] as Array<{ date: string; error: string }>,
     };
 
-    for (const date of selectedDates) {
+    if (execute && dedupeSkipExisting) {
+      const { data: existingRows } = await supa
+        .from("daily_scans")
+        .select("date")
+        .eq("universe_slug", universe_slug)
+        .eq("strategy_version", strategy_version)
+        .gte("date", start)
+        .lte("date", end)
+        .order("date", { ascending: true })
+        .limit(250000);
+      const dateCounts = new Map<string, number>();
+      for (const row of existingRows ?? []) {
+        const d = String((row as any)?.date ?? "");
+        if (!d) continue;
+        dateCounts.set(d, (dateCounts.get(d) ?? 0) + 1);
+      }
+      strategyDates = allDates.filter((d) => !dateCounts.has(d)).slice(0, max_days);
+      item.dates_skipped_existing = allDates.length - strategyDates.length;
+      for (const [date, existing_rows] of dateCounts.entries()) {
+        summary.rows_skipped_dedupe += existing_rows;
+        if (summary.sample_skipped_dedupe.length < 20) {
+          summary.sample_skipped_dedupe.push({
+            date,
+            strategy_version,
+            universe_slug,
+            existing_rows,
+          });
+        }
+      }
+    }
+
+    for (const date of strategyDates) {
       try {
         if (strategy_version === SECTOR_MOMENTUM_STRATEGY_VERSION) {
           const sector = await computeSectorMomentumCandidates({
@@ -240,28 +274,6 @@ export async function runDerivedScanBackfill(opts: {
             });
           }
           if (execute) {
-            if (dedupeSkipExisting) {
-              const { count: existingCount } = await supa
-                .from("daily_scans")
-                .select("id", { count: "exact", head: true })
-                .eq("date", date)
-                .eq("universe_slug", universe_slug)
-                .eq("strategy_version", strategy_version);
-              const existingRows = Number(existingCount ?? 0);
-              if (existingRows > 0) {
-                summary.rows_skipped_dedupe += existingRows;
-                if (summary.sample_skipped_dedupe.length < 20) {
-                  summary.sample_skipped_dedupe.push({
-                    date,
-                    strategy_version,
-                    universe_slug,
-                    existing_rows: existingRows,
-                  });
-                }
-                item.dates_processed += 1;
-                continue;
-              }
-            }
             const result = await runScanPipeline({
               supabase: supa,
               universe_slug,

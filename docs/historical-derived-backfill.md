@@ -67,6 +67,22 @@ curl -X POST /api/jobs/backfill-derived-scans \
   -d '{"start_date":"2026-02-24","end_date":"2026-03-03","tiny_test":true,"tiny_days":7}'
 ```
 
+## Momentum Replay Expansion Mode
+
+For a meaningful historical dataset expansion (3–6 months):
+- `momentum_replay: true`
+- locked to `v2_core_momentum` + `core_800`
+- `dedupe_skip_existing=true` (resume-safe)
+- breadth preview disabled in this mode for faster processing
+
+Example:
+
+```bash
+curl -X POST /api/jobs/backfill-derived-scans \
+  -H "content-type: application/json" \
+  -d '{"start_date":"2025-10-01","end_date":"2026-03-03","momentum_replay":true,"replay_days":63}'
+```
+
 ## Replay Behavior by Strategy
 
 - `v2_core_momentum`, `v1_trend_hold`:

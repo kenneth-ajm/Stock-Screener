@@ -372,8 +372,9 @@ export async function runScanPipeline(opts: {
   }
   const scanDate = dateResolved.scan_date_used;
 
-  // Guardrail: remove impossible future scan rows only for current LCTD scans.
-  if (!requestedScanDate || requestedScanDate === scanDate) {
+  // Guardrail: remove impossible future scan rows only for implicit latest scans.
+  // Explicit historical replays must not delete newer cached dates.
+  if (!requestedScanDate) {
     await supa
       .from("daily_scans")
       .delete()

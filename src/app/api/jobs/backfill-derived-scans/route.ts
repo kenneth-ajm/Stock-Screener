@@ -12,12 +12,14 @@ type Body = {
   include_breadth_preview?: boolean;
   tiny_test?: boolean;
   tiny_days?: number;
+  momentum_replay?: boolean;
+  replay_days?: number;
 };
 
-function clampMaxDays(input: unknown) {
+function clampMaxDays(input: unknown, max = 30) {
   const n = Number(input);
   if (!Number.isFinite(n)) return 5;
-  return Math.max(1, Math.min(30, Math.floor(n)));
+  return Math.max(1, Math.min(max, Math.floor(n)));
 }
 
 export async function POST(req: Request) {
@@ -29,11 +31,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "start_date and end_date are required" }, { status: 400 });
     }
     const tiny_test = body.tiny_test === true;
+    const momentum_replay = body.momentum_replay === true;
     const max_days = tiny_test
-      ? Math.max(5, Math.min(10, clampMaxDays(body.tiny_days ?? body.max_days ?? 7)))
-      : clampMaxDays(body.max_days);
-    const execute = tiny_test ? true : body.execute === true;
-    if (execute && max_days > 10) {
+      ? Math.max(5, Math.min(10, clampMaxDays(body.tiny_days ?? body.max_days ?? 7, 10)))
+      : momentum_replay
+        ? clampMaxDays(body.replay_days ?? body.max_days ?? 63, 130)
+      : clampMaxDays(body.max_days, 30);
+    const execute = tiny_test || momentum_replay ? true : body.execute === true;
+    if (execute && !momentum_replay && max_days > 10) {
       return NextResponse.json(
         {
           ok: false,
@@ -49,12 +54,17 @@ export async function POST(req: Request) {
       input: {
         start_date,
         end_date,
-        strategies: tiny_test ? ["v2_core_momentum"] : Array.isArray(body.strategies) ? body.strategies : undefined,
+        strategies:
+          tiny_test || momentum_replay
+            ? ["v2_core_momentum"]
+            : Array.isArray(body.strategies)
+              ? body.strategies
+              : undefined,
         dry_run: body.dry_run,
         execute,
         max_days,
-        include_breadth_preview: body.include_breadth_preview,
-        dedupe_skip_existing: tiny_test ? true : false,
+        include_breadth_preview: momentum_replay ? false : body.include_breadth_preview,
+        dedupe_skip_existing: tiny_test || momentum_replay ? true : false,
       },
     });
 
@@ -77,6 +87,29 @@ export async function POST(req: Request) {
           max_days,
           dedupe_skip_existing: true,
           note: "Tiny mode writes derived momentum rows only; no raw ingestion.",
+        },
+      });
+    }
+
+    if (momentum_replay) {
+      const momentumOnly = summary.per_strategy.filter((s) => s.strategy_version === "v2_core_momentum");
+      return NextResponse.json({
+        ...summary,
+        mode: "execute",
+        strategies: ["v2_core_momentum"],
+        per_strategy: momentumOnly,
+        momentum_replay: {
+          enabled: true,
+          strategy_version: "v2_core_momentum",
+          universe_slug: "core_800",
+          max_days,
+          note: "Momentum replay mode executed with dedupe_skip_existing=true and breadth preview disabled for speed.",
+        },
+        safety: {
+          execute: true,
+          max_days,
+          dedupe_skip_existing: true,
+          note: "Momentum replay writes derived momentum rows only; no raw ingestion.",
         },
       });
     }
