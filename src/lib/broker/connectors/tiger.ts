@@ -116,17 +116,18 @@ function deepFindByKeys(obj: unknown, keys: string[], maxDepth = 6): unknown {
   return null;
 }
 
-function buildTigerIdentityPayload(cmd: string, tigerAccountId: string) {
-  const id = String(tigerAccountId ?? "").trim();
+function buildTigerIdentityPayload(cmd: string, opts: { tigerId: string; accountId: string }) {
+  const tigerId = String(opts.tigerId ?? "").trim();
+  const accountId = String(opts.accountId ?? "").trim();
   // Tiger gateway integrations are inconsistent across environments;
   // include the common tiger/account key aliases to avoid null-identifier errors.
   return {
     cmd,
-    tigerId: id,
-    tiger_id: id,
-    accountId: id,
-    account_id: id,
-    account: id,
+    tigerId,
+    tiger_id: tigerId,
+    accountId,
+    account_id: accountId,
+    account: accountId,
   };
 }
 
@@ -274,7 +275,10 @@ export class TigerReadOnlyConnector implements BrokerConnector {
 
     // Phase 1 safety boundary:
     // Read-only broker sync only. No execution and no strategy influence.
-    const accountBody = buildTigerIdentityPayload("get_account", env.tiger.account_id);
+    const accountBody = buildTigerIdentityPayload("get_account", {
+      tigerId: env.tiger.client_id,
+      accountId: env.tiger.account_id,
+    });
     const request = this.signedInit({
       method: "POST",
       pathOrUrl: env.tiger.account_endpoint,
@@ -285,6 +289,9 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       method: "POST",
       body_keys: Object.keys(accountBody),
       account_id_present: Boolean(env.tiger.account_id),
+      tiger_id_present: Boolean(env.tiger.client_id),
+      tiger_id_source: "TIGER_CLIENT_ID",
+      account_source: "TIGER_ACCOUNT_ID",
       base_url: env.tiger.base_url,
     };
     const res = await fetchWithRetry(request.url, request.init);
@@ -386,7 +393,10 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     const configured = tigerConfigured(env);
     if (!configured) return [];
 
-    const positionsBody = buildTigerIdentityPayload("get_positions", env.tiger.account_id);
+    const positionsBody = buildTigerIdentityPayload("get_positions", {
+      tigerId: env.tiger.client_id,
+      accountId: env.tiger.account_id,
+    });
     const request = this.signedInit({
       method: "POST",
       pathOrUrl: env.tiger.positions_endpoint,
@@ -397,6 +407,9 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       method: "POST",
       body_keys: Object.keys(positionsBody),
       account_id_present: Boolean(env.tiger.account_id),
+      tiger_id_present: Boolean(env.tiger.client_id),
+      tiger_id_source: "TIGER_CLIENT_ID",
+      account_source: "TIGER_ACCOUNT_ID",
       base_url: env.tiger.base_url,
     };
     const res = await fetchWithRetry(request.url, request.init);
