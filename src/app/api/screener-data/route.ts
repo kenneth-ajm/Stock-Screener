@@ -8,7 +8,6 @@ import { getActivePortfolioCapacity } from "@/lib/portfolio_capacity";
 import { computePortfolioAwareAction } from "@/lib/execution_action";
 import { computeMarketBreadth } from "@/lib/market_breadth";
 import {
-  computeSectorMomentumCandidates,
   SECTOR_MOMENTUM_STRATEGY_VERSION,
 } from "@/lib/sector_momentum";
 import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
@@ -123,55 +122,66 @@ const loadScreenerDataCached = unstable_cache(
     const regimeState = regimeExact?.state ?? regimeRow?.state ?? null;
     const regimeStale = !lctd.lctd || !regimeDate || regimeDate < lctd.lctd;
     const isSectorMomentum = strategyVersion === SECTOR_MOMENTUM_STRATEGY_VERSION;
-    const { data: persistedSectorRows } = isSectorMomentum && dateUsed
-      ? await (supabase as any)
+    let sectorDateUsed = dateUsed;
+    let sectorRows: any[] = [];
+    let sectorGroups: Array<{ key: string; name: string; theme: string; rank_score: number; state: string }> = [];
+    let sectorSource = "daily_scans_cache";
+    if (isSectorMomentum) {
+      const fetchRowsForDate = async (d: string | null) => {
+        if (!d) return [] as any[];
+        const { data } = await (supabase as any)
           .from("daily_scans")
-          .select(
-            "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json"
-          )
+          .select("symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json")
           .eq("universe_slug", mappedUniverse)
           .eq("strategy_version", strategyVersion)
-          .eq("date", dateUsed)
+          .eq("date", d)
           .order("rank_score", { ascending: false, nullsFirst: false })
           .order("confidence", { ascending: false })
           .order("symbol", { ascending: true })
-          .limit(200)
-      : ({ data: [] } as any);
-
-    const usePersistedSector = Array.isArray(persistedSectorRows) && persistedSectorRows.length > 0;
-    const sectorData = isSectorMomentum && !usePersistedSector
-      ? await computeSectorMomentumCandidates({
-          supabase,
-          scan_date: dateUsed,
-          lctd_source: lctd.source,
-          universe_slug: mappedUniverse,
-          top_group_count: 4,
-          max_candidates: 12,
-        })
-      : null;
+          .limit(200);
+        return (data ?? []) as any[];
+      };
+      sectorRows = await fetchRowsForDate(sectorDateUsed);
+      if (sectorRows.length === 0) {
+        const { data: latestSectorDateRow } = await (supabase as any)
+          .from("daily_scans")
+          .select("date")
+          .eq("universe_slug", mappedUniverse)
+          .eq("strategy_version", strategyVersion)
+          .order("date", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const fallbackDate = latestSectorDateRow?.date ? String(latestSectorDateRow.date) : null;
+        if (fallbackDate && fallbackDate !== sectorDateUsed) {
+          sectorDateUsed = fallbackDate;
+          sectorRows = await fetchRowsForDate(sectorDateUsed);
+          sectorSource = "daily_scans_cache_fallback_latest_date";
+        }
+      }
+      const groupMap = new Map<string, { key: string; name: string; theme: string; rank_score: number; state: string }>();
+      for (const row of sectorRows) {
+        const key = String((row as any)?.reason_json?.group?.key ?? "").trim();
+        if (!key) continue;
+        if (groupMap.has(key)) continue;
+        groupMap.set(key, {
+          key,
+          name: String((row as any)?.reason_json?.group?.name ?? key),
+          theme: String((row as any)?.reason_json?.group?.theme ?? ""),
+          rank_score: Number((row as any)?.reason_json?.group?.group_rank_score ?? 0) || 0,
+          state: String((row as any)?.reason_json?.group?.state ?? ""),
+        });
+      }
+      sectorGroups = [...groupMap.values()].sort((a, b) => b.rank_score - a.rank_score).slice(0, 4);
+    }
 
     const { data: rows } = isSectorMomentum
-      ? usePersistedSector
-        ? ({ data: (persistedSectorRows ?? []).map((r: any) => ({
+      ? ({
+          data: (sectorRows ?? []).map((r: any) => ({
             ...r,
             industry_group: String(r?.reason_json?.group?.name ?? ""),
             theme: String(r?.reason_json?.group?.theme ?? ""),
-          })) } as any)
-        : ({ data: (sectorData?.candidates ?? []).map((c: any) => ({
-            symbol: c.symbol,
-            signal: c.signal,
-            confidence: c.confidence,
-            entry: c.entry,
-            stop: c.stop,
-            tp1: c.tp1,
-            tp2: c.tp2,
-            rank: c.rank,
-            rank_score: c.rank_score,
-            reason_summary: c.reason_summary,
-            reason_json: c.reason_json,
-            industry_group: c.industry_group,
-            theme: c.theme,
-          })) } as any)
+          })),
+        } as any)
       : dateUsed
         ? await (supabase as any)
             .from("daily_scans")
@@ -203,6 +213,16 @@ const loadScreenerDataCached = unstable_cache(
     });
 
     const rawRows = (rows ?? []) as ScanRow[];
+    if (isSectorMomentum) {
+      console.info("[sector_momentum][screener-data]", {
+        requested_date: dateUsed,
+        date_used: sectorDateUsed,
+        universe_slug: mappedUniverse,
+        strategy_version: strategyVersion,
+        rows_returned: rawRows.length,
+        source: sectorSource,
+      });
+    }
     let entryValidatedRows = rawRows;
     if (dateUsed && rawRows.length > 0 && !isSectorMomentum) {
       const symbols = Array.from(new Set(rawRows.map((r) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean)));
@@ -282,7 +302,7 @@ const loadScreenerDataCached = unstable_cache(
     return {
       ok: true,
       meta: {
-        date_used: dateUsed ?? null,
+        date_used: isSectorMomentum ? sectorDateUsed ?? null : dateUsed ?? null,
         lctd: lctd.lctd,
         lctd_source: lctd.source,
         regime_state: regimeState,
@@ -293,14 +313,10 @@ const loadScreenerDataCached = unstable_cache(
                 universe_slug: mappedUniverse,
                 strategy_universe_slug: mappedUniverse,
                 top_group_count: 4,
-                source: usePersistedSector ? "daily_scans_cache" : "computed_live",
-                groups: (sectorData?.top_groups ?? []).map((g) => ({
-                  key: g.key,
-                  name: g.name,
-                  theme: g.theme,
-                  rank_score: g.rank_score,
-                  state: g.state,
-                })),
+                source: sectorSource,
+                date_used: sectorDateUsed,
+                rows_returned: rawRows.length,
+                groups: sectorGroups,
               }
           : null,
         breadth_state: breadth.breadthState,

@@ -9,7 +9,6 @@ import { mapExecutionState } from "@/lib/execution_state";
 import { applyEarningsRiskToAction, lookupEarningsRiskForSymbols } from "@/lib/earnings_risk";
 import { applyBreadthToAction, computeMarketBreadth } from "@/lib/market_breadth";
 import TickerCheckClient from "./TickerCheckClient";
-import { computeSectorMomentumCandidates } from "@/lib/sector_momentum";
 import { GROWTH_UNIVERSE_SLUG } from "@/lib/strategy_universe";
 
 function money(v: number | null | undefined) {
@@ -148,14 +147,59 @@ export default async function DashboardPage() {
     loadStrategySummary("v2_core_momentum"),
     loadStrategySummary("v1_trend_hold"),
   ]);
-  const sectorMomentum = await computeSectorMomentumCandidates({
-    supabase: supabase as any,
-    scan_date: lctd.lctd,
-    lctd_source: lctd.source,
-    universe_slug: GROWTH_UNIVERSE_SLUG,
-    top_group_count: 4,
-    max_candidates: 8,
-  });
+  async function loadSectorSummary() {
+    const { data: latestRow } = await supabase
+      .from("daily_scans")
+      .select("date")
+      .eq("universe_slug", GROWTH_UNIVERSE_SLUG)
+      .eq("strategy_version", "v1_sector_momentum")
+      .order("date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const date = latestRow?.date ? String(latestRow.date) : null;
+    if (!date) {
+      return { ok: false as const, date: null, top_groups: [] as any[], candidates: [] as any[], error: "No cached sector scan rows" };
+    }
+    const { data: rows, error } = await supabase
+      .from("daily_scans")
+      .select("symbol,signal,entry,stop,rank_score,reason_json")
+      .eq("universe_slug", GROWTH_UNIVERSE_SLUG)
+      .eq("strategy_version", "v1_sector_momentum")
+      .eq("date", date)
+      .order("rank_score", { ascending: false, nullsFirst: false })
+      .order("symbol", { ascending: true })
+      .limit(50);
+    if (error) {
+      return { ok: false as const, date, top_groups: [] as any[], candidates: [] as any[], error: error.message };
+    }
+    const list = (rows ?? []) as Array<any>;
+    const groupsMap = new Map<string, { key: string; name: string; theme: string; rank_score: number }>();
+    for (const row of list) {
+      const g = row?.reason_json?.group ?? null;
+      const key = String(g?.key ?? "").trim();
+      if (!key || groupsMap.has(key)) continue;
+      groupsMap.set(key, {
+        key,
+        name: String(g?.name ?? key),
+        theme: String(g?.theme ?? ""),
+        rank_score: Number(g?.group_rank_score ?? 0) || 0,
+      });
+    }
+    return {
+      ok: true as const,
+      date,
+      top_groups: [...groupsMap.values()].sort((a, b) => b.rank_score - a.rank_score).slice(0, 4),
+      candidates: list.slice(0, 8).map((r) => ({
+        symbol: String(r.symbol ?? ""),
+        signal: String(r.signal ?? "WATCH"),
+        entry: Number(r.entry ?? 0),
+        stop: Number(r.stop ?? 0),
+        industry_group: String(r?.reason_json?.group?.name ?? ""),
+      })),
+      error: null as string | null,
+    };
+  }
+  const sectorMomentum = await loadSectorSummary();
   const breadth = await computeMarketBreadth({
     supabase: supabase as any,
     date: momentum.date ?? lctd.lctd ?? null,

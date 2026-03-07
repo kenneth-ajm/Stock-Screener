@@ -212,6 +212,16 @@ async function runPopulate() {
   }
 
   const breadth = summarizeBreadthFromCandidates(sector.candidates ?? []);
+  console.info("[sector_momentum][populate]", {
+    scan_date_used: scanDate,
+    strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
+    universe_slug: GROWTH_UNIVERSE_SLUG,
+    top_groups: (sector.top_groups ?? []).length,
+    candidates_count: sector.candidates.length,
+    persisted_rows: rows.length,
+    growth_universe_active_count: universe.active_count,
+    growth_universe_derived_refresh: universe.derived_refresh,
+  });
   return NextResponse.json({
     ok: true,
     scan_date_used: scanDate,
