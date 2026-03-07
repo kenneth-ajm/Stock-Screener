@@ -210,6 +210,28 @@ async function runPopulate() {
       return NextResponse.json({ ok: false, error: upsertErr.message, detail: null }, { status: 500 });
     }
   }
+  let pruned_rows = 0;
+  {
+    const keep = new Set(rows.map((r) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean));
+    const { data: existing } = await supabase
+      .from("daily_scans")
+      .select("id,symbol")
+      .eq("date", scanDate)
+      .eq("universe_slug", GROWTH_UNIVERSE_SLUG)
+      .eq("strategy_version", SECTOR_MOMENTUM_STRATEGY_VERSION);
+    const removeIds = (existing ?? [])
+      .filter((r: any) => !keep.has(String(r?.symbol ?? "").trim().toUpperCase()))
+      .map((r: any) => String(r?.id ?? ""))
+      .filter(Boolean);
+    for (let i = 0; i < removeIds.length; i += 200) {
+      const chunk = removeIds.slice(i, i + 200);
+      const { error: delErr } = await supabase.from("daily_scans").delete().in("id", chunk);
+      if (delErr) {
+        return NextResponse.json({ ok: false, error: delErr.message, detail: null }, { status: 500 });
+      }
+    }
+    pruned_rows = removeIds.length;
+  }
 
   const breadth = summarizeBreadthFromCandidates(sector.candidates ?? []);
   console.info("[sector_momentum][populate]", {
@@ -219,6 +241,7 @@ async function runPopulate() {
     top_groups: (sector.top_groups ?? []).length,
     candidates_count: sector.candidates.length,
     persisted_rows: rows.length,
+    pruned_rows,
     growth_universe_active_count: universe.active_count,
     growth_universe_derived_refresh: universe.derived_refresh,
   });
@@ -237,6 +260,7 @@ async function runPopulate() {
     top_symbols: sector.candidates.slice(0, 10).map((c) => c.symbol),
     breadth,
     persisted_rows: rows.length,
+    pruned_rows,
     growth_universe_active_count: universe.active_count,
     growth_universe_derived_refresh: universe.derived_refresh,
   });

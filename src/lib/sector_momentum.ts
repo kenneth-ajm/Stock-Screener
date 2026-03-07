@@ -20,6 +20,9 @@ export type SectorMomentumRow = {
   avg_volume_expansion: number;
   pct_above_sma20: number;
   pct_above_sma50: number;
+  pct_above_sma200: number;
+  breakout_participation: number;
+  trend_persistence: number;
   rank_score: number;
   state: SectorMomentumState;
 };
@@ -205,14 +208,23 @@ function barsBySymbol(rows: any[]): Map<string, PriceBarLite[]> {
 
 function stateForRow(row: SectorMomentumRow): SectorMomentumState {
   if (
-    row.rs_5d >= 0.02 &&
-    row.rs_10d >= 0.03 &&
+    row.rs_5d >= 0.008 &&
+    row.rs_10d >= 0.015 &&
     row.pct_above_sma20 >= 60 &&
-    row.pct_above_sma50 >= 50
+    row.pct_above_sma50 >= 60 &&
+    row.pct_above_sma200 >= 45 &&
+    row.breakout_participation >= 30 &&
+    row.trend_persistence >= 55
   ) {
     return "LEADING";
   }
-  if (row.rs_10d >= 0 && row.pct_above_sma20 >= 45) {
+  if (
+    row.rs_10d >= 0 &&
+    row.pct_above_sma20 >= 45 &&
+    row.pct_above_sma50 >= 45 &&
+    row.pct_above_sma200 >= 30 &&
+    row.trend_persistence >= 40
+  ) {
     return "IMPROVING";
   }
   return "WEAK";
@@ -277,6 +289,9 @@ export async function computeSectorMomentum(opts: {
     const volExp: number[] = [];
     const above20: boolean[] = [];
     const above50: boolean[] = [];
+    const above200: boolean[] = [];
+    const breakoutParticipants: boolean[] = [];
+    const trendPersistent: boolean[] = [];
 
     for (const symbol of group.symbols) {
       const bars = bySymbol.get(symbol.trim().toUpperCase()) ?? [];
@@ -291,17 +306,34 @@ export async function computeSectorMomentum(opts: {
       rs10.push(ret10 - spyRet10);
 
       const avgVol20 = sma(vols, Math.min(20, vols.length));
+      const volExpansion = avgVol20 != null && avgVol20 > 0 ? latest.volume / avgVol20 : 0;
       if (avgVol20 != null && avgVol20 > 0) {
-        volExp.push(latest.volume / avgVol20);
+        volExp.push(volExpansion);
       }
 
       const sma20 = sma(closes, Math.min(20, closes.length));
       const sma50 = sma(closes, Math.min(50, closes.length));
+      const sma200 = sma(closes, Math.min(200, closes.length));
       if (sma20 != null) above20.push(latest.close > sma20);
       if (sma50 != null) above50.push(latest.close > sma50);
+      if (sma200 != null) above200.push(latest.close > sma200);
+
+      const prior10 = closes.slice(-Math.min(11, closes.length), -1);
+      const trigger10 = prior10.length ? Math.max(...prior10) : latest.close;
+      const nearTrigger10 = trigger10 > 0 ? latest.close / trigger10 : 0;
+      breakoutParticipants.push(nearTrigger10 >= 0.99 && volExpansion >= 1);
+      trendPersistent.push(ret5 > 0 && ret10 > 0 && (sma20 == null || latest.close > sma20));
     }
 
-    const symbolsUsed = Math.max(rs10.length, rs5.length, above20.length, above50.length);
+    const symbolsUsed = Math.max(
+      rs10.length,
+      rs5.length,
+      above20.length,
+      above50.length,
+      above200.length,
+      breakoutParticipants.length,
+      trendPersistent.length
+    );
     const row: SectorMomentumRow = {
       key: group.key,
       name: group.name,
@@ -313,16 +345,27 @@ export async function computeSectorMomentum(opts: {
       avg_volume_expansion: avg(volExp),
       pct_above_sma20: above20.length ? (above20.filter(Boolean).length / above20.length) * 100 : 0,
       pct_above_sma50: above50.length ? (above50.filter(Boolean).length / above50.length) * 100 : 0,
+      pct_above_sma200: above200.length ? (above200.filter(Boolean).length / above200.length) * 100 : 0,
+      breakout_participation: breakoutParticipants.length
+        ? (breakoutParticipants.filter(Boolean).length / breakoutParticipants.length) * 100
+        : 0,
+      trend_persistence: trendPersistent.length
+        ? (trendPersistent.filter(Boolean).length / trendPersistent.length) * 100
+        : 0,
       rank_score: 0,
       state: "WEAK",
     };
 
-    const rs5Score = clamp((row.rs_5d + 0.1) / 0.2, 0, 1) * 30;
-    const rs10Score = clamp((row.rs_10d + 0.15) / 0.3, 0, 1) * 35;
-    const volScore = clamp((row.avg_volume_expansion - 0.8) / 0.8, 0, 1) * 15;
-    const p20Score = clamp(row.pct_above_sma20 / 100, 0, 1) * 10;
-    const p50Score = clamp(row.pct_above_sma50 / 100, 0, 1) * 10;
-    row.rank_score = round2(rs5Score + rs10Score + volScore + p20Score + p50Score);
+    const rs10Score = clamp((row.rs_10d + 0.08) / 0.18, 0, 1) * 26;
+    const rs5Score = clamp((row.rs_5d + 0.05) / 0.12, 0, 1) * 14;
+    const p50Score = clamp(row.pct_above_sma50 / 100, 0, 1) * 18;
+    const p200Score = clamp(row.pct_above_sma200 / 100, 0, 1) * 16;
+    const breakoutScore = clamp(row.breakout_participation / 100, 0, 1) * 12;
+    const trendPersistenceScore = clamp(row.trend_persistence / 100, 0, 1) * 8;
+    const volScore = clamp((row.avg_volume_expansion - 0.85) / 0.7, 0, 1) * 6;
+    row.rank_score = round2(
+      rs10Score + rs5Score + p50Score + p200Score + breakoutScore + trendPersistenceScore + volScore
+    );
     row.state = stateForRow(row);
     groups.push(row);
   }
@@ -533,14 +576,19 @@ export async function computeSectorMomentumCandidates(opts: {
       const tp1 = round2(entry * 1.05);
       const tp2 = round2(entry * 1.1);
 
-      const reasons: string[] = [];
-      if (buyPass) reasons.push("breakout setup ready");
-      else if (signal === "WATCH") reasons.push("setup building");
-      else reasons.push("structure weak");
-      reasons.push(c4 ? "RS > SPY" : "RS <= SPY");
-      reasons.push(c5 ? "leader in group" : "lagging group");
-      reasons.push(c6 ? "near highs" : "off highs");
-      reasons.push(c9 ? "volume supportive" : "volume soft");
+      const groupStateText =
+        group.state === "LEADING"
+          ? "group leadership strong"
+          : group.state === "IMPROVING"
+            ? "group breadth improving"
+            : "group breadth weak";
+      const setupText =
+        buyPass ? "breakout trigger ready" : signal === "WATCH" ? "setup building near pivot" : "setup quality below threshold";
+      const evidence = [
+        `RS vs SPY ${(rsVsSpy * 100).toFixed(1)}%`,
+        `%>SMA50 ${group.pct_above_sma50.toFixed(0)}%`,
+        `%>SMA200 ${group.pct_above_sma200.toFixed(0)}%`,
+      ];
 
       const candidate: SectorMomentumCandidate = {
         symbol,
@@ -554,14 +602,25 @@ export async function computeSectorMomentumCandidates(opts: {
         stop,
         tp1,
         tp2,
-        reason_summary: `${signal} • ${reasons.join(" • ")}`,
+        reason_summary: `${signal} • ${groupStateText} • ${setupText} • ${evidence.join(" • ")}`,
         reason_json: {
           strategy: "sector_momentum_v1_phase2",
           group: {
             key: group.key,
             name: group.name,
             theme: group.theme,
+            state: group.state,
             group_rank_score: group.rank_score,
+            participation: {
+              pct_above_sma50: round1(group.pct_above_sma50),
+              pct_above_sma200: round1(group.pct_above_sma200),
+              breakout_participation: round1(group.breakout_participation),
+              trend_persistence: round1(group.trend_persistence),
+            },
+            relative_strength: {
+              rs_5d: round2(group.rs_5d),
+              rs_10d: round2(group.rs_10d),
+            },
           },
           metrics: {
             close: round2(latest.close),
@@ -591,7 +650,23 @@ export async function computeSectorMomentumCandidates(opts: {
             { key: "tightening", category: "structure", ok: c8, detail: `range20 ${(range20Pct * 100).toFixed(1)}%` },
             { key: "supportive_volume", category: "volume", ok: c9, detail: `vol_exp ${round2(volExp)}x` },
             { key: "near_trigger", category: "execution", ok: c10, detail: `near_trigger ${round1(nearTrigger * 100)}%` },
+            {
+              key: "group_participation",
+              category: "group",
+              ok: group.pct_above_sma50 >= 50 && group.pct_above_sma200 >= 40,
+              detail: `%>sma50 ${group.pct_above_sma50.toFixed(0)}%, %>sma200 ${group.pct_above_sma200.toFixed(0)}%`,
+            },
+            {
+              key: "group_state",
+              category: "group",
+              ok: group.state !== "WEAK",
+              detail: `${group.state} • breakout ${group.breakout_participation.toFixed(0)}% • persistence ${group.trend_persistence.toFixed(0)}%`,
+            },
           ],
+          summary: {
+            group_thesis: `${group.name} ${group.state.toLowerCase()} with RS10 ${(group.rs_10d * 100).toFixed(1)}% and participation ${group.pct_above_sma50.toFixed(0)}%/>50, ${group.pct_above_sma200.toFixed(0)}%/>200`,
+            stock_thesis: `${symbol} RS vs SPY ${(rsVsSpy * 100).toFixed(1)}%, trigger ${round2(trigger)}, extension ${(extendedPct * 100).toFixed(1)}%`,
+          },
           trade_plan: {
             entry,
             stop,
