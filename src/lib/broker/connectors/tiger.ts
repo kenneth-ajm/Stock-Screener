@@ -116,19 +116,20 @@ function deepFindByKeys(obj: unknown, keys: string[], maxDepth = 6): unknown {
   return null;
 }
 
-function buildTigerIdentityPayload(cmd: string, opts: { tigerId: string; accountId: string }) {
-  const tigerId = String(opts.tigerId ?? "").trim();
+function buildTigerBizContent(opts: { accountId: string }) {
   const accountId = String(opts.accountId ?? "").trim();
-  // Tiger gateway integrations are inconsistent across environments;
-  // include the common tiger/account key aliases to avoid null-identifier errors.
   return {
-    cmd,
-    tigerId,
-    tiger_id: tigerId,
     accountId,
     account_id: accountId,
     account: accountId,
   };
+}
+
+function formatGatewayTimestamp(date = new Date()) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(
+    date.getUTCHours()
+  )}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
 }
 
 function normalizePrivateKey(raw: string): string {
@@ -213,18 +214,25 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     return `${base}${path}`;
   }
 
-  private signedInit(opts: { method: "POST" | "GET"; pathOrUrl: string; body?: unknown }) {
+  private signedInit(opts: {
+    pathOrUrl: string;
+    methodName: string;
+    bizContent?: Record<string, unknown>;
+  }) {
     const env = readBrokerEnv();
-    const method = opts.method.toUpperCase();
     const url = this.endpointUrl(opts.pathOrUrl);
-    const timestamp = Date.now().toString();
-    const nonce = `${timestamp}-${Math.random().toString(36).slice(2, 10)}`;
-    const inputBody = isObject(opts.body) ? ({ ...(opts.body as Record<string, unknown>) } as Record<string, unknown>) : {};
-    inputBody.timestamp = timestamp;
-    inputBody.nonce = nonce;
-    const path = new URL(url).pathname;
-    const canonicalParams = canonicalizeParamsForSign(inputBody);
-    const canonical = [method, path, canonicalParams].join("\n");
+    const gatewayTimestamp = formatGatewayTimestamp();
+    const envelope: Record<string, unknown> = {
+      tiger_id: String(env.tiger.client_id ?? "").trim(),
+      method: String(opts.methodName ?? "").trim(),
+      charset: String(env.tiger.charset ?? "UTF-8").trim() || "UTF-8",
+      sign_type: String(env.tiger.sign_type ?? "RSA").trim() || "RSA",
+      version: String(env.tiger.version ?? "1.0").trim() || "1.0",
+      timestamp: gatewayTimestamp,
+      biz_content: JSON.stringify(isObject(opts.bizContent) ? opts.bizContent : {}),
+    };
+    const canonicalParams = canonicalizeParamsForSign(envelope);
+    const canonical = canonicalParams;
     const keyObj = parseTigerPrivateKey(env.tiger.private_key);
     const signer = createSign("RSA-SHA256");
     signer.update(canonical);
@@ -236,15 +244,12 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       const message = e instanceof Error ? e.message : String(e);
       throw new Error(`Tiger request signing failed: ${message}`);
     }
-    inputBody.sign = signature;
+    envelope.sign = signature;
 
-    const bodyText = JSON.stringify(inputBody);
+    const bodyText = JSON.stringify(envelope);
     const headers: Record<string, string> = {
       "content-type": "application/json",
       "x-tiger-client-id": env.tiger.client_id,
-      "x-tiger-account-id": env.tiger.account_id,
-      "x-tiger-timestamp": timestamp,
-      "x-tiger-nonce": nonce,
       "x-tiger-signature-algorithm": "RSA-SHA256",
       // Keep header signature for compatibility; Tiger gateway also requires body `sign`.
       "x-tiger-signature": signature,
@@ -256,13 +261,20 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     return {
       url,
       init: {
-        method,
+        method: "POST",
         headers,
         ...(bodyText ? { body: bodyText } : {}),
       } as RequestInit,
       signedMeta: {
-        timestamp_present: Boolean(inputBody.timestamp),
-        sign_present: Boolean(inputBody.sign),
+        envelope_keys: Object.keys(envelope),
+        charset_value: String(envelope.charset ?? ""),
+        sign_type_value: String(envelope.sign_type ?? ""),
+        version_value: String(envelope.version ?? ""),
+        timestamp_format_used: "YYYY-MM-DD HH:mm:ss (UTC)",
+        method_used: String(envelope.method ?? ""),
+        biz_content_present: Boolean(envelope.biz_content),
+        timestamp_present: Boolean(envelope.timestamp),
+        sign_present: Boolean(envelope.sign),
         signed_param_count: canonicalParams ? canonicalParams.split("&").length : 0,
       },
     };
@@ -283,23 +295,28 @@ export class TigerReadOnlyConnector implements BrokerConnector {
 
     // Phase 1 safety boundary:
     // Read-only broker sync only. No execution and no strategy influence.
-    const accountBody = buildTigerIdentityPayload("get_account", {
-      tigerId: env.tiger.client_id,
+    const accountBiz = buildTigerBizContent({
       accountId: env.tiger.account_id,
     });
     const request = this.signedInit({
-      method: "POST",
       pathOrUrl: env.tiger.account_endpoint,
-      body: accountBody,
+      methodName: env.tiger.account_method,
+      bizContent: accountBiz,
     });
     this.debug.account_request = {
       endpoint: request.url,
       method: "POST",
-      body_keys: Object.keys(accountBody),
+      envelope_keys: (request as any)?.signedMeta?.envelope_keys ?? [],
       account_id_present: Boolean(env.tiger.account_id),
       tiger_id_present: Boolean(env.tiger.client_id),
       tiger_id_source: "TIGER_CLIENT_ID",
       account_source: "TIGER_ACCOUNT_ID",
+      charset_value: String((request as any)?.signedMeta?.charset_value ?? ""),
+      sign_type_value: String((request as any)?.signedMeta?.sign_type_value ?? ""),
+      version_value: String((request as any)?.signedMeta?.version_value ?? ""),
+      timestamp_format_used: String((request as any)?.signedMeta?.timestamp_format_used ?? ""),
+      method_used: String((request as any)?.signedMeta?.method_used ?? ""),
+      biz_content_present: Boolean((request as any)?.signedMeta?.biz_content_present),
       timestamp_present: Boolean((request as any)?.signedMeta?.timestamp_present),
       sign_present: Boolean((request as any)?.signedMeta?.sign_present),
       signed_param_count: Number((request as any)?.signedMeta?.signed_param_count ?? 0),
@@ -404,23 +421,28 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     const configured = tigerConfigured(env);
     if (!configured) return [];
 
-    const positionsBody = buildTigerIdentityPayload("get_positions", {
-      tigerId: env.tiger.client_id,
+    const positionsBiz = buildTigerBizContent({
       accountId: env.tiger.account_id,
     });
     const request = this.signedInit({
-      method: "POST",
       pathOrUrl: env.tiger.positions_endpoint,
-      body: positionsBody,
+      methodName: env.tiger.positions_method,
+      bizContent: positionsBiz,
     });
     this.debug.positions_request = {
       endpoint: request.url,
       method: "POST",
-      body_keys: Object.keys(positionsBody),
+      envelope_keys: (request as any)?.signedMeta?.envelope_keys ?? [],
       account_id_present: Boolean(env.tiger.account_id),
       tiger_id_present: Boolean(env.tiger.client_id),
       tiger_id_source: "TIGER_CLIENT_ID",
       account_source: "TIGER_ACCOUNT_ID",
+      charset_value: String((request as any)?.signedMeta?.charset_value ?? ""),
+      sign_type_value: String((request as any)?.signedMeta?.sign_type_value ?? ""),
+      version_value: String((request as any)?.signedMeta?.version_value ?? ""),
+      timestamp_format_used: String((request as any)?.signedMeta?.timestamp_format_used ?? ""),
+      method_used: String((request as any)?.signedMeta?.method_used ?? ""),
+      biz_content_present: Boolean((request as any)?.signedMeta?.biz_content_present),
       timestamp_present: Boolean((request as any)?.signedMeta?.timestamp_present),
       sign_present: Boolean((request as any)?.signedMeta?.sign_present),
       signed_param_count: Number((request as any)?.signedMeta?.signed_param_count ?? 0),

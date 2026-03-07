@@ -18,6 +18,11 @@ This repository now includes a strict read-only broker connector foundation with
 - `TIGER_BASE_URL` (optional, defaults to Tiger OpenAPI base URL)
 - `TIGER_ACCOUNT_ENDPOINT` (optional, defaults to `/gateway`)
 - `TIGER_POSITIONS_ENDPOINT` (optional, defaults to `/gateway`)
+- `TIGER_ACCOUNT_METHOD` (optional Tiger gateway method for account query)
+- `TIGER_POSITIONS_METHOD` (optional Tiger gateway method for positions query)
+- `TIGER_CHARSET` (optional, defaults to `UTF-8`)
+- `TIGER_SIGN_TYPE` (optional, defaults to `RSA`)
+- `TIGER_GATEWAY_VERSION` (optional, defaults to `1.0`)
 - `TIGER_ACCESS_TOKEN` (optional compatibility fallback; not required for configured=true)
 
 ### `TIGER_PRIVATE_KEY` format notes
