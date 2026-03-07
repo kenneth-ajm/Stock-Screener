@@ -38,5 +38,5 @@ export function readBrokerEnv(): BrokerEnv {
 }
 
 export function tigerConfigured(env: BrokerEnv) {
-  return Boolean(env.tiger.account_id && env.tiger.client_id && env.tiger.access_token && env.tiger.base_url);
+  return Boolean(env.tiger.account_id && env.tiger.client_id && env.tiger.private_key && env.tiger.base_url);
 }

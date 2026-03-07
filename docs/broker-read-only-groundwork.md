@@ -14,11 +14,11 @@ This repository now includes a strict read-only broker connector foundation with
 - `BROKER_PROVIDER` (currently `tiger`)
 - `TIGER_CLIENT_ID`
 - `TIGER_ACCOUNT_ID`
-- `TIGER_PRIVATE_KEY` (optional for future signed flows)
-- `TIGER_ACCESS_TOKEN`
+- `TIGER_PRIVATE_KEY` (required for RSA request signing)
 - `TIGER_BASE_URL` (optional, defaults to Tiger OpenAPI base URL)
 - `TIGER_ACCOUNT_ENDPOINT` (optional, defaults to `/gateway`)
 - `TIGER_POSITIONS_ENDPOINT` (optional, defaults to `/gateway`)
+- `TIGER_ACCESS_TOKEN` (optional compatibility fallback; not required for configured=true)
 
 Do not expose these via `NEXT_PUBLIC_*`.
 

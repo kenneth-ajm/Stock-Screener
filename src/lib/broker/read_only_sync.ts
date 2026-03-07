@@ -15,7 +15,7 @@ export async function getBrokerReadOnlySnapshot(): Promise<BrokerReadOnlyResult>
 
   if (!configured) {
     warnings.push(
-      "Broker credentials not configured. Set BROKER_PROVIDER=tiger and TIGER_* env vars."
+      "Broker credentials not configured. Set BROKER_PROVIDER=tiger with TIGER_CLIENT_ID, TIGER_ACCOUNT_ID, TIGER_PRIVATE_KEY."
     );
   } else {
     auth_ok = true;

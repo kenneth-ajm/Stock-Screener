@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHash, createSign } from "node:crypto";
 import { readBrokerEnv, tigerConfigured } from "@/lib/broker/env";
 import type {
   BrokerAccountSnapshot,
@@ -44,6 +45,16 @@ function pickFirst(obj: any, keys: string[]): unknown {
   return null;
 }
 
+function normalizePrivateKey(raw: string): string {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/\\n/g, "\n");
+}
+
+function sha256Hex(v: string): string {
+  return createHash("sha256").update(v).digest("hex");
+}
+
 export class TigerReadOnlyConnector implements BrokerConnector {
   provider = "tiger" as const;
   mode = "read_only_live" as const;
@@ -56,14 +67,49 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     return `${base}${path}`;
   }
 
-  private headers() {
+  private signedInit(opts: { method: "POST" | "GET"; pathOrUrl: string; body?: unknown }) {
     const env = readBrokerEnv();
-    return {
+    const method = opts.method.toUpperCase();
+    const url = this.endpointUrl(opts.pathOrUrl);
+    const bodyText = opts.body == null ? "" : JSON.stringify(opts.body);
+    const timestamp = Date.now().toString();
+    const nonce = `${timestamp}-${Math.random().toString(36).slice(2, 10)}`;
+    const path = new URL(url).pathname;
+    const canonical = [
+      method,
+      path,
+      env.tiger.client_id,
+      env.tiger.account_id,
+      timestamp,
+      nonce,
+      sha256Hex(bodyText),
+    ].join("\n");
+    const signer = createSign("RSA-SHA256");
+    signer.update(canonical);
+    signer.end();
+    const privateKey = normalizePrivateKey(env.tiger.private_key);
+    const signature = signer.sign(privateKey).toString("base64");
+    const headers: Record<string, string> = {
       "content-type": "application/json",
-      authorization: `Bearer ${env.tiger.access_token}`,
       "x-tiger-client-id": env.tiger.client_id,
       "x-tiger-account-id": env.tiger.account_id,
-    } as Record<string, string>;
+      "x-tiger-timestamp": timestamp,
+      "x-tiger-nonce": nonce,
+      "x-tiger-signature-algorithm": "RSA-SHA256",
+      "x-tiger-signature": signature,
+    };
+    // Optional compatibility fallback: include bearer token if supplied.
+    if (env.tiger.access_token) {
+      headers.authorization = `Bearer ${env.tiger.access_token}`;
+    }
+    return {
+      url,
+      init: {
+        method,
+        headers,
+        ...(bodyText ? { body: bodyText } : {}),
+      } as RequestInit,
+    };
   }
 
   isConfigured(): boolean {
@@ -77,15 +123,16 @@ export class TigerReadOnlyConnector implements BrokerConnector {
 
     // Phase 1 safety boundary:
     // Read-only broker sync only. No execution and no strategy influence.
-    const url = this.endpointUrl(env.tiger.account_endpoint);
-    const res = await fetchWithRetry(url, {
+    const accountBody = {
+      cmd: "get_account",
+      account_id: env.tiger.account_id,
+    };
+    const request = this.signedInit({
       method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify({
-        cmd: "get_account",
-        account_id: env.tiger.account_id,
-      }),
+      pathOrUrl: env.tiger.account_endpoint,
+      body: accountBody,
     });
+    const res = await fetchWithRetry(request.url, request.init);
     if (!res.ok) {
       throw new Error(`Tiger account request failed (${res.status})`);
     }
@@ -118,15 +165,16 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     const configured = tigerConfigured(env);
     if (!configured) return [];
 
-    const url = this.endpointUrl(env.tiger.positions_endpoint);
-    const res = await fetchWithRetry(url, {
+    const positionsBody = {
+      cmd: "get_positions",
+      account_id: env.tiger.account_id,
+    };
+    const request = this.signedInit({
       method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify({
-        cmd: "get_positions",
-        account_id: env.tiger.account_id,
-      }),
+      pathOrUrl: env.tiger.positions_endpoint,
+      body: positionsBody,
     });
+    const res = await fetchWithRetry(request.url, request.init);
     if (!res.ok) {
       throw new Error(`Tiger positions request failed (${res.status})`);
     }
