@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHash, createSign } from "node:crypto";
+import { createHash, createPrivateKey, createSign, type KeyObject } from "node:crypto";
 import { readBrokerEnv, tigerConfigured } from "@/lib/broker/env";
 import type {
   BrokerAccountSnapshot,
@@ -46,13 +46,65 @@ function pickFirst(obj: any, keys: string[]): unknown {
 }
 
 function normalizePrivateKey(raw: string): string {
-  const trimmed = String(raw ?? "").trim();
+  let trimmed = String(raw ?? "").trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
   if (!trimmed) return "";
-  return trimmed.replace(/\\n/g, "\n");
+  return trimmed.replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
 }
 
 function sha256Hex(v: string): string {
   return createHash("sha256").update(v).digest("hex");
+}
+
+function wrapPem(body: string, kind: "RSA PRIVATE KEY" | "PRIVATE KEY") {
+  const clean = body.replace(/\s+/g, "");
+  const lines = clean.match(/.{1,64}/g) ?? [];
+  return `-----BEGIN ${kind}-----\n${lines.join("\n")}\n-----END ${kind}-----`;
+}
+
+function keyCandidates(raw: string): string[] {
+  const normalized = normalizePrivateKey(raw);
+  if (!normalized) return [];
+  const hasPemMarkers = /-----BEGIN [A-Z ]+-----/.test(normalized);
+  if (hasPemMarkers) {
+    const normalizedPem = normalized
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]+\n/g, "\n")
+      .trim();
+    return [normalizedPem];
+  }
+  const body = normalized.replace(/\s+/g, "");
+  if (!body) return [];
+  return [wrapPem(body, "RSA PRIVATE KEY"), wrapPem(body, "PRIVATE KEY")];
+}
+
+function parseTigerPrivateKey(raw: string): KeyObject {
+  const candidates = keyCandidates(raw);
+  if (candidates.length === 0) {
+    throw new Error("Tiger private key missing or empty");
+  }
+  const errors: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      try {
+        return createPrivateKey({ key: candidate, format: "pem", type: "pkcs1" });
+      } catch {
+        return createPrivateKey({ key: candidate, format: "pem", type: "pkcs8" });
+      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      errors.push(message);
+    }
+  }
+  const reason = errors[errors.length - 1] ?? "Unknown key parsing error";
+  throw new Error(
+    `Tiger private key parse failed (supported: PKCS#1/PKCS#8 PEM or base64 body). ${reason}`
+  );
 }
 
 export class TigerReadOnlyConnector implements BrokerConnector {
@@ -84,11 +136,17 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       nonce,
       sha256Hex(bodyText),
     ].join("\n");
+    const keyObj = parseTigerPrivateKey(env.tiger.private_key);
     const signer = createSign("RSA-SHA256");
     signer.update(canonical);
     signer.end();
-    const privateKey = normalizePrivateKey(env.tiger.private_key);
-    const signature = signer.sign(privateKey).toString("base64");
+    let signature = "";
+    try {
+      signature = signer.sign(keyObj).toString("base64");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      throw new Error(`Tiger request signing failed: ${message}`);
+    }
     const headers: Record<string, string> = {
       "content-type": "application/json",
       "x-tiger-client-id": env.tiger.client_id,

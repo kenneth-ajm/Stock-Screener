@@ -32,7 +32,9 @@ export async function getBrokerReadOnlySnapshot(): Promise<BrokerReadOnlyResult>
       const message =
         e instanceof Error ? e.message : typeof e === "string" ? e : "Account sync failed";
       errors.push(`account_sync: ${message}`);
-      auth_ok = !/401|403|unauthorized|forbidden|auth/i.test(message);
+      auth_ok = !/401|403|unauthorized|forbidden|auth|private key|sign|decoder|pem|pkcs/i.test(
+        message
+      );
       connection_ok = false;
     }
   }
@@ -45,7 +47,9 @@ export async function getBrokerReadOnlySnapshot(): Promise<BrokerReadOnlyResult>
       const message =
         e instanceof Error ? e.message : typeof e === "string" ? e : "Positions sync failed";
       errors.push(`positions_sync: ${message}`);
-      auth_ok = auth_ok && !/401|403|unauthorized|forbidden|auth/i.test(message);
+      auth_ok =
+        auth_ok &&
+        !/401|403|unauthorized|forbidden|auth|private key|sign|decoder|pem|pkcs/i.test(message);
       connection_ok = false;
     }
   }

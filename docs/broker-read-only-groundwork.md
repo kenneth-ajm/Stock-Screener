@@ -20,6 +20,16 @@ This repository now includes a strict read-only broker connector foundation with
 - `TIGER_POSITIONS_ENDPOINT` (optional, defaults to `/gateway`)
 - `TIGER_ACCESS_TOKEN` (optional compatibility fallback; not required for configured=true)
 
+### `TIGER_PRIVATE_KEY` format notes
+
+The connector accepts either:
+
+- Full PEM key (`-----BEGIN RSA PRIVATE KEY----- ...`)
+- Full PKCS#8 PEM key (`-----BEGIN PRIVATE KEY----- ...`)
+- Raw base64 key body (no PEM wrapper)
+
+Escaped newlines (`\\n`) are normalized automatically.
+
 Do not expose these via `NEXT_PUBLIC_*`.
 
 ## Endpoint
