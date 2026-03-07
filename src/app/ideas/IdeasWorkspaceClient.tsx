@@ -483,52 +483,52 @@ export default function IdeasWorkspaceClient({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {toast ? (
         <div className="fixed bottom-5 right-5 z-[60] rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl">
           {toast}
         </div>
       ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-3.5">
-        <div className="flex items-center gap-2 rounded-xl border border-[#e5d8c4] bg-[#fbf6ee] p-1.5">
+      <div className="surface-panel flex flex-wrap items-center justify-between gap-4 p-4">
+        <div className="flex items-center gap-2 rounded-xl border border-[#e3d5bf] bg-[#fcf8f1] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
           <button
             onClick={() => setStrategy("v2_core_momentum")}
-            className={`rounded-xl border px-3 py-1.5 text-sm font-medium ${
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
               strategy === "v2_core_momentum"
-                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900"
-                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f1e8da]"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
             Momentum Swing
           </button>
           <button
             onClick={() => setStrategy("v1_sector_momentum")}
-            className={`rounded-xl border px-3 py-1.5 text-sm font-medium ${
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
               strategy === "v1_sector_momentum"
-                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900"
-                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f1e8da]"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
             Sector Momentum
           </button>
           <button
             onClick={() => setStrategy("v1_trend_hold")}
-            className={`rounded-xl border px-3 py-1.5 text-sm font-medium ${
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
               strategy === "v1_trend_hold"
-                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900"
-                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f1e8da]"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
             Trend Hold
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
-          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">LCTD: {data?.meta?.lctd ?? "—"}</span>
-          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">
+          <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
+          <span className="surface-chip px-2.5 py-1">LCTD: {data?.meta?.lctd ?? "—"}</span>
+          <span className="surface-chip px-2.5 py-1">
             %&gt;SMA50: {Number(data?.meta?.pct_above_sma50 ?? 0).toFixed(1)}%
           </span>
-          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">
+          <span className="surface-chip px-2.5 py-1">
             %&gt;SMA200: {Number(data?.meta?.pct_above_sma200 ?? 0).toFixed(1)}%
           </span>
           <span
@@ -547,17 +547,17 @@ export default function IdeasWorkspaceClient({
               {breadth.breadthLabel}
             </span>
           ) : null}
-          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">
+          <span className="surface-chip px-2.5 py-1">
             Cash: {Number(data?.capacity?.cash_available ?? 0).toFixed(2)}
           </span>
-          <span className="rounded-full border border-[#e1d2ba] bg-[#fffdf8] px-2 py-1">
+          <span className="surface-chip px-2.5 py-1">
             Slots: {data?.capacity?.slots_left ?? 0}
           </span>
         </div>
       </div>
 
       {showDiagnostics ? (
-        <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] px-3 py-2 text-[11px] text-slate-600">
+        <div className="surface-card px-3.5 py-2.5 text-[11px] text-slate-600">
           build={buildMarker}
           {" • "}page_marker={pageMarker}
           {" • "}strategy_param={strategyParamRaw ?? "—"}
@@ -575,30 +575,30 @@ export default function IdeasWorkspaceClient({
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] shadow-[0_8px_24px_rgba(88,63,36,0.04)]">
-        {loading ? <div className="p-4 text-sm text-slate-600">Loading ideas…</div> : null}
-        {!loading && !data?.ok ? <div className="p-4 text-sm text-rose-600">Failed: {data?.error ?? "Unknown error"}</div> : null}
+      <div className="surface-panel overflow-hidden">
+        {loading ? <div className="p-5 text-sm text-slate-600">Loading ideas…</div> : null}
+        {!loading && !data?.ok ? <div className="p-5 text-sm text-rose-600">Failed: {data?.error ?? "Unknown error"}</div> : null}
         {!loading && data?.ok ? (
-          <table className="w-full text-sm">
+          <table className="w-full text-sm leading-6">
             <thead className="text-left text-xs text-slate-500">
               <tr className="border-b border-[#e2d2b7]">
-                <th className="p-3">Symbol</th>
-                <th className="p-3">Signal</th>
-                <th className="p-3">Rank</th>
-                <th className="p-3">Quality</th>
-                <th className="p-3">Entry</th>
-                <th className="p-3">Live</th>
-                <th className="p-3">Delta</th>
-                <th className="p-3">Stop</th>
-                <th className="p-3">TP1</th>
-                <th className="p-3">Action</th>
-                <th className="p-3">Position Cost</th>
+                <th className="px-4 py-3.5">Symbol</th>
+                <th className="px-4 py-3.5">Signal</th>
+                <th className="px-4 py-3.5">Rank</th>
+                <th className="px-4 py-3.5">Quality</th>
+                <th className="px-4 py-3.5">Entry</th>
+                <th className="px-4 py-3.5">Live</th>
+                <th className="px-4 py-3.5">Delta</th>
+                <th className="px-4 py-3.5">Stop</th>
+                <th className="px-4 py-3.5">TP1</th>
+                <th className="px-4 py-3.5">Action</th>
+                <th className="px-4 py-3.5">Position Cost</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td className="p-4 text-sm text-slate-600" colSpan={11}>
+                  <td className="px-4 py-5 text-sm text-slate-600" colSpan={11}>
                     {emptyStateMessage ?? "No rows available."}
                   </td>
                 </tr>
@@ -631,36 +631,36 @@ export default function IdeasWorkspaceClient({
                 return (
                   <tr
                     key={row.symbol}
-                    className="cursor-pointer border-b border-[#efe5d6] transition hover:bg-[#fff9f0]"
+                    className="cursor-pointer border-b border-[#efe5d6] transition-colors hover:bg-[#fff9f0]"
                     onClick={() => setSelected(row)}
                   >
-                    <td className="p-3 font-semibold tracking-tight">
+                    <td className="px-4 py-3.5 font-semibold tracking-tight">
                       <div>{row.symbol}</div>
                       {row.industry_group ? (
                         <div className="mt-0.5 text-[10px] font-normal text-slate-500">{row.industry_group}</div>
                       ) : null}
                     </td>
-                    <td className="p-3">
+                    <td className="px-4 py-3.5">
                       <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${signalPill(row.signal)}`}>
                         {row.signal}
                       </span>
                     </td>
-                    <td className="p-3">{row.rank ?? "—"}</td>
-                    <td className="p-3">
+                    <td className="px-4 py-3.5">{row.rank ?? "—"}</td>
+                    <td className="px-4 py-3.5">
                       <div className="font-semibold">{Number(row.quality_score ?? row.confidence ?? 0).toFixed(0)}</div>
                       <div className="text-[10px] text-slate-500">
                         {row.risk_grade ? `Risk ${row.risk_grade}` : "Risk —"}
                       </div>
                     </td>
-                    <td className="p-3">{entry.toFixed(2)}</td>
-                    <td className="p-3">
+                    <td className="px-4 py-3.5">{entry.toFixed(2)}</td>
+                    <td className="px-4 py-3.5">
                       {live !== null ? live.toFixed(2) : "—"}
                       {mismatch ? <span className="ml-2 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">MISMATCH</span> : null}
                     </td>
-                    <td className="p-3">{fmtSignedPct(deltaPct)}</td>
-                    <td className="p-3">{Number(row.stop ?? 0).toFixed(2)}</td>
-                    <td className="p-3">{Number(row.tp1 ?? 0).toFixed(2)}</td>
-                    <td className="p-3">
+                    <td className="px-4 py-3.5">{fmtSignedPct(deltaPct)}</td>
+                    <td className="px-4 py-3.5">{Number(row.stop ?? 0).toFixed(2)}</td>
+                    <td className="px-4 py-3.5">{Number(row.tp1 ?? 0).toFixed(2)}</td>
+                    <td className="px-4 py-3.5">
                       <div className="space-y-1">
                         <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
                           {exec.action}
@@ -678,7 +678,7 @@ export default function IdeasWorkspaceClient({
                         ) : null}
                       </div>
                     </td>
-                    <td className="p-3">{Number(row.sizing?.est_cost ?? 0).toFixed(2)}</td>
+                    <td className="px-4 py-3.5">{Number(row.sizing?.est_cost ?? 0).toFixed(2)}</td>
                   </tr>
                 );
               })}
@@ -688,7 +688,7 @@ export default function IdeasWorkspaceClient({
       </div>
 
       <div
-        className={`fixed right-0 top-0 z-50 h-full w-full max-w-xl transform border-l border-[#e0cfb1] bg-[#fff8ee] shadow-2xl transition ${
+        className={`fixed right-0 top-0 z-50 h-full w-full max-w-xl transform border-l border-[#decdae] bg-[#fff8ee] shadow-[0_18px_40px_rgba(60,42,20,0.18)] transition ${
           selected ? "translate-x-0" : "translate-x-full"
         }`}
       >

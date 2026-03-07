@@ -56,3 +56,48 @@ a {
 .muted {
   color: rgb(var(--muted));
 }
+
+.surface-panel {
+  border: 1px solid #dfcfb2;
+  background: linear-gradient(180deg, #fff9f1 0%, #fff7ec 100%);
+  border-radius: 1rem;
+  box-shadow: 0 8px 24px rgba(88, 63, 36, 0.05);
+}
+
+.surface-card {
+  border: 1px solid #e6d8c1;
+  background: #fffdf8;
+  border-radius: 0.85rem;
+  box-shadow: 0 2px 10px rgba(88, 63, 36, 0.04);
+}
+
+.surface-chip {
+  border: 1px solid #e5d9c8;
+  background: #fffdf8;
+  border-radius: 999px;
+}
+
+.section-title {
+  font-size: 1.05rem;
+  line-height: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #0f172a;
+}
+
+.muted-label {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+}
+
+.headline-value {
+  margin-top: 0.5rem;
+  font-size: 1.9rem;
+  line-height: 2.1rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: #0f172a;
+}
