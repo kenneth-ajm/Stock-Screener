@@ -7,6 +7,8 @@ import { getLCTD } from "@/lib/scan_status";
 import { getActivePortfolioCapacity } from "@/lib/portfolio_capacity";
 import { computePortfolioAwareAction } from "@/lib/execution_action";
 import { computeMarketBreadth } from "@/lib/market_breadth";
+import { scoreSignalQuality } from "@/lib/signal_quality";
+import { buildTradeRiskLayer } from "@/lib/trade_risk_layer";
 import {
   SECTOR_MOMENTUM_STRATEGY_VERSION,
 } from "@/lib/sector_momentum";
@@ -34,6 +36,7 @@ type ScanRow = {
   tp2: number;
   reason_summary?: string | null;
   reason_json?: Record<string, unknown> | null;
+  trade_risk_layer?: Record<string, unknown> | null;
   industry_group?: string | null;
   theme?: string | null;
 };
@@ -255,6 +258,34 @@ const loadScreenerDataCached = unstable_cache(
 
     const cappedRows = applyDisplayCaps(entryValidatedRows);
     const withActions = cappedRows.map((row) => {
+      const quality =
+        typeof row.quality_score === "number" && Number.isFinite(row.quality_score)
+          ? {
+              quality_score: Number(row.quality_score),
+              risk_grade: (row.risk_grade ?? "C") as "A" | "B" | "C" | "D",
+            }
+          : scoreSignalQuality({
+              strategy_version: strategyVersion,
+              signal: row.signal,
+              confidence: Number(row.confidence ?? 0),
+              rank_score: typeof row.rank_score === "number" ? row.rank_score : null,
+              regime_state: regimeState,
+              reason_json: row.reason_json ?? null,
+              entry: Number(row.entry ?? 0),
+              stop: Number(row.stop ?? 0),
+            });
+      const tradeRisk = buildTradeRiskLayer({
+        strategy_version: strategyVersion,
+        signal: row.signal,
+        quality_score: Number(quality.quality_score ?? 50),
+        risk_grade: (quality.risk_grade ?? "C") as "A" | "B" | "C" | "D",
+        confidence: Number(row.confidence ?? 0),
+        entry: Number(row.entry ?? 0),
+        stop: Number(row.stop ?? 0),
+        tp1: Number(row.tp1 ?? 0),
+        tp2: Number(row.tp2 ?? 0),
+        max_holding_days: strategyVersion === "v1_trend_hold" ? 45 : 7,
+      });
       const action = computePortfolioAwareAction(
         {
           signal: row.signal,
@@ -265,6 +296,10 @@ const loadScreenerDataCached = unstable_cache(
         },
         capacity
       );
+      const persistedTradeRisk =
+        row.reason_json && typeof row.reason_json === "object"
+          ? ((row.reason_json as Record<string, unknown>).trade_risk_layer as Record<string, unknown> | undefined)
+          : undefined;
       return {
         symbol: row.symbol,
         signal: row.signal,
@@ -279,6 +314,7 @@ const loadScreenerDataCached = unstable_cache(
         risk_grade: row.risk_grade ?? null,
         quality_signal: row.quality_signal ?? null,
         quality_summary: row.quality_summary ?? null,
+        trade_risk_layer: persistedTradeRisk ?? tradeRisk,
         reason_summary: row.reason_summary ?? null,
         reason_json: row.reason_json ?? null,
         industry_group: row.industry_group ?? null,

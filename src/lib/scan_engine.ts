@@ -13,6 +13,7 @@ import {
 import { getLCTD } from "@/lib/scan_date";
 import { finalizeSignals } from "@/lib/finalize_signals";
 import { scoreSignalQuality } from "@/lib/signal_quality";
+import { buildTradeRiskLayer } from "@/lib/trade_risk_layer";
 
 export type ScanEngineClient = SupabaseClient<any, any, any> | any;
 
@@ -497,6 +498,18 @@ export async function runScanPipeline(opts: {
       entry: scoredRow.entry,
       stop: scoredRow.stop,
     });
+    const tradeRisk = buildTradeRiskLayer({
+      strategy_version,
+      signal: scoredRow.signal,
+      quality_score: quality.quality_score,
+      risk_grade: quality.risk_grade,
+      confidence: scoredRow.confidence,
+      entry: scoredRow.entry,
+      stop: scoredRow.stop,
+      tp1: scoredRow.tp1,
+      tp2: scoredRow.tp2,
+      max_holding_days: (scoredRow as any)?.max_holding_days ?? null,
+    });
     rows.push({
       date: scanDate,
       universe_slug,
@@ -521,6 +534,7 @@ export async function runScanPipeline(opts: {
           components: quality.components,
           summary: quality.quality_summary,
         },
+        trade_risk_layer: tradeRisk,
       } as RuleEvaluation["reason_json"],
       quality_score: quality.quality_score,
       quality_components: quality.components,

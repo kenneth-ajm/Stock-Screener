@@ -9,6 +9,7 @@ import {
 import { GROWTH_UNIVERSE_SLUG } from "@/lib/strategy_universe";
 import { OBS_KEYS, writeObservabilityStatus } from "@/lib/observability";
 import { scoreSignalQuality } from "@/lib/signal_quality";
+import { buildTradeRiskLayer } from "@/lib/trade_risk_layer";
 
 const TARGET_GROWTH_COUNT = 1500;
 const MIN_PRICE = 5;
@@ -197,6 +198,18 @@ export async function runPopulate() {
       entry: c.entry,
       stop: c.stop,
     });
+    const tradeRisk = buildTradeRiskLayer({
+      strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
+      signal: c.signal,
+      quality_score: quality.quality_score,
+      risk_grade: quality.risk_grade,
+      confidence: c.confidence,
+      entry: c.entry,
+      stop: c.stop,
+      tp1: c.tp1,
+      tp2: c.tp2,
+      max_holding_days: 7,
+    });
     return {
       date: scanDate,
       universe_slug: GROWTH_UNIVERSE_SLUG,
@@ -220,6 +233,7 @@ export async function runPopulate() {
           components: quality.components,
           summary: quality.quality_summary,
         },
+        trade_risk_layer: tradeRisk,
       },
       quality_score: quality.quality_score,
       quality_components: quality.components,

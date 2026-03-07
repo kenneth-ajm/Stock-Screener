@@ -13,6 +13,10 @@ type Row = {
   risk_grade?: "A" | "B" | "C" | "D" | null;
   quality_signal?: "BUY" | "WATCH" | "AVOID" | null;
   quality_summary?: string | null;
+  trade_risk_layer?: {
+    prep_state?: "READY" | "REVIEW" | "BLOCKED";
+    summary?: string;
+  } | null;
   rank_score?: number | null;
   rank?: number | null;
   entry: number;

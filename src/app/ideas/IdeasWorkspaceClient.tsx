@@ -19,6 +19,16 @@ type IdeaRow = {
   risk_grade?: "A" | "B" | "C" | "D" | null;
   quality_signal?: "BUY" | "WATCH" | "AVOID" | null;
   quality_summary?: string | null;
+  trade_risk_layer?: {
+    prep_state?: "READY" | "REVIEW" | "BLOCKED";
+    summary?: string;
+    risk?: {
+      risk_per_share?: number;
+      stop_pct?: number;
+      rr_tp1?: number;
+      rr_tp2?: number;
+    };
+  } | null;
   entry: number;
   stop: number;
   tp1: number;
@@ -632,6 +642,32 @@ export default function IdeasWorkspaceClient({
                 <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                   <div className="text-xs text-slate-500">Stop</div>
                   <div className="mt-1 font-semibold">{selected.stop.toFixed(2)}</div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-slate-500">Trade prep</div>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                      selected.trade_risk_layer?.prep_state === "READY"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : selected.trade_risk_layer?.prep_state === "BLOCKED"
+                        ? "border-rose-200 bg-rose-50 text-rose-700"
+                        : "border-amber-200 bg-amber-50 text-amber-700"
+                    }`}
+                  >
+                    {selected.trade_risk_layer?.prep_state ?? "REVIEW"}
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-slate-600">
+                  {selected.trade_risk_layer?.summary ?? "Trade-prep metadata unavailable."}
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                  <div>Risk/share: {Number(selected.trade_risk_layer?.risk?.risk_per_share ?? 0).toFixed(2)}</div>
+                  <div>Stop %: {Number(selected.trade_risk_layer?.risk?.stop_pct ?? 0).toFixed(2)}%</div>
+                  <div>RR TP1: {Number(selected.trade_risk_layer?.risk?.rr_tp1 ?? 0).toFixed(2)}</div>
+                  <div>RR TP2: {Number(selected.trade_risk_layer?.risk?.rr_tp2 ?? 0).toFixed(2)}</div>
                 </div>
               </div>
 
