@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createPrivateKey, createSign, type KeyObject } from "node:crypto";
+import { constants, createPrivateKey, createSign, type KeyObject } from "node:crypto";
 import { readBrokerEnv, tigerConfigured } from "@/lib/broker/env";
 import type {
   BrokerAccountSnapshot,
@@ -149,7 +149,10 @@ function canonicalizeParamsForSign(input: Record<string, unknown>) {
     .filter(([key, value]) => key !== "sign" && value !== undefined && value !== null)
     .map(([key, value]) => [key, String(value)] as const)
     .sort(([a], [b]) => a.localeCompare(b));
-  return entries.map(([k, v]) => `${k}=${v}`).join("&");
+  return {
+    ordered_keys: entries.map(([k]) => k),
+    canonical: entries.map(([k, v]) => `${k}=${v}`).join("&"),
+  };
 }
 
 function wrapPem(body: string, kind: "RSA PRIVATE KEY" | "PRIVATE KEY") {
@@ -174,7 +177,7 @@ function keyCandidates(raw: string): string[] {
   return [wrapPem(body, "RSA PRIVATE KEY"), wrapPem(body, "PRIVATE KEY")];
 }
 
-function parseTigerPrivateKey(raw: string): KeyObject {
+function parseTigerPrivateKey(raw: string): { key: KeyObject; format: "PKCS#1" | "PKCS#8" | "UNKNOWN" } {
   const candidates = keyCandidates(raw);
   if (candidates.length === 0) {
     throw new Error("Tiger private key missing or empty");
@@ -183,9 +186,15 @@ function parseTigerPrivateKey(raw: string): KeyObject {
   for (const candidate of candidates) {
     try {
       try {
-        return createPrivateKey({ key: candidate, format: "pem", type: "pkcs1" });
+        return {
+          key: createPrivateKey({ key: candidate, format: "pem", type: "pkcs1" }),
+          format: "PKCS#1",
+        };
       } catch {
-        return createPrivateKey({ key: candidate, format: "pem", type: "pkcs8" });
+        return {
+          key: createPrivateKey({ key: candidate, format: "pem", type: "pkcs8" }),
+          format: "PKCS#8",
+        };
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
@@ -232,14 +241,21 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       biz_content: JSON.stringify(isObject(opts.bizContent) ? opts.bizContent : {}),
     };
     const canonicalParams = canonicalizeParamsForSign(envelope);
-    const canonical = canonicalParams;
-    const keyObj = parseTigerPrivateKey(env.tiger.private_key);
-    const signer = createSign("RSA-SHA256");
+    const canonical = canonicalParams.canonical;
+    const privateKey = parseTigerPrivateKey(env.tiger.private_key);
+    const signType = String(envelope.sign_type ?? "RSA").toUpperCase();
+    const signAlgorithm = signType === "RSA2" ? "RSA-SHA256" : "RSA-SHA1";
+    const signer = createSign(signAlgorithm);
     signer.update(canonical);
     signer.end();
     let signature = "";
     try {
-      signature = signer.sign(keyObj).toString("base64");
+      signature = signer
+        .sign({
+          key: privateKey.key,
+          padding: constants.RSA_PKCS1_PADDING,
+        })
+        .toString("base64");
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
       throw new Error(`Tiger request signing failed: ${message}`);
@@ -248,9 +264,9 @@ export class TigerReadOnlyConnector implements BrokerConnector {
 
     const bodyText = JSON.stringify(envelope);
     const headers: Record<string, string> = {
-      "content-type": "application/json",
+      "content-type": "application/json; charset=UTF-8",
       "x-tiger-client-id": env.tiger.client_id,
-      "x-tiger-signature-algorithm": "RSA-SHA256",
+      "x-tiger-signature-algorithm": signAlgorithm,
       // Keep header signature for compatibility; Tiger gateway also requires body `sign`.
       "x-tiger-signature": signature,
     };
@@ -267,15 +283,22 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       } as RequestInit,
       signedMeta: {
         envelope_keys: Object.keys(envelope),
+        canonical_param_order: canonicalParams.ordered_keys,
+        canonical_keys_signed: canonicalParams.ordered_keys,
         charset_value: String(envelope.charset ?? ""),
         sign_type_value: String(envelope.sign_type ?? ""),
         version_value: String(envelope.version ?? ""),
+        timestamp_value_used: String(envelope.timestamp ?? ""),
         timestamp_format_used: "YYYY-MM-DD HH:mm:ss (UTC)",
         method_used: String(envelope.method ?? ""),
         biz_content_present: Boolean(envelope.biz_content),
+        biz_content_length: String(envelope.biz_content ?? "").length,
         timestamp_present: Boolean(envelope.timestamp),
         sign_present: Boolean(envelope.sign),
-        signed_param_count: canonicalParams ? canonicalParams.split("&").length : 0,
+        private_key_format_detected: privateKey.format,
+        sign_algorithm_used: signAlgorithm,
+        sign_padding_used: "RSA_PKCS1_PADDING",
+        signed_param_count: canonicalParams.canonical ? canonicalParams.canonical.split("&").length : 0,
       },
     };
   }
@@ -315,10 +338,17 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       sign_type_value: String((request as any)?.signedMeta?.sign_type_value ?? ""),
       version_value: String((request as any)?.signedMeta?.version_value ?? ""),
       timestamp_format_used: String((request as any)?.signedMeta?.timestamp_format_used ?? ""),
+      timestamp_value_used: String((request as any)?.signedMeta?.timestamp_value_used ?? ""),
       method_used: String((request as any)?.signedMeta?.method_used ?? ""),
       biz_content_present: Boolean((request as any)?.signedMeta?.biz_content_present),
+      biz_content_length: Number((request as any)?.signedMeta?.biz_content_length ?? 0),
       timestamp_present: Boolean((request as any)?.signedMeta?.timestamp_present),
       sign_present: Boolean((request as any)?.signedMeta?.sign_present),
+      canonical_param_order: (request as any)?.signedMeta?.canonical_param_order ?? [],
+      canonical_keys_signed: (request as any)?.signedMeta?.canonical_keys_signed ?? [],
+      private_key_format_detected: String((request as any)?.signedMeta?.private_key_format_detected ?? "UNKNOWN"),
+      sign_algorithm_used: String((request as any)?.signedMeta?.sign_algorithm_used ?? ""),
+      sign_padding_used: String((request as any)?.signedMeta?.sign_padding_used ?? ""),
       signed_param_count: Number((request as any)?.signedMeta?.signed_param_count ?? 0),
       base_url: env.tiger.base_url,
     };
@@ -441,10 +471,17 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       sign_type_value: String((request as any)?.signedMeta?.sign_type_value ?? ""),
       version_value: String((request as any)?.signedMeta?.version_value ?? ""),
       timestamp_format_used: String((request as any)?.signedMeta?.timestamp_format_used ?? ""),
+      timestamp_value_used: String((request as any)?.signedMeta?.timestamp_value_used ?? ""),
       method_used: String((request as any)?.signedMeta?.method_used ?? ""),
       biz_content_present: Boolean((request as any)?.signedMeta?.biz_content_present),
+      biz_content_length: Number((request as any)?.signedMeta?.biz_content_length ?? 0),
       timestamp_present: Boolean((request as any)?.signedMeta?.timestamp_present),
       sign_present: Boolean((request as any)?.signedMeta?.sign_present),
+      canonical_param_order: (request as any)?.signedMeta?.canonical_param_order ?? [],
+      canonical_keys_signed: (request as any)?.signedMeta?.canonical_keys_signed ?? [],
+      private_key_format_detected: String((request as any)?.signedMeta?.private_key_format_detected ?? "UNKNOWN"),
+      sign_algorithm_used: String((request as any)?.signedMeta?.sign_algorithm_used ?? ""),
+      sign_padding_used: String((request as any)?.signedMeta?.sign_padding_used ?? ""),
       signed_param_count: Number((request as any)?.signedMeta?.signed_param_count ?? 0),
       base_url: env.tiger.base_url,
     };

@@ -35,6 +35,10 @@ The connector accepts either:
 
 Escaped newlines (`\\n`) are normalized automatically.
 
+Signing notes:
+- `sign_type=RSA` uses `RSA-SHA1` (Tiger gateway compatibility)
+- `sign_type=RSA2` uses `RSA-SHA256`
+
 Do not expose these via `NEXT_PUBLIC_*`.
 
 ## Endpoint
