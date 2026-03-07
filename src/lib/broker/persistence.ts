@@ -9,7 +9,6 @@ type InternalPositionRow = {
   quantity?: number | null;
   position_size?: number | null;
   entry_price?: number | null;
-  avg_cost?: number | null;
 };
 
 function toNum(v: unknown): number | null {
@@ -37,7 +36,7 @@ function aggregateInternal(rows: InternalPositionRow[]) {
     if (!symbol) continue;
     const qty = resolveQty(row);
     if (!(qty > 0)) continue;
-    const rawCost = toNum(row.avg_cost) ?? toNum(row.entry_price);
+    const rawCost = toNum(row.entry_price);
     const existing = map.get(symbol) ?? {
       symbol,
       quantity: 0,
@@ -141,7 +140,7 @@ export async function reconcileBrokerWithPortfolio(opts: {
 
   const { data, error } = await supa
     .from("portfolio_positions")
-    .select("symbol,shares,quantity,position_size,entry_price,avg_cost")
+    .select("symbol,shares,quantity,position_size,entry_price")
     .eq("portfolio_id", portfolioId)
     .eq("status", "OPEN");
   if (error) throw error;
@@ -258,4 +257,3 @@ export async function persistBrokerSnapshot(opts: {
   if (error) throw error;
   return { key, updated_at: payload.updated_at };
 }
-
