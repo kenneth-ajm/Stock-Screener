@@ -69,6 +69,96 @@ function shapeSummary(json: unknown) {
   };
 }
 
+function tryParseJsonString(input: string): { ok: boolean; value: unknown | null; stage: string } {
+  const raw = String(input ?? "").trim();
+  if (!raw) return { ok: false, value: null, stage: "empty" };
+
+  // 1) Direct JSON parse.
+  try {
+    return { ok: true, value: JSON.parse(raw), stage: "json.parse.direct" };
+  } catch {}
+
+  // 2) Remove wrapping quotes and unescape common escaped JSON patterns.
+  const unwrapped =
+    (raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))
+      ? raw.slice(1, -1)
+      : raw;
+  const normalized = unwrapped
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\")
+    .replace(/\\n/g, "")
+    .trim();
+  try {
+    return { ok: true, value: JSON.parse(normalized), stage: "json.parse.unescaped" };
+  } catch {}
+
+  // 3) Base64 -> JSON fallback.
+  const b64 = raw.replace(/\s+/g, "");
+  if (/^[A-Za-z0-9+/=]+$/.test(b64) && b64.length % 4 === 0) {
+    try {
+      const decoded = Buffer.from(b64, "base64").toString("utf8").trim();
+      const parsed = JSON.parse(decoded);
+      return { ok: true, value: parsed, stage: "json.parse.base64" };
+    } catch {}
+  }
+
+  return { ok: false, value: null, stage: "json.parse.failed" };
+}
+
+function decodeGatewayEnvelope(json: unknown): {
+  payload: unknown;
+  diag: {
+    data_type: string;
+    decoded_data_type: string;
+    decoded_root_keys: string[];
+    parse_stage_reached: string;
+  };
+} {
+  const root = isObject(json) ? ({ ...(json as Record<string, unknown>) } as Record<string, unknown>) : null;
+  if (!root) {
+    return {
+      payload: json,
+      diag: {
+        data_type: Array.isArray((json as any)?.data) ? "array" : typeof (json as any)?.data,
+        decoded_data_type: typeof json,
+        decoded_root_keys: isObject(json) ? Object.keys(json as any).slice(0, 40) : [],
+        parse_stage_reached: "envelope.non_object",
+      },
+    };
+  }
+
+  const data = root.data;
+  let parseStage = "envelope.raw";
+  if (typeof data === "string") {
+    const parsed1 = tryParseJsonString(data);
+    if (parsed1.ok) {
+      root.data = parsed1.value as any;
+      parseStage = parsed1.stage;
+      // Some providers double-stringify.
+      if (typeof root.data === "string") {
+        const parsed2 = tryParseJsonString(root.data);
+        if (parsed2.ok) {
+          root.data = parsed2.value as any;
+          parseStage = `${parsed1.stage}->${parsed2.stage}`;
+        }
+      }
+    } else {
+      parseStage = parsed1.stage;
+    }
+  }
+
+  const decodedData = root.data;
+  return {
+    payload: root,
+    diag: {
+      data_type: Array.isArray(data) ? "array" : typeof data,
+      decoded_data_type: Array.isArray(decodedData) ? "array" : typeof decodedData,
+      decoded_root_keys: isObject(decodedData) ? Object.keys(decodedData).slice(0, 40) : [],
+      parse_stage_reached: parseStage,
+    },
+  };
+}
+
 function getByPath(obj: unknown, path: string): unknown {
   const parts = path.split(".");
   let cur: unknown = obj;
@@ -472,7 +562,8 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       status: res.status,
       status_text: res.statusText,
     };
-    const json = accountCall.json;
+    const decoded = decodeGatewayEnvelope(accountCall.json);
+    const json = decoded.payload;
     const rootObj = isObject(json) ? json : null;
     const accountObj = firstObjectByPaths(json, [
       "data.account",
@@ -537,6 +628,7 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     this.debug.account_parse = {
       selected_path: accountObj.path,
       shape: shapeSummary(json),
+      decoding: decoded.diag,
       mapped: {
         currency,
         cash_available: cash,
@@ -611,7 +703,8 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       status: res.status,
       status_text: res.statusText,
     };
-    const json = positionsCall.json;
+    const decoded = decodeGatewayEnvelope(positionsCall.json);
+    const json = decoded.payload;
     const positionsList = firstArrayByPaths(json, [
       "data.positions",
       "data.items",
@@ -630,6 +723,7 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     this.debug.positions_parse = {
       selected_path: positionsList.path,
       shape: shapeSummary(json),
+      decoding: decoded.diag,
       candidate_count: Array.isArray(list) ? list.length : 0,
     };
     if (!Array.isArray(list)) return [];
