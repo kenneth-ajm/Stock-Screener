@@ -59,10 +59,10 @@ function toNorm(v: number | null, min: number, max: number) {
 function getByPath(obj: unknown, path: string): unknown {
   if (!obj || typeof obj !== "object") return undefined;
   const parts = path.split(".");
-  let cur: any = obj;
+  let cur: unknown = obj;
   for (const p of parts) {
     if (cur == null || typeof cur !== "object") return undefined;
-    cur = cur[p];
+    cur = (cur as Record<string, unknown>)[p];
   }
   return cur;
 }
@@ -79,12 +79,14 @@ function getIndicator(reasonJson: Record<string, unknown> | null | undefined, ke
 }
 
 function checkOk(reasonJson: Record<string, unknown> | null | undefined, keys: string[]) {
-  const checks = Array.isArray((reasonJson as any)?.checks) ? ((reasonJson as any).checks as any[]) : [];
+  const checksValue = reasonJson && typeof reasonJson === "object" ? reasonJson.checks : null;
+  const checks = Array.isArray(checksValue) ? checksValue : [];
   const want = new Set(keys.map((k) => String(k).toLowerCase()));
   for (const c of checks) {
-    const key = String(c?.key ?? c?.id ?? "").toLowerCase();
+    const row = c && typeof c === "object" ? (c as Record<string, unknown>) : null;
+    const key = String(row?.key ?? row?.id ?? "").toLowerCase();
     if (!want.has(key)) continue;
-    if (typeof c?.ok === "boolean") return c.ok;
+    if (typeof row?.ok === "boolean") return row.ok;
   }
   return null;
 }
@@ -98,6 +100,12 @@ function mean(nums: Array<number | null>) {
 function points(norm: number | null, weight: number) {
   if (norm === null) return Math.round(weight * 0.55);
   return Math.round(clamp(norm, 0, 1) * weight);
+}
+
+function boolToNorm(v: boolean | null) {
+  if (v === true) return 1;
+  if (v === false) return 0;
+  return null;
 }
 
 function mapRiskGrade(score: number): RiskGrade {
@@ -120,10 +128,19 @@ export function scoreSignalQuality(input: SignalQualityInput): SignalQualityResu
   const confidence = toNum(input.confidence) ?? 50;
   const confidenceNorm = clamp(confidence / 100, 0, 1);
 
+  const trend20Check = checkOk(reasonJson, ["close_above_sma20", "trend_template", "template_trend"]);
+  const trend50Check = checkOk(reasonJson, ["close_above_sma50", "price_above_sma50"]);
+  const trend200Check = checkOk(reasonJson, [
+    "close_above_sma200",
+    "price_above_sma200",
+    "watch_trend_aligned",
+  ]);
+  const extensionCheck = checkOk(reasonJson, ["not_too_extended", "extension_buy", "extension_watch"]);
+
   const trendFromChecks = mean([
-    checkOk(reasonJson, ["close_above_sma20", "trend_template", "template_trend"] ) === true ? 1 : checkOk(reasonJson, ["close_above_sma20", "trend_template", "template_trend"]) === false ? 0 : null,
-    checkOk(reasonJson, ["close_above_sma50", "price_above_sma50"]) === true ? 1 : checkOk(reasonJson, ["close_above_sma50", "price_above_sma50"]) === false ? 0 : null,
-    checkOk(reasonJson, ["close_above_sma200", "price_above_sma200", "watch_trend_aligned"]) === true ? 1 : checkOk(reasonJson, ["close_above_sma200", "price_above_sma200", "watch_trend_aligned"]) === false ? 0 : null,
+    boolToNorm(trend20Check),
+    boolToNorm(trend50Check),
+    boolToNorm(trend200Check),
   ]);
   const trendScore = points(trendFromChecks ?? confidenceNorm * 0.9, WEIGHTS.trend_score);
 
@@ -137,7 +154,7 @@ export function scoreSignalQuality(input: SignalQualityInput): SignalQualityResu
   ]);
   const momentumScore = points(momentumNorm ?? confidenceNorm, WEIGHTS.momentum_score);
 
-  const regimeState = String(input.regime_state ?? (reasonJson as any)?.regime ?? "").toUpperCase();
+  const regimeState = String(input.regime_state ?? getByPath(reasonJson, "regime") ?? "").toUpperCase();
   const regimeGateOk = checkOk(reasonJson, ["regime_gate"]);
   let regimeNorm: number;
   if (regimeGateOk === true) regimeNorm = 1;
@@ -147,9 +164,15 @@ export function scoreSignalQuality(input: SignalQualityInput): SignalQualityResu
   else regimeNorm = 0.35;
   const marketRegimeScore = points(regimeNorm, WEIGHTS.market_regime_score);
 
-  const groupState = String((reasonJson as any)?.group?.state ?? "").toUpperCase();
-  const pct50 = toNum((reasonJson as any)?.group?.participation?.pct_above_sma50 ?? getIndicator(reasonJson, ["pct_above_sma50"]));
-  const pct200 = toNum((reasonJson as any)?.group?.participation?.pct_above_sma200 ?? getIndicator(reasonJson, ["pct_above_sma200"]));
+  const groupState = String(getByPath(reasonJson, "group.state") ?? "").toUpperCase();
+  const pct50 = toNum(
+    getByPath(reasonJson, "group.participation.pct_above_sma50") ??
+      getIndicator(reasonJson, ["pct_above_sma50"])
+  );
+  const pct200 = toNum(
+    getByPath(reasonJson, "group.participation.pct_above_sma200") ??
+      getIndicator(reasonJson, ["pct_above_sma200"])
+  );
   const sectorNorm = mean([
     groupState ? groupState === "LEADING" ? 1 : groupState === "IMPROVING" ? 0.7 : 0.35 : null,
     pct50 == null ? null : toNorm(pct50, 35, 75),
@@ -174,11 +197,7 @@ export function scoreSignalQuality(input: SignalQualityInput): SignalQualityResu
   const extensionNorm = mean([
     distInAtr == null ? null : 1 - clamp(distInAtr / 2.5, 0, 1),
     nearTrigger == null ? null : 1 - clamp((nearTrigger - 1) / 0.12, 0, 1),
-    checkOk(reasonJson, ["not_too_extended", "extension_buy", "extension_watch"]) === true
-      ? 1
-      : checkOk(reasonJson, ["not_too_extended", "extension_buy", "extension_watch"]) === false
-      ? 0
-      : null,
+    boolToNorm(extensionCheck),
   ]);
   const extensionScore = points(extensionNorm ?? 0.55, WEIGHTS.extension_score);
 
