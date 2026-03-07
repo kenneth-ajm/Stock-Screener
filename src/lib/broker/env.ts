@@ -38,7 +38,7 @@ export function readBrokerEnv(): BrokerEnv {
       base_url,
       account_endpoint: String(process.env.TIGER_ACCOUNT_ENDPOINT ?? "/gateway").trim(),
       positions_endpoint: String(process.env.TIGER_POSITIONS_ENDPOINT ?? "/gateway").trim(),
-      account_method: String(process.env.TIGER_ACCOUNT_METHOD ?? "get_account").trim(),
+      account_method: String(process.env.TIGER_ACCOUNT_METHOD ?? "get_assets").trim(),
       positions_method: String(process.env.TIGER_POSITIONS_METHOD ?? "get_positions").trim(),
       sign_type: String(process.env.TIGER_SIGN_TYPE ?? "RSA").trim() || "RSA",
       charset: String(process.env.TIGER_CHARSET ?? "UTF-8").trim() || "UTF-8",
