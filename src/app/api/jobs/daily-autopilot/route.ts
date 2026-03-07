@@ -174,7 +174,7 @@ async function writeStatus(payload: Record<string, unknown>) {
   }
 }
 
-async function runAutopilot() {
+export async function runAutopilot() {
   const startedAt = Date.now();
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

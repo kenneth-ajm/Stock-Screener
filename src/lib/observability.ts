@@ -10,6 +10,7 @@ export const OBS_KEYS = {
   rescan: "rescan_latest_last_run",
   autopilot: "daily_autopilot_core_800",
   backtest: "backtest_last_run",
+  scheduler: "daily_scheduled_scan_last_run",
 } as const;
 
 export function makeObservabilityClient() {
