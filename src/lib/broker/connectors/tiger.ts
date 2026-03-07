@@ -185,6 +185,9 @@ const ACCOUNT_KEYS = {
     "availableCash",
     "withdrawableCash",
     "cashAvailableForTrade",
+    "totalCashBalance",
+    "cashBalanceForTrade",
+    "cashForTrade",
   ],
   equity: [
     "equity",
@@ -194,6 +197,9 @@ const ACCOUNT_KEYS = {
     "netAsset",
     "totalEquity",
     "accountValue",
+    "netLiquidationValue",
+    "equityWithLoanValue",
+    "totalAsset",
   ],
   buying_power: [
     "buying_power",
@@ -223,8 +229,13 @@ const POSITION_KEYS = {
     "averagePrice",
     "costPrice",
     "avgPrice",
+    "averageCost",
     "holdingCost",
     "openPrice",
+    "costBasis",
+    "positionCost",
+    "positionCostBasis",
+    "cost",
   ],
   market_price: [
     "market_price",
@@ -279,25 +290,54 @@ function firstObjectByPaths(obj: unknown, paths: string[]) {
   return { path: null as string | null, value: null as Record<string, unknown> | null };
 }
 
-function deepFindByKeys(obj: unknown, keys: string[], maxDepth = 6): unknown {
+function deepFindByKeysWithMeta(
+  obj: unknown,
+  keys: string[],
+  maxDepth = 8
+): { key: string; path: string; value: unknown } | null {
   const wanted = new Set(keys.map((k) => k.toLowerCase()));
-  const queue: Array<{ value: unknown; depth: number }> = [{ value: obj, depth: 0 }];
+  const queue: Array<{ value: unknown; depth: number; path: string }> = [
+    { value: obj, depth: 0, path: "$" },
+  ];
   const seen = new Set<unknown>();
   while (queue.length > 0) {
-    const { value, depth } = queue.shift()!;
+    const { value, depth, path } = queue.shift()!;
     if (!value || depth > maxDepth || seen.has(value)) continue;
     seen.add(value);
     if (Array.isArray(value)) {
-      for (const v of value.slice(0, 50)) queue.push({ value: v, depth: depth + 1 });
+      for (let i = 0; i < Math.min(value.length, 50); i += 1) {
+        queue.push({ value: value[i], depth: depth + 1, path: `${path}[${i}]` });
+      }
       continue;
     }
     if (!isObject(value)) continue;
     for (const [k, v] of Object.entries(value)) {
-      if (wanted.has(k.toLowerCase()) && v != null) return v;
+      if (wanted.has(k.toLowerCase()) && v != null) {
+        return { key: k, path: `${path}.${k}`, value: v };
+      }
     }
-    for (const v of Object.values(value)) queue.push({ value: v, depth: depth + 1 });
+    for (const [k, v] of Object.entries(value)) {
+      queue.push({ value: v, depth: depth + 1, path: `${path}.${k}` });
+    }
   }
   return null;
+}
+
+function firstObjectSampleKeys(obj: unknown): string[] {
+  if (isObject(obj)) return Object.keys(obj).slice(0, 40);
+  const queue: unknown[] = [obj];
+  const seen = new Set<unknown>();
+  while (queue.length > 0) {
+    const value = queue.shift();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (let i = 0; i < Math.min(value.length, 30); i += 1) queue.push(value[i]);
+      continue;
+    }
+    if (isObject(value)) return Object.keys(value).slice(0, 40);
+  }
+  return [];
 }
 
 function buildTigerBizContent(opts: { accountId: string }) {
@@ -674,33 +714,35 @@ export class TigerReadOnlyConnector implements BrokerConnector {
 
     const fromObj = accountObj.value ?? (rootObj as any);
     const asOfPick = pickFirstWithKey(fromObj, [...ACCOUNT_KEYS.as_of]);
-    const asOfDeep = asOfPick.value == null ? deepFindByKeys(json, [...ACCOUNT_KEYS.as_of]) : null;
-    const asOf = String(asOfPick.value ?? asOfDeep ?? nowIso());
+    const asOfDeepMeta =
+      asOfPick.value == null ? deepFindByKeysWithMeta(json, [...ACCOUNT_KEYS.as_of]) : null;
+    const asOf = String(asOfPick.value ?? asOfDeepMeta?.value ?? nowIso());
 
     const currencyPick = pickFirstWithKey(fromObj, [...ACCOUNT_KEYS.currency]);
-    const currencyDeep =
-      currencyPick.value == null ? deepFindByKeys(json, [...ACCOUNT_KEYS.currency]) : null;
-    const currency = String(currencyPick.value ?? currencyDeep ?? "USD");
+    const currencyDeepMeta =
+      currencyPick.value == null ? deepFindByKeysWithMeta(json, [...ACCOUNT_KEYS.currency]) : null;
+    const currency = String(currencyPick.value ?? currencyDeepMeta?.value ?? "USD");
 
     const cashPick = pickFirstWithKey(fromObj, [...ACCOUNT_KEYS.cash_available]);
-    const cashDeep =
-      cashPick.value == null ? deepFindByKeys(json, [...ACCOUNT_KEYS.cash_available]) : null;
-    const cash = toNum(cashPick.value ?? cashDeep);
+    const cashDeepMeta =
+      cashPick.value == null ? deepFindByKeysWithMeta(json, [...ACCOUNT_KEYS.cash_available]) : null;
+    const cash = toNum(cashPick.value ?? cashDeepMeta?.value);
 
     const equityPick = pickFirstWithKey(fromObj, [...ACCOUNT_KEYS.equity]);
-    const equityDeep =
-      equityPick.value == null ? deepFindByKeys(json, [...ACCOUNT_KEYS.equity]) : null;
-    const equity = toNum(equityPick.value ?? equityDeep);
+    const equityDeepMeta =
+      equityPick.value == null ? deepFindByKeysWithMeta(json, [...ACCOUNT_KEYS.equity]) : null;
+    const equity = toNum(equityPick.value ?? equityDeepMeta?.value);
 
     const bpPick = pickFirstWithKey(fromObj, [...ACCOUNT_KEYS.buying_power]);
-    const bpDeep =
-      bpPick.value == null ? deepFindByKeys(json, [...ACCOUNT_KEYS.buying_power]) : null;
-    const buyingPower = toNum(bpPick.value ?? bpDeep);
+    const bpDeepMeta =
+      bpPick.value == null ? deepFindByKeysWithMeta(json, [...ACCOUNT_KEYS.buying_power]) : null;
+    const buyingPower = toNum(bpPick.value ?? bpDeepMeta?.value);
 
     this.debug.account_parse = {
       selected_path: accountObj.path,
       shape: shapeSummary(json),
       decoding: decoded.diag,
+      sample_decoded_account_item_keys: firstObjectSampleKeys((json as any)?.data ?? json),
       candidate_keys: {
         as_of: [...ACCOUNT_KEYS.as_of],
         currency: [...ACCOUNT_KEYS.currency],
@@ -709,11 +751,23 @@ export class TigerReadOnlyConnector implements BrokerConnector {
         buying_power: [...ACCOUNT_KEYS.buying_power],
       },
       selected_sources: {
-        as_of: asOfPick.key ?? (asOfDeep != null ? "deep_search" : "default_now"),
-        currency: currencyPick.key ?? (currencyDeep != null ? "deep_search" : "default_USD"),
-        cash_available: cashPick.key ?? (cashDeep != null ? "deep_search" : "none"),
-        equity: equityPick.key ?? (equityDeep != null ? "deep_search" : "none"),
-        buying_power: bpPick.key ?? (bpDeep != null ? "deep_search" : "none"),
+        as_of:
+          asOfPick.key ??
+          (asOfDeepMeta ? `deep_search:${asOfDeepMeta.key}@${asOfDeepMeta.path}` : "default_now"),
+        currency:
+          currencyPick.key ??
+          (currencyDeepMeta
+            ? `deep_search:${currencyDeepMeta.key}@${currencyDeepMeta.path}`
+            : "default_USD"),
+        cash_available:
+          cashPick.key ??
+          (cashDeepMeta ? `deep_search:${cashDeepMeta.key}@${cashDeepMeta.path}` : "none"),
+        equity:
+          equityPick.key ??
+          (equityDeepMeta ? `deep_search:${equityDeepMeta.key}@${equityDeepMeta.path}` : "none"),
+        buying_power:
+          bpPick.key ??
+          (bpDeepMeta ? `deep_search:${bpDeepMeta.key}@${bpDeepMeta.path}` : "none"),
       },
       mapped: {
         currency,
@@ -811,6 +865,7 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       shape: shapeSummary(json),
       decoding: decoded.diag,
       candidate_count: Array.isArray(list) ? list.length : 0,
+      sample_decoded_position_item_keys: firstObjectSampleKeys(list[0] ?? null),
     };
     if (!Array.isArray(list)) return [];
     const asOf = nowIso();
@@ -830,6 +885,13 @@ export class TigerReadOnlyConnector implements BrokerConnector {
         const market_price = toNum(pricePick.value);
         let market_value = toNum(mktValPick.value);
         const unrealized_pnl = toNum(upnlPick.value);
+        const average_cost_derived =
+          average_cost == null &&
+          market_value != null &&
+          unrealized_pnl != null &&
+          quantity > 0
+            ? Number(((market_value - unrealized_pnl) / quantity).toFixed(6))
+            : null;
         const market_value_computed =
           market_value == null &&
           market_price != null &&
@@ -844,18 +906,21 @@ export class TigerReadOnlyConnector implements BrokerConnector {
         return {
           symbol,
           quantity,
-          average_cost,
+          average_cost: average_cost ?? average_cost_derived,
           market_price,
           market_value,
           unrealized_pnl,
           __mapping: {
             symbol_source: symbolPick.key,
             quantity_source: qtyPick.key,
-            average_cost_source: avgPick.key,
+            average_cost_source:
+              avgPick.key ??
+              (average_cost_derived != null ? "derived_(market_value-unrealized_pnl)/qty" : null),
             market_price_source: pricePick.key,
             market_value_source: mktValPick.key ?? (market_value_computed != null ? "computed_qty_x_price" : null),
             unrealized_pnl_source: upnlPick.key,
             market_value_computed: market_value_computed != null,
+            average_cost_derived: average_cost_derived != null,
           },
           as_of: asOf,
           source: "broker_api" as const,
