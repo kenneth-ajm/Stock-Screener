@@ -278,6 +278,12 @@ function getByPath(obj: unknown, path: string): unknown {
   const parts = path.split(".");
   let cur: unknown = obj;
   for (const part of parts) {
+    if (Array.isArray(cur)) {
+      const idx = Number(part);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= cur.length) return undefined;
+      cur = cur[idx];
+      continue;
+    }
     if (!isObject(cur)) return undefined;
     cur = (cur as any)[part];
   }
