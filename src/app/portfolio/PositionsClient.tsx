@@ -258,12 +258,14 @@ export default function PositionsClient({
   closedPositions,
   closedSummary,
   latestPriceBySymbol,
+  scanContextByKey,
   defaultFeePerOrder = null,
 }: {
   openPositions: PositionRow[];
   closedPositions: PositionRow[];
   closedSummary: ClosedTradeSummary;
   latestPriceBySymbol: Record<string, number | null>;
+  scanContextByKey?: Record<string, { date: string; signal: string; reason_summary: string | null }>;
   defaultFeePerOrder?: number | null;
 }) {
   const [tab, setTab] = useState<"OPEN" | "CLOSED">("OPEN");
@@ -851,6 +853,39 @@ export default function PositionsClient({
     return m;
   }, [openFiltered]);
 
+  function maybeTpPriceForPosition(p: PositionRow, tp: "tp1" | "tp2"): number | null {
+    const priceField = tp === "tp1" ? p.tp1_price : p.tp2_price;
+    const pctField = tp === "tp1" ? p.tp1_pct : p.tp2_pct;
+    if (typeof priceField === "number" && Number.isFinite(priceField) && priceField > 0) return priceField;
+    if (typeof p.entry_price === "number" && p.entry_price > 0 && typeof pctField === "number" && pctField > 0) {
+      return p.entry_price * (1 + pctField / 100);
+    }
+    return null;
+  }
+
+  function riskIntel(args: {
+    entry: number | null | undefined;
+    stop: number | null | undefined;
+    last: number | null | undefined;
+    tp1?: number | null;
+    tp2?: number | null;
+  }) {
+    const entry = typeof args.entry === "number" && Number.isFinite(args.entry) ? args.entry : null;
+    const stop = typeof args.stop === "number" && Number.isFinite(args.stop) ? args.stop : null;
+    const last = typeof args.last === "number" && Number.isFinite(args.last) ? args.last : null;
+    const tp1 = typeof args.tp1 === "number" && Number.isFinite(args.tp1) ? args.tp1 : null;
+    const tp2 = typeof args.tp2 === "number" && Number.isFinite(args.tp2) ? args.tp2 : null;
+    return {
+      toStopPct: last !== null && stop !== null && last > 0 ? (stop - last) / last : null,
+      toTp1Pct: last !== null && tp1 !== null && last > 0 ? (tp1 - last) / last : null,
+      toTp2Pct: last !== null && tp2 !== null && last > 0 ? (tp2 - last) / last : null,
+      rNow:
+        last !== null && entry !== null && stop !== null && entry > stop
+          ? (last - entry) / (entry - stop)
+          : null,
+    };
+  }
+
   return (
     <div className="space-y-4">
       {toast ? <Toast message={toast} /> : null}
@@ -963,6 +998,7 @@ export default function PositionsClient({
                     <th className="p-3">Fees</th>
                     <th className="p-3">Net $</th>
                     <th className="p-3">Unrealized %</th>
+                    <th className="p-3">Risk intel</th>
                     <th className="p-3">Time-stop exit</th>
                     <th className="p-3 text-right">Action</th>
                   </tr>
@@ -970,7 +1006,7 @@ export default function PositionsClient({
                 <tbody>
                   {groupedOpen.length === 0 ? (
                     <tr>
-                      <td className="p-3 text-slate-500" colSpan={12}>
+                      <td className="p-3 text-slate-500" colSpan={13}>
                         No open positions.
                       </td>
                     </tr>
@@ -996,6 +1032,53 @@ export default function PositionsClient({
                           : "text-slate-500";
 
                       const timeStop = buildTimeStopView(g.openedAt, g.maxHoldDays);
+                      const key = `${g.strategy_version}::${g.symbol}`;
+                      const idea = scanContextByKey?.[key] ?? null;
+                      const lots = g.lotIds.map((id) => openById.get(id)).filter(Boolean) as PositionRow[];
+                      const weightedStopNumer = lots.reduce((sum, p) => {
+                        const q = resolveQty(p);
+                        const st = p.stop_price;
+                        if (q <= 0 || typeof st !== "number" || !Number.isFinite(st) || st <= 0) return sum;
+                        return sum + st * q;
+                      }, 0);
+                      const weightedStopDenom = lots.reduce((sum, p) => {
+                        const q = resolveQty(p);
+                        const st = p.stop_price;
+                        if (q <= 0 || typeof st !== "number" || !Number.isFinite(st) || st <= 0) return sum;
+                        return sum + q;
+                      }, 0);
+                      const groupedStop = weightedStopDenom > 0 ? weightedStopNumer / weightedStopDenom : null;
+                      const weightedTp1Numer = lots.reduce((sum, p) => {
+                        const q = resolveQty(p);
+                        const v = maybeTpPriceForPosition(p, "tp1");
+                        if (q <= 0 || v === null) return sum;
+                        return sum + v * q;
+                      }, 0);
+                      const weightedTp1Denom = lots.reduce((sum, p) => {
+                        const q = resolveQty(p);
+                        const v = maybeTpPriceForPosition(p, "tp1");
+                        if (q <= 0 || v === null) return sum;
+                        return sum + q;
+                      }, 0);
+                      const weightedTp2Numer = lots.reduce((sum, p) => {
+                        const q = resolveQty(p);
+                        const v = maybeTpPriceForPosition(p, "tp2");
+                        if (q <= 0 || v === null) return sum;
+                        return sum + v * q;
+                      }, 0);
+                      const weightedTp2Denom = lots.reduce((sum, p) => {
+                        const q = resolveQty(p);
+                        const v = maybeTpPriceForPosition(p, "tp2");
+                        if (q <= 0 || v === null) return sum;
+                        return sum + q;
+                      }, 0);
+                      const intel = riskIntel({
+                        entry: g.avgEntry,
+                        stop: groupedStop,
+                        last: g.last,
+                        tp1: weightedTp1Denom > 0 ? weightedTp1Numer / weightedTp1Denom : null,
+                        tp2: weightedTp2Denom > 0 ? weightedTp2Numer / weightedTp2Denom : null,
+                      });
 
                       return (
                         <tr
@@ -1005,7 +1088,14 @@ export default function PositionsClient({
                             timeStop.isDue && "bg-amber-50/50"
                           )}
                         >
-                          <td className="p-3 font-semibold text-slate-900">{g.symbol}</td>
+                          <td className="p-3 font-semibold text-slate-900">
+                            <div>{g.symbol}</div>
+                            {idea ? (
+                              <div className="mt-1 max-w-[220px] truncate text-[11px] font-normal text-slate-500">
+                                Idea {idea.date}: {idea.signal} • {idea.reason_summary ?? "—"}
+                              </div>
+                            ) : null}
+                          </td>
                           <td className="p-3">
                             <span className={clsx("rounded-full border px-2 py-1 text-xs font-semibold", strategyChipClass(g.strategy_version))}>
                               {strategyLabel(g.strategy_version)}
@@ -1020,6 +1110,11 @@ export default function PositionsClient({
                           <td className={clsx("p-3 font-semibold", netClass)}>{formatMoneySigned(g.netUsd)}</td>
                           <td className={clsx("p-3 font-semibold", grossClass)}>
                             {typeof g.unrealPct === "number" ? formatPct(g.unrealPct) : "—"}
+                          </td>
+                          <td className="p-3 text-xs text-slate-700">
+                            <div>Stop: {typeof intel.toStopPct === "number" ? formatPct(intel.toStopPct) : "—"}</div>
+                            <div>TP1: {typeof intel.toTp1Pct === "number" ? formatPct(intel.toTp1Pct) : "—"}</div>
+                            <div>R now: {typeof intel.rNow === "number" && Number.isFinite(intel.rNow) ? formatNum(intel.rNow) : "—"}</div>
                           </td>
                           <td className="p-3 text-slate-800">
                             <div
@@ -1097,6 +1192,7 @@ export default function PositionsClient({
                     <th className="p-3">Fees</th>
                     <th className="p-3">Net $</th>
                     <th className="p-3">Unrealized %</th>
+                    <th className="p-3">Risk intel</th>
                     <th className="p-3">Time-stop exit</th>
                     <th className="p-3 text-right">Action</th>
                   </tr>
@@ -1104,7 +1200,7 @@ export default function PositionsClient({
                 <tbody>
                   {openFiltered.length === 0 ? (
                     <tr>
-                      <td className="p-3 text-slate-500" colSpan={12}>
+                      <td className="p-3 text-slate-500" colSpan={13}>
                         No open positions.
                       </td>
                     </tr>
@@ -1113,6 +1209,8 @@ export default function PositionsClient({
                       const qty = resolveQty(p);
                       const last = latestPriceBySymbol?.[String(p.symbol ?? "").trim().toUpperCase()] ?? null;
                       const strategyVer = p.strategy_version ?? "v2_core_momentum";
+                      const key = `${strategyVer}::${String(p.symbol ?? "").trim().toUpperCase()}`;
+                      const idea = scanContextByKey?.[key] ?? null;
                       const maxHold = p.max_hold_days ?? (strategyVer === "v1_trend_hold" ? 45 : 7);
                       const heldFrom = p.entry_date ?? p.created_at ?? null;
                       const timeStop = buildTimeStopView(heldFrom, maxHold);
@@ -1152,6 +1250,13 @@ export default function PositionsClient({
                               ? "text-rose-600"
                               : "text-slate-600"
                           : "text-slate-500";
+                      const intel = riskIntel({
+                        entry: p.entry_price,
+                        stop: p.stop_price ?? null,
+                        last,
+                        tp1: maybeTpPriceForPosition(p, "tp1"),
+                        tp2: maybeTpPriceForPosition(p, "tp2"),
+                      });
 
                       return (
                         <tr
@@ -1161,7 +1266,14 @@ export default function PositionsClient({
                             timeStop.isDue && "bg-amber-50/50"
                           )}
                         >
-                          <td className="p-3 font-semibold text-slate-900">{p.symbol}</td>
+                          <td className="p-3 font-semibold text-slate-900">
+                            <div>{p.symbol}</div>
+                            {idea ? (
+                              <div className="mt-1 max-w-[220px] truncate text-[11px] font-normal text-slate-500">
+                                Idea {idea.date}: {idea.signal} • {idea.reason_summary ?? "—"}
+                              </div>
+                            ) : null}
+                          </td>
                           <td className="p-3">
                             <span className={clsx("rounded-full border px-2 py-1 text-xs font-semibold", strategyChipClass(strategyVer))}>
                               {strategyLabel(strategyVer)}
@@ -1176,6 +1288,11 @@ export default function PositionsClient({
                           <td className={clsx("p-3 font-semibold", netClass)}>{formatMoneySigned(netUsd)}</td>
                           <td className={clsx("p-3 font-semibold", grossClass)}>
                             {typeof unrealPct === "number" ? formatPct(unrealPct) : "—"}
+                          </td>
+                          <td className="p-3 text-xs text-slate-700">
+                            <div>Stop: {typeof intel.toStopPct === "number" ? formatPct(intel.toStopPct) : "—"}</div>
+                            <div>TP1: {typeof intel.toTp1Pct === "number" ? formatPct(intel.toTp1Pct) : "—"}</div>
+                            <div>R now: {typeof intel.rNow === "number" && Number.isFinite(intel.rNow) ? formatNum(intel.rNow) : "—"}</div>
                           </td>
                           <td className="p-3 text-slate-800">
                             <div

@@ -40,6 +40,9 @@ export default async function PositionsPage() {
   const symbols = Array.from(
     new Set(open.map((p: any) => String(p.symbol ?? "").trim().toUpperCase()).filter(Boolean))
   );
+  const strategyVersions = Array.from(
+    new Set(open.map((p: any) => String(p.strategy_version ?? "v2_core_momentum")).filter(Boolean))
+  );
   const latestPriceBySymbol: Record<string, number | null> = {};
   if (symbols.length > 0) {
     const { data: bars } = await supabase
@@ -52,6 +55,28 @@ export default async function PositionsPage() {
       const sym = String((bar as any).symbol ?? "").trim().toUpperCase();
       if (!sym || latestPriceBySymbol[sym] != null) continue;
       latestPriceBySymbol[sym] = Number((bar as any).close ?? 0);
+    }
+  }
+
+  const scanContextByKey: Record<string, { date: string; signal: string; reason_summary: string | null }> = {};
+  if (symbols.length > 0 && strategyVersions.length > 0) {
+    const { data: contexts } = await supabase
+      .from("daily_scans")
+      .select("symbol,strategy_version,date,signal,reason_summary")
+      .in("symbol", symbols)
+      .in("strategy_version", strategyVersions)
+      .order("date", { ascending: false })
+      .limit(5000);
+    for (const row of contexts ?? []) {
+      const symbol = String((row as any)?.symbol ?? "").trim().toUpperCase();
+      const strategy = String((row as any)?.strategy_version ?? "").trim();
+      const key = `${strategy}::${symbol}`;
+      if (!symbol || !strategy || scanContextByKey[key]) continue;
+      scanContextByKey[key] = {
+        date: String((row as any)?.date ?? ""),
+        signal: String((row as any)?.signal ?? ""),
+        reason_summary: (row as any)?.reason_summary ? String((row as any).reason_summary) : null,
+      };
     }
   }
 
@@ -105,6 +130,7 @@ export default async function PositionsPage() {
           closedPositions={closed as any}
           closedSummary={closedSummary}
           latestPriceBySymbol={latestPriceBySymbol}
+          scanContextByKey={scanContextByKey}
           defaultFeePerOrder={
             typeof defaultPortfolio?.default_fee_per_order === "number"
               ? defaultPortfolio.default_fee_per_order

@@ -8,6 +8,7 @@ type TradeRow = {
   strategy: string | null;
   entry_price: number;
   exit_price: number;
+  stop_price?: number | null;
   shares: number;
   entry_date: string | null;
   exit_date: string | null;
@@ -17,6 +18,7 @@ type TradeRow = {
   holding_days: number | null;
   return_pct: number | null;
   net_pnl: number | null;
+  r_multiple?: number | null;
 };
 
 type SortKey = "return_pct" | "net_pnl" | "holding_days";
@@ -137,6 +139,7 @@ export default function ReviewClient({ initialTrades }: { initialTrades: TradeRo
                 <th className="p-3">Entry</th>
                 <th className="p-3">Exit</th>
                 <th className="p-3">Return %</th>
+                <th className="p-3">R</th>
                 <th className="p-3">P/L $</th>
                 <th className="p-3">Holding Days</th>
                 <th className="p-3">Exit Reason</th>
@@ -146,7 +149,7 @@ export default function ReviewClient({ initialTrades }: { initialTrades: TradeRo
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="p-3 text-slate-500">
+                  <td colSpan={10} className="p-3 text-slate-500">
                     No closed trades yet.
                   </td>
                 </tr>
@@ -163,6 +166,9 @@ export default function ReviewClient({ initialTrades }: { initialTrades: TradeRo
                     <td className="p-3">{fmtMoney(t.exit_price)}</td>
                     <td className={`p-3 font-medium ${Number(t.return_pct ?? 0) >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
                       {fmtPct(t.return_pct)}
+                    </td>
+                    <td className={`p-3 font-medium ${Number(t.r_multiple ?? 0) >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                      {typeof t.r_multiple === "number" && Number.isFinite(t.r_multiple) ? `${t.r_multiple > 0 ? "+" : ""}${t.r_multiple.toFixed(2)}R` : "—"}
                     </td>
                     <td className={`p-3 font-medium ${Number(t.net_pnl ?? 0) >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
                       {fmtMoney(t.net_pnl)}
@@ -228,6 +234,14 @@ export default function ReviewClient({ initialTrades }: { initialTrades: TradeRo
                   </div>
                 </div>
                 <div className="rounded-xl border border-[#eadfce] bg-[#fffaf2] p-3">
+                  <div className="text-xs text-slate-500">R multiple</div>
+                  <div className={`mt-1 font-semibold ${Number(selected.r_multiple ?? 0) >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                    {typeof selected.r_multiple === "number" && Number.isFinite(selected.r_multiple)
+                      ? `${selected.r_multiple > 0 ? "+" : ""}${selected.r_multiple.toFixed(2)}R`
+                      : "—"}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[#eadfce] bg-[#fffaf2] p-3">
                   <div className="text-xs text-slate-500">Fees</div>
                   <div className="mt-1 font-semibold">{fmtMoney(selected.fees)}</div>
                 </div>
@@ -265,4 +279,3 @@ export default function ReviewClient({ initialTrades }: { initialTrades: TradeRo
     </>
   );
 }
-
