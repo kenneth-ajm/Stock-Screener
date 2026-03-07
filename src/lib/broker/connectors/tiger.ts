@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHash, createPrivateKey, createSign, type KeyObject } from "node:crypto";
+import { createPrivateKey, createSign, type KeyObject } from "node:crypto";
 import { readBrokerEnv, tigerConfigured } from "@/lib/broker/env";
 import type {
   BrokerAccountSnapshot,
@@ -143,8 +143,12 @@ function normalizePrivateKey(raw: string): string {
   return trimmed.replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
 }
 
-function sha256Hex(v: string): string {
-  return createHash("sha256").update(v).digest("hex");
+function canonicalizeParamsForSign(input: Record<string, unknown>) {
+  const entries = Object.entries(input)
+    .filter(([key, value]) => key !== "sign" && value !== undefined && value !== null)
+    .map(([key, value]) => [key, String(value)] as const)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return entries.map(([k, v]) => `${k}=${v}`).join("&");
 }
 
 function wrapPem(body: string, kind: "RSA PRIVATE KEY" | "PRIVATE KEY") {
@@ -213,19 +217,14 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     const env = readBrokerEnv();
     const method = opts.method.toUpperCase();
     const url = this.endpointUrl(opts.pathOrUrl);
-    const bodyText = opts.body == null ? "" : JSON.stringify(opts.body);
     const timestamp = Date.now().toString();
     const nonce = `${timestamp}-${Math.random().toString(36).slice(2, 10)}`;
+    const inputBody = isObject(opts.body) ? ({ ...(opts.body as Record<string, unknown>) } as Record<string, unknown>) : {};
+    inputBody.timestamp = timestamp;
+    inputBody.nonce = nonce;
     const path = new URL(url).pathname;
-    const canonical = [
-      method,
-      path,
-      env.tiger.client_id,
-      env.tiger.account_id,
-      timestamp,
-      nonce,
-      sha256Hex(bodyText),
-    ].join("\n");
+    const canonicalParams = canonicalizeParamsForSign(inputBody);
+    const canonical = [method, path, canonicalParams].join("\n");
     const keyObj = parseTigerPrivateKey(env.tiger.private_key);
     const signer = createSign("RSA-SHA256");
     signer.update(canonical);
@@ -237,6 +236,9 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       const message = e instanceof Error ? e.message : String(e);
       throw new Error(`Tiger request signing failed: ${message}`);
     }
+    inputBody.sign = signature;
+
+    const bodyText = JSON.stringify(inputBody);
     const headers: Record<string, string> = {
       "content-type": "application/json",
       "x-tiger-client-id": env.tiger.client_id,
@@ -244,6 +246,7 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       "x-tiger-timestamp": timestamp,
       "x-tiger-nonce": nonce,
       "x-tiger-signature-algorithm": "RSA-SHA256",
+      // Keep header signature for compatibility; Tiger gateway also requires body `sign`.
       "x-tiger-signature": signature,
     };
     // Optional compatibility fallback: include bearer token if supplied.
@@ -257,6 +260,11 @@ export class TigerReadOnlyConnector implements BrokerConnector {
         headers,
         ...(bodyText ? { body: bodyText } : {}),
       } as RequestInit,
+      signedMeta: {
+        timestamp_present: Boolean(inputBody.timestamp),
+        sign_present: Boolean(inputBody.sign),
+        signed_param_count: canonicalParams ? canonicalParams.split("&").length : 0,
+      },
     };
   }
 
@@ -292,6 +300,9 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       tiger_id_present: Boolean(env.tiger.client_id),
       tiger_id_source: "TIGER_CLIENT_ID",
       account_source: "TIGER_ACCOUNT_ID",
+      timestamp_present: Boolean((request as any)?.signedMeta?.timestamp_present),
+      sign_present: Boolean((request as any)?.signedMeta?.sign_present),
+      signed_param_count: Number((request as any)?.signedMeta?.signed_param_count ?? 0),
       base_url: env.tiger.base_url,
     };
     const res = await fetchWithRetry(request.url, request.init);
@@ -410,6 +421,9 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       tiger_id_present: Boolean(env.tiger.client_id),
       tiger_id_source: "TIGER_CLIENT_ID",
       account_source: "TIGER_ACCOUNT_ID",
+      timestamp_present: Boolean((request as any)?.signedMeta?.timestamp_present),
+      sign_present: Boolean((request as any)?.signedMeta?.sign_present),
+      signed_param_count: Number((request as any)?.signedMeta?.signed_param_count ?? 0),
       base_url: env.tiger.base_url,
     };
     const res = await fetchWithRetry(request.url, request.init);
