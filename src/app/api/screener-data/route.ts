@@ -24,6 +24,10 @@ type ScanRow = {
   confidence: number;
   rank_score?: number | null;
   rank?: number | null;
+  quality_score?: number | null;
+  risk_grade?: "A" | "B" | "C" | "D" | null;
+  quality_signal?: "BUY" | "WATCH" | "AVOID" | null;
+  quality_summary?: string | null;
   entry: number;
   stop: number;
   tp1: number;
@@ -131,7 +135,7 @@ const loadScreenerDataCached = unstable_cache(
         if (!d) return [] as any[];
         const { data } = await (supabase as any)
           .from("daily_scans")
-          .select("symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json")
+          .select("symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,quality_score,risk_grade,quality_signal,quality_summary,reason_summary,reason_json")
           .eq("universe_slug", mappedUniverse)
           .eq("strategy_version", strategyVersion)
           .eq("date", d)
@@ -186,7 +190,7 @@ const loadScreenerDataCached = unstable_cache(
         ? await (supabase as any)
             .from("daily_scans")
             .select(
-              "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary"
+              "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,quality_score,risk_grade,quality_signal,quality_summary,reason_summary"
             )
             .eq("universe_slug", mappedUniverse)
             .eq("strategy_version", strategyVersion)
@@ -271,6 +275,10 @@ const loadScreenerDataCached = unstable_cache(
         tp2: Number(row.tp2 ?? 0),
         rank: row.rank ?? null,
         rank_score: row.rank_score ?? null,
+        quality_score: row.quality_score ?? null,
+        risk_grade: row.risk_grade ?? null,
+        quality_signal: row.quality_signal ?? null,
+        quality_summary: row.quality_summary ?? null,
         reason_summary: row.reason_summary ?? null,
         reason_json: row.reason_json ?? null,
         industry_group: row.industry_group ?? null,

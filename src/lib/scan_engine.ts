@@ -12,6 +12,7 @@ import {
 } from "@/lib/strategy/trendHold";
 import { getLCTD } from "@/lib/scan_date";
 import { finalizeSignals } from "@/lib/finalize_signals";
+import { scoreSignalQuality } from "@/lib/signal_quality";
 
 export type ScanEngineClient = SupabaseClient<any, any, any> | any;
 
@@ -44,6 +45,11 @@ type ScanRowPayload = {
   tp2: number;
   reason_summary: string;
   reason_json: RuleEvaluation["reason_json"];
+  quality_score: number;
+  quality_components: Record<string, number>;
+  risk_grade: "A" | "B" | "C" | "D";
+  quality_summary: string;
+  quality_signal: RuleEvaluation["signal"];
   updated_at: string;
 };
 
@@ -292,6 +298,11 @@ export async function upsertRawDailyScans(opts: {
     tp2: number;
     reason_summary: string;
     reason_json: RuleEvaluation["reason_json"];
+    quality_score: number;
+    quality_components: Record<string, number>;
+    risk_grade: "A" | "B" | "C" | "D";
+    quality_summary: string;
+    quality_signal: RuleEvaluation["signal"];
     updated_at: string;
   }> = [];
   const unlockedRows: ScanRowPayload[] = [];
@@ -313,6 +324,11 @@ export async function upsertRawDailyScans(opts: {
         tp2: row.tp2,
         reason_summary: row.reason_summary,
         reason_json: row.reason_json,
+        quality_score: row.quality_score,
+        quality_components: row.quality_components,
+        risk_grade: row.risk_grade,
+        quality_summary: row.quality_summary,
+        quality_signal: row.quality_signal,
         updated_at: new Date().toISOString(),
       });
     } else {
@@ -471,6 +487,16 @@ export async function runScanPipeline(opts: {
 
     const reasonJson = scoredRow.reason_json && typeof scoredRow.reason_json === "object" ? (scoredRow.reason_json as any) : {};
     const rankScore = computeRankScore(strategy_version, scoredRow.confidence, reasonJson);
+    const quality = scoreSignalQuality({
+      strategy_version,
+      signal: scoredRow.signal,
+      confidence: scoredRow.confidence,
+      rank_score: rankScore,
+      regime_state: regime.regime_state,
+      reason_json: reasonJson,
+      entry: scoredRow.entry,
+      stop: scoredRow.stop,
+    });
     rows.push({
       date: scanDate,
       universe_slug,
@@ -488,7 +514,19 @@ export async function runScanPipeline(opts: {
       reason_json: {
         ...reasonJson,
         rank_score: rankScore,
+        signal_quality: {
+          quality_score: quality.quality_score,
+          risk_grade: quality.risk_grade,
+          quality_signal: quality.quality_signal,
+          components: quality.components,
+          summary: quality.quality_summary,
+        },
       } as RuleEvaluation["reason_json"],
+      quality_score: quality.quality_score,
+      quality_components: quality.components,
+      risk_grade: quality.risk_grade,
+      quality_summary: quality.quality_summary,
+      quality_signal: quality.quality_signal,
       updated_at: new Date().toISOString(),
     });
   }

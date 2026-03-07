@@ -15,6 +15,10 @@ type IdeaRow = {
   confidence: number;
   rank?: number | null;
   rank_score?: number | null;
+  quality_score?: number | null;
+  risk_grade?: "A" | "B" | "C" | "D" | null;
+  quality_signal?: "BUY" | "WATCH" | "AVOID" | null;
+  quality_summary?: string | null;
   entry: number;
   stop: number;
   tp1: number;
@@ -506,6 +510,7 @@ export default function IdeasWorkspaceClient({
                 <th className="p-3">Symbol</th>
                 <th className="p-3">Signal</th>
                 <th className="p-3">Rank</th>
+                <th className="p-3">Quality</th>
                 <th className="p-3">Entry</th>
                 <th className="p-3">Live</th>
                 <th className="p-3">Delta</th>
@@ -559,6 +564,12 @@ export default function IdeasWorkspaceClient({
                       </span>
                     </td>
                     <td className="p-3">{row.rank ?? "—"}</td>
+                    <td className="p-3">
+                      <div className="font-semibold">{Number(row.quality_score ?? row.confidence ?? 0).toFixed(0)}</div>
+                      <div className="text-[10px] text-slate-500">
+                        {row.risk_grade ? `Risk ${row.risk_grade}` : "Risk —"}
+                      </div>
+                    </td>
                     <td className="p-3">{entry.toFixed(2)}</td>
                     <td className="p-3">
                       {live !== null ? live.toFixed(2) : "—"}

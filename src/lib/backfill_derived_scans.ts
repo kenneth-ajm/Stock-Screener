@@ -5,6 +5,7 @@ import {
   computeSectorMomentumCandidates,
   SECTOR_MOMENTUM_STRATEGY_VERSION,
 } from "@/lib/sector_momentum";
+import { scoreSignalQuality } from "@/lib/signal_quality";
 
 const DEFAULT_STRATEGIES = ["v2_core_momentum", "v1_trend_hold", SECTOR_MOMENTUM_STRATEGY_VERSION];
 const DEFAULT_MAX_DAYS = 5;
@@ -213,23 +214,49 @@ export async function runDerivedScanBackfill(opts: {
             item.breadth_preview.push({ date, ...summarizeSectorBreadth(candidates as any[]) });
           }
           if (execute) {
-            const rows = candidates.map((c) => ({
-              date,
-              universe_slug: GROWTH_UNIVERSE_SLUG,
-              strategy_version,
-              symbol: c.symbol,
-              signal: c.signal,
-              confidence: Math.round(Number(c.confidence) || 0),
-              rank_score: Math.round(Number(c.rank_score) || 0),
-              rank: c.rank,
-              entry: c.entry,
-              stop: c.stop,
-              tp1: c.tp1,
-              tp2: c.tp2,
-              reason_summary: c.reason_summary,
-              reason_json: c.reason_json,
-              updated_at: new Date().toISOString(),
-            }));
+            const rows = candidates.map((c) => {
+              const quality = scoreSignalQuality({
+                strategy_version,
+                signal: c.signal,
+                confidence: c.confidence,
+                rank_score: c.rank_score,
+                regime_state: null,
+                reason_json: c.reason_json,
+                entry: c.entry,
+                stop: c.stop,
+              });
+              return {
+                date,
+                universe_slug: GROWTH_UNIVERSE_SLUG,
+                strategy_version,
+                symbol: c.symbol,
+                signal: c.signal,
+                confidence: Math.round(Number(c.confidence) || 0),
+                rank_score: Math.round(Number(c.rank_score) || 0),
+                rank: c.rank,
+                entry: c.entry,
+                stop: c.stop,
+                tp1: c.tp1,
+                tp2: c.tp2,
+                reason_summary: c.reason_summary,
+                reason_json: {
+                  ...(c.reason_json ?? {}),
+                  signal_quality: {
+                    quality_score: quality.quality_score,
+                    risk_grade: quality.risk_grade,
+                    quality_signal: quality.quality_signal,
+                    components: quality.components,
+                    summary: quality.quality_summary,
+                  },
+                },
+                quality_score: quality.quality_score,
+                quality_components: quality.components,
+                risk_grade: quality.risk_grade,
+                quality_summary: quality.quality_summary,
+                quality_signal: quality.quality_signal,
+                updated_at: new Date().toISOString(),
+              };
+            });
             if (rows.length > 0) {
               const { error: upsertErr } = await supa
                 .from("daily_scans")

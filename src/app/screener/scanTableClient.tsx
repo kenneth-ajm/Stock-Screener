@@ -9,6 +9,10 @@ type Row = {
   symbol: string;
   signal: "BUY" | "WATCH" | "AVOID";
   confidence: number;
+  quality_score?: number | null;
+  risk_grade?: "A" | "B" | "C" | "D" | null;
+  quality_signal?: "BUY" | "WATCH" | "AVOID" | null;
+  quality_summary?: string | null;
   rank_score?: number | null;
   rank?: number | null;
   entry: number;
@@ -1444,6 +1448,7 @@ export default function ScanTableClient({
                 <th className="p-3">SYMBOL</th>
                 <th className="p-3">SIGNAL</th>
                 <th className="p-3">CONF</th>
+                <th className="p-3">QUALITY</th>
                 <th className="p-3">ENTRY</th>
                 <th className="p-3">LIVE</th>
                 <th className="p-3">STOP</th>
@@ -1455,7 +1460,7 @@ export default function ScanTableClient({
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td className="p-3 text-slate-500" colSpan={8}>
+                  <td className="p-3 text-slate-500" colSpan={9}>
                     No rows for this filter.
                   </td>
                 </tr>
@@ -1525,6 +1530,10 @@ export default function ScanTableClient({
                         ) : null}
                       </td>
                       <td className="p-3 text-slate-800 font-semibold">{r.confidence}</td>
+                      <td className="p-3 text-slate-800">
+                        <div className="font-semibold">{fmtInt(Number(r.quality_score ?? r.confidence ?? 0))}</div>
+                        <div className="text-[10px] text-slate-500">{r.risk_grade ? `Risk ${r.risk_grade}` : "Risk —"}</div>
+                      </td>
                       <td className="p-3 text-slate-800">{fmt2(Number(r.entry))}</td>
                       <td className="p-3 text-slate-800">
                         {typeof live === "number" ? fmt2(live) : "—"}

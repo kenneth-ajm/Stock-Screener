@@ -10,6 +10,10 @@ type Row = {
   confidence: number;
   rank?: number | null;
   rank_score?: number | null;
+  quality_score?: number | null;
+  risk_grade?: "A" | "B" | "C" | "D" | null;
+  quality_signal?: "BUY" | "WATCH" | "AVOID" | null;
+  quality_summary?: string | null;
   entry: number;
   stop: number;
   tp1: number;

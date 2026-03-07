@@ -8,6 +8,7 @@ import {
 } from "@/lib/sector_momentum";
 import { GROWTH_UNIVERSE_SLUG } from "@/lib/strategy_universe";
 import { OBS_KEYS, writeObservabilityStatus } from "@/lib/observability";
+import { scoreSignalQuality } from "@/lib/signal_quality";
 
 const TARGET_GROWTH_COUNT = 1500;
 const MIN_PRICE = 5;
@@ -185,23 +186,49 @@ export async function runPopulate() {
     );
   }
 
-  const rows = (sector.candidates ?? []).map((c) => ({
-    date: scanDate,
-    universe_slug: GROWTH_UNIVERSE_SLUG,
-    strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
-    symbol: c.symbol,
-    signal: c.signal,
-    confidence: Math.round(Number(c.confidence) || 0),
-    rank_score: Math.round(Number(c.rank_score) || 0),
-    rank: c.rank,
-    entry: c.entry,
-    stop: c.stop,
-    tp1: c.tp1,
-    tp2: c.tp2,
-    reason_summary: c.reason_summary,
-    reason_json: c.reason_json,
-    updated_at: new Date().toISOString(),
-  }));
+  const rows = (sector.candidates ?? []).map((c) => {
+    const quality = scoreSignalQuality({
+      strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
+      signal: c.signal,
+      confidence: c.confidence,
+      rank_score: c.rank_score,
+      regime_state: null,
+      reason_json: c.reason_json,
+      entry: c.entry,
+      stop: c.stop,
+    });
+    return {
+      date: scanDate,
+      universe_slug: GROWTH_UNIVERSE_SLUG,
+      strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
+      symbol: c.symbol,
+      signal: c.signal,
+      confidence: Math.round(Number(c.confidence) || 0),
+      rank_score: Math.round(Number(c.rank_score) || 0),
+      rank: c.rank,
+      entry: c.entry,
+      stop: c.stop,
+      tp1: c.tp1,
+      tp2: c.tp2,
+      reason_summary: c.reason_summary,
+      reason_json: {
+        ...(c.reason_json ?? {}),
+        signal_quality: {
+          quality_score: quality.quality_score,
+          risk_grade: quality.risk_grade,
+          quality_signal: quality.quality_signal,
+          components: quality.components,
+          summary: quality.quality_summary,
+        },
+      },
+      quality_score: quality.quality_score,
+      quality_components: quality.components,
+      risk_grade: quality.risk_grade,
+      quality_summary: quality.quality_summary,
+      quality_signal: quality.quality_signal,
+      updated_at: new Date().toISOString(),
+    };
+  });
 
   if (rows.length > 0) {
     const { error: upsertErr } = await supabase
