@@ -32,6 +32,9 @@ export default async function SystemPage() {
           <Link href="/diagnostics" className="rounded-xl border border-[#e8dcc8] bg-[#fffaf2] px-3 py-2">
             Diagnostics
           </Link>
+          <Link href="/api/broker/read-only-status" className="rounded-xl border border-[#e8dcc8] bg-[#fffaf2] px-3 py-2">
+            Broker Read-Only Status
+          </Link>
           <Link href="/screener" className="rounded-xl border border-[#e8dcc8] bg-[#fffaf2] px-3 py-2">
             Legacy Screener
           </Link>
