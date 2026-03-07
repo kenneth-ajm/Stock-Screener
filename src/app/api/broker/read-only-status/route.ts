@@ -32,15 +32,23 @@ export async function GET() {
 
     const snapshot = await getBrokerReadOnlySnapshot();
     return NextResponse.json({
-      ok: true,
+      ok: snapshot.ok,
       user_id: user.id,
+      provider: snapshot.provider,
+      mode: snapshot.mode,
+      configured: snapshot.configured,
+      auth_ok: snapshot.auth_ok,
+      connection_ok: snapshot.connection_ok,
+      positions_count: snapshot.positions_count,
+      warnings: snapshot.warnings,
+      errors: snapshot.errors,
       broker: snapshot,
       safeguards: {
         execution_enabled: false,
         read_only_only: true,
         scanner_influence: false,
         strategy_influence: false,
-        note: "Phase 1 broker groundwork: read-only scaffold only.",
+        note: "Phase 1 broker integration is read-only. Execution remains disabled.",
       },
       rollout: {
         phase_1: "account/positions sync (read-only)",

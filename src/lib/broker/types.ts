@@ -24,11 +24,15 @@ export type BrokerPositionSnapshot = {
 export type BrokerReadOnlyResult = {
   ok: boolean;
   provider: BrokerProvider;
-  mode: "read_only_scaffold";
+  mode: "read_only_scaffold" | "read_only_live";
   configured: boolean;
+  auth_ok: boolean;
+  connection_ok: boolean;
   account: BrokerAccountSnapshot | null;
   positions: BrokerPositionSnapshot[];
+  positions_count: number;
   warnings: string[];
+  errors: string[];
 };
 
 /**
@@ -39,7 +43,7 @@ export type BrokerReadOnlyResult = {
  */
 export interface BrokerConnector {
   provider: BrokerProvider;
-  mode: "read_only_scaffold";
+  mode: "read_only_scaffold" | "read_only_live";
   isConfigured(): boolean;
   fetchAccountReadOnly(): Promise<BrokerAccountSnapshot | null>;
   fetchPositionsReadOnly(): Promise<BrokerPositionSnapshot[]>;
