@@ -188,6 +188,11 @@ const ACCOUNT_KEYS = {
     "totalCashBalance",
     "cashBalanceForTrade",
     "cashForTrade",
+    "cashBalance",
+    "cashAmount",
+    "availableAmount",
+    "withdrawableAmount",
+    "availableCashForTrade",
   ],
   equity: [
     "equity",
@@ -200,6 +205,11 @@ const ACCOUNT_KEYS = {
     "netLiquidationValue",
     "equityWithLoanValue",
     "totalAsset",
+    "totalAssets",
+    "netWorth",
+    "marketValue",
+    "assetValue",
+    "accountNetValue",
   ],
   buying_power: [
     "buying_power",
@@ -338,6 +348,25 @@ function firstObjectSampleKeys(obj: unknown): string[] {
     if (isObject(value)) return Object.keys(value).slice(0, 40);
   }
   return [];
+}
+
+function pickAccountSourceObject(json: unknown): { path: string | null; value: Record<string, unknown> | null } {
+  const byPath = firstObjectByPaths(json, [
+    "data.items.0",
+    "data.assets",
+    "data.account",
+    "data.summary",
+    "result.items.0",
+    "result.account",
+    "result.summary",
+    "results.items.0",
+    "results.account",
+    "account",
+    "data",
+    "result",
+    "results",
+  ]);
+  return byPath;
 }
 
 function buildTigerBizContent(opts: { accountId: string }) {
@@ -699,19 +728,7 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     const decoded = decodeGatewayEnvelope(accountCall.json);
     const json = decoded.payload;
     const rootObj = isObject(json) ? json : null;
-    const accountObj = firstObjectByPaths(json, [
-      "data.account",
-      "data.summary",
-      "data.assets",
-      "result.account",
-      "result.summary",
-      "results.account",
-      "account",
-      "data",
-      "result",
-      "results",
-    ]);
-
+    const accountObj = pickAccountSourceObject(json);
     const fromObj = accountObj.value ?? (rootObj as any);
     const asOfPick = pickFirstWithKey(fromObj, [...ACCOUNT_KEYS.as_of]);
     const asOfDeepMeta =
@@ -742,7 +759,13 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       selected_path: accountObj.path,
       shape: shapeSummary(json),
       decoding: decoded.diag,
-      sample_decoded_account_item_keys: firstObjectSampleKeys((json as any)?.data ?? json),
+      sample_decoded_asset_item_keys: firstObjectSampleKeys(
+        getByPath(json, "data.items.0") ??
+          getByPath(json, "result.items.0") ??
+          getByPath(json, "results.items.0") ??
+          (json as any)?.data ??
+          json
+      ),
       candidate_keys: {
         as_of: [...ACCOUNT_KEYS.as_of],
         currency: [...ACCOUNT_KEYS.currency],
