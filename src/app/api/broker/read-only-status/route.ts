@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { getBrokerReadOnlySnapshot } from "@/lib/broker/read_only_sync";
+import { getOrRepairDefaultPortfolio } from "@/lib/get_or_repair_default_portfolio";
+import {
+  persistBrokerSnapshot,
+  reconcileBrokerWithPortfolio,
+} from "@/lib/broker/persistence";
 
 export async function GET() {
   try {
@@ -31,6 +36,48 @@ export async function GET() {
     }
 
     const snapshot = await getBrokerReadOnlySnapshot();
+    const defaultPortfolio = await getOrRepairDefaultPortfolio({
+      supabase: supabase as any,
+      user_id: user.id,
+    });
+    const reconciliation = await reconcileBrokerWithPortfolio({
+      supabase: supabase as any,
+      portfolio_id: String(defaultPortfolio?.id ?? ""),
+      broker_positions: snapshot.positions,
+    });
+
+    let persistence: {
+      ok: boolean;
+      key: string | null;
+      updated_at: string | null;
+      error: string | null;
+    } = {
+      ok: false,
+      key: null,
+      updated_at: null,
+      error: null,
+    };
+    try {
+      const saved = await persistBrokerSnapshot({
+        user_id: user.id,
+        snapshot,
+        reconciliation,
+      });
+      persistence = {
+        ok: true,
+        key: saved.key,
+        updated_at: saved.updated_at,
+        error: null,
+      };
+    } catch (e: unknown) {
+      persistence = {
+        ok: false,
+        key: null,
+        updated_at: null,
+        error: e instanceof Error ? e.message : "Failed to persist broker snapshot",
+      };
+    }
+
     return NextResponse.json({
       ok: snapshot.ok,
       user_id: user.id,
@@ -43,6 +90,11 @@ export async function GET() {
       warnings: snapshot.warnings,
       errors: snapshot.errors,
       broker: snapshot,
+      portfolio: {
+        default_portfolio_id: defaultPortfolio?.id ?? null,
+      },
+      reconciliation,
+      persistence,
       safeguards: {
         execution_enabled: false,
         read_only_only: true,

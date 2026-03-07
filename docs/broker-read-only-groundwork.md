@@ -1,6 +1,6 @@
 # Broker Integration Phase 1 (Read-Only Groundwork)
 
-This repository now includes a strict read-only broker connector scaffold.
+This repository now includes a strict read-only broker connector foundation with live account/positions sync.
 
 ## Safety Boundaries
 
@@ -14,7 +14,11 @@ This repository now includes a strict read-only broker connector scaffold.
 - `BROKER_PROVIDER` (currently `tiger`)
 - `TIGER_CLIENT_ID`
 - `TIGER_ACCOUNT_ID`
-- `TIGER_PRIVATE_KEY`
+- `TIGER_PRIVATE_KEY` (optional for future signed flows)
+- `TIGER_ACCESS_TOKEN`
+- `TIGER_BASE_URL` (optional, defaults to Tiger OpenAPI base URL)
+- `TIGER_ACCOUNT_ENDPOINT` (optional, defaults to `/gateway`)
+- `TIGER_POSITIONS_ENDPOINT` (optional, defaults to `/gateway`)
 
 Do not expose these via `NEXT_PUBLIC_*`.
 
@@ -22,7 +26,9 @@ Do not expose these via `NEXT_PUBLIC_*`.
 
 - `GET /api/broker/read-only-status`
   - Auth required
-  - Returns connector mode, configured flag, read-only account/positions snapshot shape, and safety metadata.
+  - Returns connector mode, configured/auth/connection flags, read-only account/positions snapshot, reconciliation summary against internal open positions, persistence status, and safety metadata.
+  - Persists a per-user snapshot to `system_status` with key format:
+    - `broker_snapshot_last_run:<user_id>`
 
 ## Rollout Plan
 
