@@ -45,6 +45,11 @@ type Payload = {
   ok: boolean;
   meta?: {
     lctd: string | null;
+    date_used?: string | null;
+    data_source?: string | null;
+    rows_raw_count?: number | null;
+    rows_after_validation_count?: number | null;
+    rows_display_count?: number | null;
     regime_state: string | null;
     breadth_state?: "STRONG" | "MIXED" | "WEAK" | null;
     breadth_label?: string | null;
@@ -95,9 +100,17 @@ function fmtSignedPct(v: number | null) {
 export default function IdeasWorkspaceClient({
   initialStrategy = "v2_core_momentum",
   initialSymbol = null,
+  strategyParamRaw = null,
+  showDiagnostics = false,
+  buildMarker = "local",
+  pageMarker = "ideas-page-marker-missing",
 }: {
   initialStrategy?: StrategyVersion;
   initialSymbol?: string | null;
+  strategyParamRaw?: string | null;
+  showDiagnostics?: boolean;
+  buildMarker?: string;
+  pageMarker?: string;
 }) {
   const [strategy, setStrategy] = useState<StrategyVersion>(initialStrategy);
   const [data, setData] = useState<Payload | null>(null);
@@ -110,6 +123,8 @@ export default function IdeasWorkspaceClient({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [lastApiUrl, setLastApiUrl] = useState<string>("");
+  const [lastLoadOk, setLastLoadOk] = useState<boolean | null>(null);
   const [quoteBySymbol, setQuoteBySymbol] = useState<QuoteMap>({});
   const [earningsBySymbol, setEarningsBySymbol] = useState<EarningsRiskMap>({});
   const [livePrice, setLivePrice] = useState<number | null>(null);
@@ -135,12 +150,28 @@ export default function IdeasWorkspaceClient({
     let mounted = true;
     setLoading(true);
     const universeSlug = defaultUniverseForStrategy(strategy);
-    fetch(`/api/screener-data?strategy_version=${strategy}&universe_slug=${encodeURIComponent(universeSlug)}`, {
+    const apiUrl = `/api/screener-data?strategy_version=${strategy}&universe_slug=${encodeURIComponent(universeSlug)}`;
+    setLastApiUrl(apiUrl);
+    setLastLoadOk(null);
+    fetch(apiUrl, {
       cache: "no-store",
     })
-      .then((r) => r.json())
-      .then((json) => mounted && setData(json))
-      .catch((e) => mounted && setData({ ok: false, error: e instanceof Error ? e.message : "Load failed" }))
+      .then(async (r) => {
+        const json = await r.json().catch(() => null);
+        if (!mounted) return;
+        if (!r.ok || !json) {
+          setLastLoadOk(false);
+          setData({ ok: false, error: (json as any)?.error ?? `HTTP ${r.status}` });
+          return;
+        }
+        setLastLoadOk(Boolean(json?.ok));
+        setData(json);
+      })
+      .catch((e) => {
+        if (!mounted) return;
+        setLastLoadOk(false);
+        setData({ ok: false, error: e instanceof Error ? e.message : "Load failed" });
+      })
       .finally(() => mounted && setLoading(false));
     return () => {
       mounted = false;
@@ -239,6 +270,21 @@ export default function IdeasWorkspaceClient({
   }, [initialSymbol, data?.rows]);
 
   const rows = useMemo(() => (data?.rows ?? []).slice(0, 10), [data]);
+  const emptyStateMessage = useMemo(() => {
+    if (loading) return "Loading ideas…";
+    if (!data?.ok) return `Failed to load data: ${data?.error ?? "Unknown error"}`;
+    const raw = Number(data?.meta?.rows_raw_count ?? 0);
+    const validated = Number(data?.meta?.rows_after_validation_count ?? 0);
+    const display = Number(data?.meta?.rows_display_count ?? rows.length ?? 0);
+    if (display > 0) return null;
+    if (raw === 0) {
+      return `No rows found for ${strategy} on ${data?.meta?.date_used ?? data?.meta?.lctd ?? "latest date"}.`;
+    }
+    if (validated === 0) {
+      return "Rows were filtered out by validation checks (for example entry/price mismatch).";
+    }
+    return "No BUY/WATCH candidates after current display caps for this strategy/date.";
+  }, [loading, data, rows.length, strategy]);
   const fillNum = Number(fill);
   const stopNum = Number(selected?.stop ?? 0);
   const riskPerShare = fillNum > 0 && stopNum > 0 ? fillNum - stopNum : 0;
@@ -510,6 +556,25 @@ export default function IdeasWorkspaceClient({
         </div>
       </div>
 
+      {showDiagnostics ? (
+        <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] px-3 py-2 text-[11px] text-slate-600">
+          build={buildMarker}
+          {" • "}page_marker={pageMarker}
+          {" • "}strategy_param={strategyParamRaw ?? "—"}
+          {" • "}resolved_strategy={strategy}
+          {" • "}strategy_version={strategy}
+          {" • "}rows={rows.length}
+          {" • "}date_used={data?.meta?.date_used ?? "—"}
+          {" • "}lctd={data?.meta?.lctd ?? "—"}
+          {" • "}source={data?.meta?.data_source ?? "—"}
+          {" • "}raw={Number(data?.meta?.rows_raw_count ?? 0)}
+          {" • "}validated={Number(data?.meta?.rows_after_validation_count ?? 0)}
+          {" • "}display={Number(data?.meta?.rows_display_count ?? 0)}
+          {" • "}ok={loading ? "loading" : lastLoadOk === null ? "unknown" : lastLoadOk ? "true" : "false"}
+          {" • "}api={lastApiUrl || "—"}
+        </div>
+      ) : null}
+
       <div className="overflow-hidden rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] shadow-[0_8px_24px_rgba(88,63,36,0.04)]">
         {loading ? <div className="p-4 text-sm text-slate-600">Loading ideas…</div> : null}
         {!loading && !data?.ok ? <div className="p-4 text-sm text-rose-600">Failed: {data?.error ?? "Unknown error"}</div> : null}
@@ -531,6 +596,13 @@ export default function IdeasWorkspaceClient({
               </tr>
             </thead>
             <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td className="p-4 text-sm text-slate-600" colSpan={11}>
+                    {emptyStateMessage ?? "No rows available."}
+                  </td>
+                </tr>
+              ) : null}
               {rows.map((row) => {
                 const q = quoteBySymbol[row.symbol];
                 const sym = String(row.symbol ?? "").trim().toUpperCase();

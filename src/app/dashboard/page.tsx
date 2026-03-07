@@ -10,6 +10,8 @@ import { applyEarningsRiskToAction, lookupEarningsRiskForSymbols } from "@/lib/e
 import { applyBreadthToAction, computeMarketBreadth } from "@/lib/market_breadth";
 import TickerCheckClient from "./TickerCheckClient";
 import { GROWTH_UNIVERSE_SLUG } from "@/lib/strategy_universe";
+import { getBuildMarker, getEnvironmentLabel } from "@/lib/build_marker";
+const DASHBOARD_PAGE_MARKER = "dashboard-canonical-20260308-a";
 
 function money(v: number | null | undefined) {
   if (typeof v !== "number" || !Number.isFinite(v)) return "—";
@@ -59,6 +61,24 @@ type QuoteMap = Record<
 >;
 const PRICE_MISMATCH_THRESHOLD_PCT = 0.6;
 
+type BrokerSnapshotValue = {
+  connection_ok?: boolean;
+  configured?: boolean;
+  account?: {
+    cash_available?: number | null;
+    equity?: number | null;
+    buying_power?: number | null;
+    currency?: string | null;
+  } | null;
+  positions_count?: number;
+  positions?: Array<{
+    symbol?: string | null;
+    quantity?: number | null;
+    avg_cost?: number | null;
+    market_value?: number | null;
+  }>;
+};
+
 export const dynamic = "force-dynamic";
 
 function resolveQty(row: any) {
@@ -67,7 +87,16 @@ function resolveQty(row: any) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ diag?: string }>;
+}) {
+  const params = (await searchParams) ?? {};
+  const diagRaw = String(params.diag ?? "").trim().toLowerCase();
+  const showDiagnostics = diagRaw === "1" || diagRaw === "true";
+  const buildMarker = getBuildMarker();
+  const envLabel = getEnvironmentLabel();
   const { supabase, user, portfolios, defaultPortfolio } = await getWorkspaceContext("/dashboard");
   const portfolioId = String(defaultPortfolio?.id ?? "");
   const snapshot = portfolioId ? await getPortfolioSnapshot(supabase as any, portfolioId, true) : null;
@@ -207,6 +236,27 @@ export default async function DashboardPage() {
     strategy_version: "v2_core_momentum",
     regime_state: regime?.state ?? null,
   });
+  const brokerStatusKey = `broker_snapshot_last_run:${user.id}`;
+  const { data: brokerStatusRow } = await supabase
+    .from("system_status")
+    .select("updated_at,value")
+    .eq("key", brokerStatusKey)
+    .maybeSingle();
+  const brokerSnapshot = (brokerStatusRow?.value ?? null) as BrokerSnapshotValue | null;
+  const brokerConnected = Boolean(brokerSnapshot?.connection_ok);
+  const brokerAccount = brokerSnapshot?.account ?? null;
+  const defaultPortfolioName = String((defaultPortfolio as any)?.name ?? "").trim().toLowerCase();
+  const isMainPortfolio = defaultPortfolioName === "main";
+  const isBrokerLinked = isMainPortfolio && brokerConnected;
+  const modeReason = isBrokerLinked
+    ? "Default portfolio name is Main and broker snapshot is connected."
+    : !isMainPortfolio
+      ? "Default portfolio is not Main, so dashboard remains manual/internal."
+      : "Main is selected but broker snapshot is missing or disconnected.";
+  const portfolioSourceLabel = isBrokerLinked
+    ? "Source: Broker-linked (Tiger read-only)"
+    : "Source: Manual portfolio";
+  const brokerPositions = Array.isArray(brokerSnapshot?.positions) ? brokerSnapshot.positions : [];
 
   const { data: openRows } =
     portfolioId
@@ -239,14 +289,23 @@ export default async function DashboardPage() {
     entry: Number(row.entry_price ?? 0),
   }));
 
-  const totalExposure = snapshot?.deployed_cost_basis ?? 0;
-  const cashAvailable = snapshot?.cash_available ?? null;
+  const openPreviewBroker: Array<{ symbol: string; qty: number; entry: number }> = brokerPositions.map((row) => ({
+    symbol: String(row?.symbol ?? "").trim().toUpperCase(),
+    qty: Number(row?.quantity ?? 0),
+    entry: Number(row?.avg_cost ?? 0),
+  }));
+  const openPreviewRows = isBrokerLinked ? openPreviewBroker : openPreview;
+
+  const totalExposure = isBrokerLinked
+    ? brokerPositions.reduce((sum, row) => sum + (Number(row?.market_value) || 0), 0)
+    : (snapshot?.deployed_cost_basis ?? 0);
+  const cashAvailable = isBrokerLinked ? (brokerAccount?.cash_available ?? null) : (snapshot?.cash_available ?? null);
   const riskPerTrade =
     typeof (defaultPortfolio as any)?.risk_per_trade === "number" &&
     Number.isFinite(Number((defaultPortfolio as any).risk_per_trade))
       ? Number((defaultPortfolio as any).risk_per_trade)
       : 0.02;
-  const accountSize = snapshot?.account_size ?? null;
+  const accountSize = isBrokerLinked ? (brokerAccount?.equity ?? null) : (snapshot?.account_size ?? null);
   let totalRiskDeployed = 0;
   for (const row of (openRiskRows ?? []) as Array<any>) {
     const entry = Number(row?.entry_price);
@@ -260,6 +319,53 @@ export default async function DashboardPage() {
     typeof accountSize === "number" && Number.isFinite(accountSize) && accountSize > 0
       ? (totalRiskDeployed / accountSize) * 100
       : null;
+  const summaryCards = isBrokerLinked
+    ? [
+        { label: "Broker Equity", value: money(brokerAccount?.equity ?? null), subtitle: null, sourceField: "broker.account.equity" },
+        {
+          label: "Broker Cash Available",
+          value: money(brokerAccount?.cash_available ?? null),
+          subtitle: null,
+          sourceField: "broker.account.cash_available",
+        },
+        { label: "Buying Power", value: money(brokerAccount?.buying_power ?? null), subtitle: null, sourceField: "broker.account.buying_power" },
+        {
+          label: "Broker Market Value",
+          value: money(totalExposure),
+          subtitle: "From broker snapshot positions",
+          sourceField: "sum(broker.positions.market_value)",
+        },
+        {
+          label: "Broker Positions",
+          value: String(brokerSnapshot?.positions_count ?? brokerPositions.length ?? 0),
+          subtitle: null,
+          sourceField: "broker.positions_count",
+        },
+        {
+          label: "Tracked Open Positions",
+          value: String(snapshot?.open_count ?? 0),
+          subtitle: "Internal records",
+          sourceField: "internal.snapshot.open_count",
+        },
+      ]
+    : [
+        { label: "Account size", value: money(snapshot?.account_size ?? null), subtitle: null, sourceField: "internal.snapshot.account_size" },
+        {
+          label: "Capital deployed",
+          value: money(snapshot?.deployed_cost_basis ?? null),
+          subtitle: "Cost basis",
+          sourceField: "internal.snapshot.deployed_cost_basis",
+        },
+        {
+          label: "Cash available",
+          value: `${money(snapshot?.cash_available ?? null)} (${snapshot?.cash_source === "manual" ? "Exact" : "Estimated"})`,
+          subtitle: null,
+          sourceField: "internal.snapshot.cash_available",
+        },
+        { label: "Market value", value: money(snapshot?.market_value_optional ?? null), subtitle: null, sourceField: "internal.snapshot.market_value_optional" },
+        { label: "Open positions", value: String(snapshot?.open_count ?? 0), subtitle: null, sourceField: "internal.snapshot.open_count" },
+        { label: "Risk deployed", value: "—", subtitle: null, sourceField: "n/a" },
+      ];
   const topSignals = momentum.top.slice(0, 5);
   const topSymbols = Array.from(
     new Set(topSignals.map((row: any) => String(row.symbol ?? "").trim().toUpperCase()).filter(Boolean))
@@ -311,39 +417,35 @@ export default async function DashboardPage() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Dashboard</h1>
           <p className="mt-1 text-sm text-slate-600">Morning briefing for portfolio, market, and ideas.</p>
+          <p className="mt-2 inline-flex rounded-full border border-[#e3d4bc] bg-[#fff8ee] px-2.5 py-1 text-xs font-medium text-slate-700">
+            {portfolioSourceLabel}
+          </p>
+          {showDiagnostics ? (
+            <div className="mt-2 rounded-xl border border-[#e5d8c4] bg-[#fffdf8] px-3 py-2 text-[11px] text-slate-600">
+              build={buildMarker}
+              {" • "}page_marker={DASHBOARD_PAGE_MARKER}
+              {" • "}env={envLabel}
+              {" • "}portfolio_id={portfolioId || "—"}
+              {" • "}portfolio_name={String((defaultPortfolio as any)?.name ?? "—")}
+              {" • "}resolved_mode={isBrokerLinked ? "broker_linked" : "manual"}
+              {" • "}mode_reason={modeReason}
+              {" • "}broker_snapshot_found={brokerSnapshot ? "true" : "false"}
+              {" • "}broker_connected={brokerConnected ? "true" : "false"}
+              {" • "}broker_snapshot_updated_at={brokerStatusRow?.updated_at ?? "—"}
+              {" • "}headline_source={isBrokerLinked ? "broker_snapshot" : "internal_portfolio_snapshot"}
+              {" • "}headline_fields={summaryCards.map((c) => c.sourceField).join(",")}
+            </div>
+          ) : null}
         </div>
 
         <section className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-2xl border border-[#dfceb0] bg-[#fff7eb] p-5 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Account size</div>
-            <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{money(snapshot?.account_size ?? null)}</div>
-          </div>
-          <div className="rounded-2xl border border-[#dfceb0] bg-[#fff7eb] p-5 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Capital deployed</div>
-            <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{money(snapshot?.deployed_cost_basis ?? null)}</div>
-            <div className="mt-1 text-xs text-slate-500">Cost basis</div>
-          </div>
-          <div className="rounded-2xl border border-[#dfceb0] bg-[#fff7eb] p-5 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Cash available</div>
-            <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
-              {money(snapshot?.cash_available ?? null)}{" "}
-              <span className="text-xs font-medium text-slate-500">
-                ({snapshot?.cash_source === "manual" ? "Exact" : "Estimated"})
-              </span>
+          {summaryCards.map((card) => (
+            <div key={card.label} className="rounded-2xl border border-[#dfceb0] bg-[#fff7eb] p-5 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{card.label}</div>
+              <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{card.value}</div>
+              {card.subtitle ? <div className="mt-1 text-xs text-slate-500">{card.subtitle}</div> : null}
             </div>
-          </div>
-          <div className="rounded-2xl border border-[#dfceb0] bg-[#fff7eb] p-5 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Market value</div>
-            <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{money(snapshot?.market_value_optional ?? null)}</div>
-          </div>
-          <div className="rounded-2xl border border-[#dfceb0] bg-[#fff7eb] p-5 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Open positions</div>
-            <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{snapshot?.open_count ?? 0}</div>
-          </div>
-          <div className="rounded-2xl border border-[#dfceb0] bg-[#fff7eb] p-5 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Risk deployed</div>
-            <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">—</div>
-          </div>
+          ))}
         </section>
 
         <TickerCheckClient breadthState={breadth.breadthState} breadthLabel={breadth.breadthLabel} />
@@ -354,6 +456,7 @@ export default async function DashboardPage() {
             <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
               <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Total Exposure</div>
               <div className="mt-1 text-xl font-semibold text-slate-900">{money(totalExposure)}</div>
+              {isBrokerLinked ? <div className="mt-1 text-[11px] text-slate-500">Broker snapshot market value</div> : null}
             </div>
             <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
               <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Cash Available</div>
@@ -366,6 +469,7 @@ export default async function DashboardPage() {
             <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
               <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Risk Deployed</div>
               <div className="mt-1 text-xl font-semibold text-slate-900">{money(totalRiskDeployed)}</div>
+              {isBrokerLinked ? <div className="mt-1 text-[11px] text-slate-500">From internal tracked stops</div> : null}
             </div>
             <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
               <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Max Stop Loss Risk</div>
@@ -423,6 +527,49 @@ export default async function DashboardPage() {
                 {breadth.breadthLabel}
               </span>
             ) : null}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-[#e0d0b4] bg-[#fff8ed] p-5">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="text-base font-semibold tracking-tight">Broker Snapshot (Read-only)</div>
+            <Link
+              href="/broker"
+              className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]"
+            >
+              Open broker
+            </Link>
+          </div>
+          <div className="grid gap-3 md:grid-cols-6">
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3 md:col-span-2">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Connection</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">
+                {brokerConnected ? "Connected" : brokerSnapshot?.configured ? "Configured / Not Connected" : "Not Configured"}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                Last sync: {brokerStatusRow?.updated_at ?? "—"}
+              </div>
+            </div>
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Currency</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">{brokerAccount?.currency ?? "—"}</div>
+            </div>
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Cash Available</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">{money(brokerAccount?.cash_available)}</div>
+            </div>
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Equity</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">{money(brokerAccount?.equity)}</div>
+            </div>
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Buying Power</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">{money(brokerAccount?.buying_power)}</div>
+            </div>
+            <div className="rounded-xl border border-[#e6d8c1] bg-[#fffdf8] p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Positions</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">{brokerSnapshot?.positions_count ?? 0}</div>
+            </div>
           </div>
         </section>
 
@@ -651,8 +798,11 @@ export default async function DashboardPage() {
               </Link>
             </div>
             <div className="space-y-2 text-sm">
-              {openPreview.length === 0 ? <div className="text-slate-500">No open positions.</div> : null}
-              {Array.from(new Map(openPreview.map((r) => [r.symbol, r])).values()).map((row) => (
+              <div className="text-xs text-slate-500">
+                {isBrokerLinked ? "Showing broker-held positions (read-only snapshot)." : "Showing internal tracked open positions."}
+              </div>
+              {openPreviewRows.length === 0 ? <div className="text-slate-500">No open positions.</div> : null}
+              {Array.from(new Map(openPreviewRows.map((r) => [r.symbol, r])).values()).map((row) => (
                 <div
                   key={row.symbol}
                   className="flex items-center justify-between rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3.5 py-2.5"

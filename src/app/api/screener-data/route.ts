@@ -20,6 +20,16 @@ const BUY_CAP = 5;
 const WATCH_CAP = 10;
 const ENTRY_MISMATCH_THRESHOLD_PCT = 0.6;
 
+function normalizeStrategyVersion(input: string | null | undefined) {
+  const raw = String(input ?? "").trim().toLowerCase();
+  if (!raw) return DEFAULT_STRATEGY;
+  if (raw === "trend" || raw === "v1_trend_hold") return "v1_trend_hold";
+  if (raw === "sector" || raw === "v1_sector_momentum") return "v1_sector_momentum";
+  if (raw === "momentum" || raw === "swing" || raw === "core" || raw === "v2_core_momentum")
+    return "v2_core_momentum";
+  return raw;
+}
+
 type ScanRow = {
   symbol: string;
   signal: "BUY" | "WATCH" | "AVOID";
@@ -181,6 +191,8 @@ const loadScreenerDataCached = unstable_cache(
       sectorGroups = [...groupMap.values()].sort((a, b) => b.rank_score - a.rank_score).slice(0, 4);
     }
 
+    let nonSectorDateUsed = dateUsed;
+    let nonSectorSource = "daily_scans_cache";
     const { data: rows } = isSectorMomentum
       ? ({
           data: (sectorRows ?? []).map((r: any) => ({
@@ -189,7 +201,7 @@ const loadScreenerDataCached = unstable_cache(
             theme: String(r?.reason_json?.group?.theme ?? ""),
           })),
         } as any)
-      : dateUsed
+        : dateUsed
         ? await (supabase as any)
             .from("daily_scans")
             .select(
@@ -204,11 +216,41 @@ const loadScreenerDataCached = unstable_cache(
             .limit(200)
         : ({ data: [] } as any);
 
+    let nonSectorRows = ((rows ?? []) as any[]) || [];
+    if (!isSectorMomentum && nonSectorRows.length === 0 && !requestedDate) {
+      const { data: latestDateRow } = await (supabase as any)
+        .from("daily_scans")
+        .select("date")
+        .eq("universe_slug", mappedUniverse)
+        .eq("strategy_version", strategyVersion)
+        .order("date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const fallbackDate = latestDateRow?.date ? String(latestDateRow.date) : null;
+      if (fallbackDate && fallbackDate !== nonSectorDateUsed) {
+        nonSectorDateUsed = fallbackDate;
+        const { data: fallbackRows } = await (supabase as any)
+          .from("daily_scans")
+          .select(
+            "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,quality_score,risk_grade,quality_signal,quality_summary,reason_summary"
+          )
+          .eq("universe_slug", mappedUniverse)
+          .eq("strategy_version", strategyVersion)
+          .eq("date", nonSectorDateUsed)
+          .order("rank", { ascending: true, nullsFirst: false })
+          .order("confidence", { ascending: false })
+          .order("symbol", { ascending: true })
+          .limit(200);
+        nonSectorRows = (fallbackRows ?? []) as any[];
+        nonSectorSource = "daily_scans_cache_fallback_latest_date";
+      }
+    }
+
     const breadth = isSectorMomentum
       ? computeSectorBreadth((rows ?? []) as ScanRow[], regimeState)
       : await computeMarketBreadth({
           supabase: supabase as any,
-          date: dateUsed ?? null,
+          date: nonSectorDateUsed ?? null,
           universe_slug: mappedUniverse,
           strategy_version: strategyVersion,
           regime_state: regimeState,
@@ -219,7 +261,7 @@ const loadScreenerDataCached = unstable_cache(
       userId,
     });
 
-    const rawRows = (rows ?? []) as ScanRow[];
+    const rawRows = (isSectorMomentum ? (rows ?? []) : nonSectorRows) as ScanRow[];
     if (isSectorMomentum) {
       console.info("[sector_momentum][screener-data]", {
         requested_date: dateUsed,
@@ -231,12 +273,12 @@ const loadScreenerDataCached = unstable_cache(
       });
     }
     let entryValidatedRows = rawRows;
-    if (dateUsed && rawRows.length > 0 && !isSectorMomentum) {
+    if (nonSectorDateUsed && rawRows.length > 0 && !isSectorMomentum) {
       const symbols = Array.from(new Set(rawRows.map((r) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean)));
       const { data: barsOnDate } = await (supabase as any)
         .from("price_bars")
         .select("symbol,close,date")
-        .eq("date", dateUsed)
+        .eq("date", nonSectorDateUsed)
         .in("symbol", symbols);
       const closeBySymbol = new Map<string, number>();
       for (const row of barsOnDate ?? []) {
@@ -346,9 +388,13 @@ const loadScreenerDataCached = unstable_cache(
     return {
       ok: true,
       meta: {
-        date_used: isSectorMomentum ? sectorDateUsed ?? null : dateUsed ?? null,
+        date_used: isSectorMomentum ? sectorDateUsed ?? null : nonSectorDateUsed ?? null,
         lctd: lctd.lctd,
         lctd_source: lctd.source,
+        data_source: isSectorMomentum ? sectorSource : nonSectorSource,
+        rows_raw_count: rawRows.length,
+        rows_after_validation_count: entryValidatedRows.length,
+        rows_display_count: rowsFinal.length,
         regime_state: regimeState,
         regime_date: regimeDate,
         regime_stale: regimeStale,
@@ -401,7 +447,7 @@ export async function GET(req: Request) {
     }
 
     const url = new URL(req.url);
-    const strategyVersion = String(url.searchParams.get("strategy_version") ?? DEFAULT_STRATEGY).trim() || DEFAULT_STRATEGY;
+    const strategyVersion = normalizeStrategyVersion(url.searchParams.get("strategy_version"));
     const universeSlug = String(url.searchParams.get("universe_slug") ?? DEFAULT_UNIVERSE).trim() || DEFAULT_UNIVERSE;
     const date = String(url.searchParams.get("date") ?? "").trim() || null;
 
