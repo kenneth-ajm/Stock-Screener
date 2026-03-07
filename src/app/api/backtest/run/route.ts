@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { runMomentumBacktest } from "@/lib/backtest_momentum";
+import { OBS_KEYS, writeObservabilityStatus } from "@/lib/observability";
 
 type BacktestBody = {
   strategy_version?: string;
@@ -36,7 +37,7 @@ export async function POST(req: Request) {
       entry_mode: normalizeEntryMode(body.entry_mode),
     };
     const result = await runMomentumBacktest({ supabase, input: inputs });
-    return NextResponse.json({
+    const payload = {
       ok: true,
       inputs,
       summary: result.summary,
@@ -51,11 +52,33 @@ export async function POST(req: Request) {
         avg_hold_days: result.summary.avg_holding_days,
         max_drawdown_pct: result.summary.max_drawdown_pct,
       },
+    };
+    await writeObservabilityStatus({
+      supabase,
+      key: OBS_KEYS.backtest,
+      value: {
+        ok: true,
+        strategy_version: inputs.strategy_version,
+        universe_slug: inputs.universe_slug,
+        start_date: inputs.start_date,
+        end_date: inputs.end_date,
+        entry_mode: inputs.entry_mode,
+        candidate_rows: result.summary.candidate_rows,
+        triggered_trades: result.summary.triggered_trades,
+        not_triggered_trades: result.summary.not_triggered_trades,
+        skipped_trades: result.summary.skipped_trades,
+        total_trades: result.summary.total_trades,
+      },
     });
+    return NextResponse.json(payload);
   } catch (e: unknown) {
     console.error("backtest run error", e);
     const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
     const detail = e instanceof Error ? e.stack ?? null : null;
+    await writeObservabilityStatus({
+      key: OBS_KEYS.backtest,
+      value: { ok: false, error },
+    }).catch(() => null);
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }

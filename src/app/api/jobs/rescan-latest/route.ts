@@ -11,6 +11,7 @@ import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
 import { refreshSpyRegimeForLctd } from "@/lib/spy_regime";
 import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
+import { OBS_KEYS, writeObservabilityStatus } from "@/lib/observability";
 
 type Body = {
   universe_slug?: string;
@@ -178,7 +179,7 @@ export async function POST(req: Request) {
       );
     }
 
-    return NextResponse.json({
+    const payload = {
       ok: true,
       universe_slug,
       strategy_version,
@@ -198,11 +199,39 @@ export async function POST(req: Request) {
       finalization: finalizationResults,
       diagnostics_summary: diagnosticsSummary,
       duration_ms: Date.now() - startedAt,
+    };
+    await writeObservabilityStatus({
+      supabase: supaAny,
+      key: OBS_KEYS.rescan,
+      value: {
+        ok: true,
+        universe_slug,
+        strategy_version,
+        scan_date_used,
+        lctd_source: lctd.lctd_source,
+        processed: totalProcessed,
+        upserted: totalUpserted,
+        batches_ok,
+        batches_failed,
+        diagnostics_summary: diagnosticsSummary,
+        regime_state: payload.regime_state,
+        regime_stale: payload.regime_stale,
+        regime_date_used: payload.regime_date_used,
+        duration_ms: payload.duration_ms,
+      },
     });
+    return NextResponse.json(payload);
   } catch (e: unknown) {
     console.error("rescan-latest error", e);
     const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
     const detail = e instanceof Error ? e.stack ?? null : null;
+    await writeObservabilityStatus({
+      key: OBS_KEYS.rescan,
+      value: {
+        ok: false,
+        error,
+      },
+    }).catch(() => null);
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }

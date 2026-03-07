@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { makeScanEngineClient } from "@/lib/scan_engine";
 import { runDerivedScanBackfill } from "@/lib/backfill_derived_scans";
+import { OBS_KEYS, writeObservabilityStatus } from "@/lib/observability";
 
 type Body = {
   start_date?: string;
@@ -24,6 +25,7 @@ function clampMaxDays(input: unknown, max = 30) {
 
 export async function POST(req: Request) {
   try {
+    const startedAt = Date.now();
     const body = (await req.json().catch(() => ({}))) as Body;
     const start_date = String(body.start_date ?? "").slice(0, 10);
     const end_date = String(body.end_date ?? "").slice(0, 10);
@@ -70,7 +72,7 @@ export async function POST(req: Request) {
 
     if (tiny_test) {
       const momentumOnly = summary.per_strategy.filter((s) => s.strategy_version === "v2_core_momentum");
-      return NextResponse.json({
+      const payload = {
         ...summary,
         mode: "execute",
         strategies: ["v2_core_momentum"],
@@ -88,12 +90,29 @@ export async function POST(req: Request) {
           dedupe_skip_existing: true,
           note: "Tiny mode writes derived momentum rows only; no raw ingestion.",
         },
+      };
+      await writeObservabilityStatus({
+        supabase,
+        key: OBS_KEYS.replay,
+        value: {
+          ok: summary.ok,
+          mode: payload.mode,
+          start_date: start_date,
+          end_date: end_date,
+          strategy_version: "v2_core_momentum",
+          universe_slug: "core_800",
+          dates_processed: momentumOnly[0]?.dates_processed ?? 0,
+          rows_written: summary.rows_written,
+          rows_skipped_dedupe: summary.rows_skipped_dedupe,
+          duration_ms: Date.now() - startedAt,
+        },
       });
+      return NextResponse.json(payload);
     }
 
     if (momentum_replay) {
       const momentumOnly = summary.per_strategy.filter((s) => s.strategy_version === "v2_core_momentum");
-      return NextResponse.json({
+      const payload = {
         ...summary,
         mode: "execute",
         strategies: ["v2_core_momentum"],
@@ -111,10 +130,27 @@ export async function POST(req: Request) {
           dedupe_skip_existing: true,
           note: "Momentum replay writes derived momentum rows only; no raw ingestion.",
         },
+      };
+      await writeObservabilityStatus({
+        supabase,
+        key: OBS_KEYS.replay,
+        value: {
+          ok: summary.ok,
+          mode: payload.mode,
+          start_date: start_date,
+          end_date: end_date,
+          strategy_version: "v2_core_momentum",
+          universe_slug: "core_800",
+          dates_processed: momentumOnly[0]?.dates_processed ?? 0,
+          rows_written: summary.rows_written,
+          rows_skipped_dedupe: summary.rows_skipped_dedupe,
+          duration_ms: Date.now() - startedAt,
+        },
       });
+      return NextResponse.json(payload);
     }
 
-    return NextResponse.json({
+    const payload = {
       ...summary,
       safety: {
         execute,
@@ -124,11 +160,33 @@ export async function POST(req: Request) {
           ? "Execute mode writes derived rows only; no raw price ingestion."
           : "Dry-run only. No rows were written.",
       },
+    };
+    await writeObservabilityStatus({
+      supabase,
+      key: OBS_KEYS.replay,
+      value: {
+        ok: summary.ok,
+        mode: payload.mode,
+        start_date: start_date,
+        end_date: end_date,
+        strategies: summary.strategies,
+        rows_written: summary.rows_written,
+        rows_skipped_dedupe: summary.rows_skipped_dedupe,
+        duration_ms: Date.now() - startedAt,
+      },
     });
+    return NextResponse.json(payload);
   } catch (e: unknown) {
     console.error("backfill-derived-scans error", e);
     const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
     const detail = e instanceof Error ? e.stack ?? null : null;
+    await writeObservabilityStatus({
+      key: OBS_KEYS.replay,
+      value: {
+        ok: false,
+        error,
+      },
+    }).catch(() => null);
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }

@@ -2,6 +2,7 @@ import Link from "next/link";
 import AppShell from "@/components/app-shell";
 import UtilitiesClient from "@/app/screener/UtilitiesClient";
 import { getWorkspaceContext } from "@/lib/workspace_context";
+import ObservabilityPanel from "@/app/system/ObservabilityPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +47,14 @@ export default async function SystemPage() {
             strategyLabel="Momentum Swing"
             autopilotStatus={autopilotStatus as any}
           />
+        </div>
+
+        <div className="rounded-2xl border border-[#e8dcc8] bg-[#fffaf2] p-4">
+          <h2 className="mb-2 text-lg font-semibold text-slate-900">Pipeline Observability</h2>
+          <p className="mb-3 text-sm text-slate-600">
+            Lightweight run health for scans, replay, breadth/sector derived jobs, and backtest visibility.
+          </p>
+          <ObservabilityPanel />
         </div>
       </div>
     </AppShell>

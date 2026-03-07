@@ -7,6 +7,7 @@ import {
   type SectorMomentumCandidate,
 } from "@/lib/sector_momentum";
 import { GROWTH_UNIVERSE_SLUG } from "@/lib/strategy_universe";
+import { OBS_KEYS, writeObservabilityStatus } from "@/lib/observability";
 
 const TARGET_GROWTH_COUNT = 1500;
 const MIN_PRICE = 5;
@@ -245,7 +246,7 @@ async function runPopulate() {
     growth_universe_active_count: universe.active_count,
     growth_universe_derived_refresh: universe.derived_refresh,
   });
-  return NextResponse.json({
+  const payload = {
     ok: true,
     scan_date_used: scanDate,
     universe_slug: GROWTH_UNIVERSE_SLUG,
@@ -263,7 +264,24 @@ async function runPopulate() {
     pruned_rows,
     growth_universe_active_count: universe.active_count,
     growth_universe_derived_refresh: universe.derived_refresh,
+  };
+  await writeObservabilityStatus({
+    supabase,
+    key: OBS_KEYS.sector,
+    value: {
+      ok: true,
+      scan_date_used: scanDate,
+      strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
+      universe_slug: GROWTH_UNIVERSE_SLUG,
+      candidates_count: payload.candidates_count,
+      persisted_rows: payload.persisted_rows,
+      pruned_rows: payload.pruned_rows,
+      breadth: payload.breadth,
+      top_groups_count: payload.top_groups.length,
+      top_symbols: payload.top_symbols,
+    },
   });
+  return NextResponse.json(payload);
 }
 
 export async function POST() {
@@ -272,6 +290,10 @@ export async function POST() {
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
     const detail = e instanceof Error ? e.stack ?? null : null;
+    await writeObservabilityStatus({
+      key: OBS_KEYS.sector,
+      value: { ok: false, error },
+    }).catch(() => null);
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }
@@ -282,6 +304,10 @@ export async function GET() {
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
     const detail = e instanceof Error ? e.stack ?? null : null;
+    await writeObservabilityStatus({
+      key: OBS_KEYS.sector,
+      value: { ok: false, error },
+    }).catch(() => null);
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }
