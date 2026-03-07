@@ -116,6 +116,20 @@ function deepFindByKeys(obj: unknown, keys: string[], maxDepth = 6): unknown {
   return null;
 }
 
+function buildTigerIdentityPayload(cmd: string, tigerAccountId: string) {
+  const id = String(tigerAccountId ?? "").trim();
+  // Tiger gateway integrations are inconsistent across environments;
+  // include the common tiger/account key aliases to avoid null-identifier errors.
+  return {
+    cmd,
+    tigerId: id,
+    tiger_id: id,
+    accountId: id,
+    account_id: id,
+    account: id,
+  };
+}
+
 function normalizePrivateKey(raw: string): string {
   let trimmed = String(raw ?? "").trim();
   if (
@@ -260,10 +274,7 @@ export class TigerReadOnlyConnector implements BrokerConnector {
 
     // Phase 1 safety boundary:
     // Read-only broker sync only. No execution and no strategy influence.
-    const accountBody = {
-      cmd: "get_account",
-      account_id: env.tiger.account_id,
-    };
+    const accountBody = buildTigerIdentityPayload("get_account", env.tiger.account_id);
     const request = this.signedInit({
       method: "POST",
       pathOrUrl: env.tiger.account_endpoint,
@@ -375,10 +386,7 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     const configured = tigerConfigured(env);
     if (!configured) return [];
 
-    const positionsBody = {
-      cmd: "get_positions",
-      account_id: env.tiger.account_id,
-    };
+    const positionsBody = buildTigerIdentityPayload("get_positions", env.tiger.account_id);
     const request = this.signedInit({
       method: "POST",
       pathOrUrl: env.tiger.positions_endpoint,
