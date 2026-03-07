@@ -53,12 +53,18 @@ Use a very small window first:
 - `max_days: 2` or `3`
 - `execute: false` first, then `execute: true` only after reviewing dry-run output.
 
+New built-in tiny mode:
+- `tiny_test: true`
+- hard-locked to Momentum (`v2_core_momentum`) + `core_800`
+- executes in safe range `5..10` trading days
+- enables `dedupe_skip_existing=true`
+
 Example:
 
 ```bash
 curl -X POST /api/jobs/backfill-derived-scans \
   -H "content-type: application/json" \
-  -d '{"start_date":"2026-02-24","end_date":"2026-03-03","max_days":3,"execute":false}'
+  -d '{"start_date":"2026-02-24","end_date":"2026-03-03","tiny_test":true,"tiny_days":7}'
 ```
 
 ## Replay Behavior by Strategy
@@ -97,4 +103,3 @@ If a replay write set is incorrect for a small test date window:
 3. For sector rows, pruning ensures stale same-date rows are removed.
 
 No raw price data is altered by this framework.
-

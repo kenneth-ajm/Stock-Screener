@@ -18,6 +18,7 @@ export type BackfillDerivedInput = {
   execute?: boolean;
   max_days?: number;
   include_breadth_preview?: boolean;
+  dedupe_skip_existing?: boolean;
 };
 
 export type BackfillDerivedSummary = {
@@ -31,6 +32,9 @@ export type BackfillDerivedSummary = {
   warnings: string[];
   rows_written: number;
   rows_pruned: number;
+  rows_skipped_dedupe: number;
+  sample_written: Array<{ date: string; strategy_version: string; universe_slug: string; symbol: string }>;
+  sample_skipped_dedupe: Array<{ date: string; strategy_version: string; universe_slug: string; existing_rows: number }>;
   per_strategy: Array<{
     strategy_version: string;
     universe_slug: string;
@@ -107,6 +111,7 @@ export async function runDerivedScanBackfill(opts: {
   const dry_run = execute ? false : opts.input.dry_run !== false;
   const mode: "dry_run" | "execute" = dry_run ? "dry_run" : "execute";
   const includeBreadth = opts.input.include_breadth_preview !== false;
+  const dedupeSkipExisting = opts.input.dedupe_skip_existing === true;
   const maxDaysRaw = Number(opts.input.max_days ?? DEFAULT_MAX_DAYS);
   const max_days = Math.max(1, Math.min(MAX_SAFE_DAYS, Number.isFinite(maxDaysRaw) ? maxDaysRaw : DEFAULT_MAX_DAYS));
   const strategies = (opts.input.strategies ?? DEFAULT_STRATEGIES)
@@ -135,6 +140,9 @@ export async function runDerivedScanBackfill(opts: {
     warnings,
     rows_written: 0,
     rows_pruned: 0,
+    rows_skipped_dedupe: 0,
+    sample_written: [],
+    sample_skipped_dedupe: [],
     per_strategy: [],
   };
 
@@ -232,6 +240,28 @@ export async function runDerivedScanBackfill(opts: {
             });
           }
           if (execute) {
+            if (dedupeSkipExisting) {
+              const { count: existingCount } = await supa
+                .from("daily_scans")
+                .select("id", { count: "exact", head: true })
+                .eq("date", date)
+                .eq("universe_slug", universe_slug)
+                .eq("strategy_version", strategy_version);
+              const existingRows = Number(existingCount ?? 0);
+              if (existingRows > 0) {
+                summary.rows_skipped_dedupe += existingRows;
+                if (summary.sample_skipped_dedupe.length < 20) {
+                  summary.sample_skipped_dedupe.push({
+                    date,
+                    strategy_version,
+                    universe_slug,
+                    existing_rows: existingRows,
+                  });
+                }
+                item.dates_processed += 1;
+                continue;
+              }
+            }
             const result = await runScanPipeline({
               supabase: supa,
               universe_slug,
@@ -245,6 +275,28 @@ export async function runDerivedScanBackfill(opts: {
             const up = Number((result as any).upserted ?? 0);
             item.rows_written += up;
             summary.rows_written += up;
+            if (summary.sample_written.length < 20) {
+              const { data: writtenRows } = await supa
+                .from("daily_scans")
+                .select("symbol")
+                .eq("date", date)
+                .eq("universe_slug", universe_slug)
+                .eq("strategy_version", strategy_version)
+                .order("rank_score", { ascending: false, nullsFirst: false })
+                .order("confidence", { ascending: false })
+                .limit(5);
+              for (const row of writtenRows ?? []) {
+                if (summary.sample_written.length >= 20) break;
+                const symbol = String((row as any)?.symbol ?? "").trim().toUpperCase();
+                if (!symbol) continue;
+                summary.sample_written.push({
+                  date,
+                  strategy_version,
+                  universe_slug,
+                  symbol,
+                });
+              }
+            }
           }
         }
         item.dates_processed += 1;
