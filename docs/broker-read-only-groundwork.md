@@ -40,6 +40,12 @@ Do not expose these via `NEXT_PUBLIC_*`.
   - Persists a per-user snapshot to `system_status` with key format:
     - `broker_snapshot_last_run:<user_id>`
 
+## Required DB Object
+
+- `public.system_status` must exist for snapshot persistence.
+- Migration file:
+  - `docs/SQL/2026-03-07_system_status_broker_persistence.sql`
+
 ## Rollout Plan
 
 1. Phase 1: Read-only account/position sync

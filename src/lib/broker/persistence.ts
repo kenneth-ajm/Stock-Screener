@@ -118,6 +118,14 @@ function errMessage(e: unknown): string {
   return "Unknown broker persistence error";
 }
 
+function annotatePersistenceError(msg: string): string {
+  const m = String(msg ?? "");
+  if (/PGRST205/i.test(m) || /Could not find the table 'public\.system_status'/i.test(m)) {
+    return `${m} (missing table: run docs/SQL/2026-03-07_system_status_broker_persistence.sql)`;
+  }
+  return m;
+}
+
 export async function reconcileBrokerWithPortfolio(opts: {
   supabase: any;
   portfolio_id: string;
@@ -267,9 +275,6 @@ export async function persistBrokerSnapshot(opts: {
   };
 
   const attempts: Array<{ name: string; client: any }> = [];
-  if (opts.supabase) {
-    attempts.push({ name: "request_client", client: opts.supabase as any });
-  }
   try {
     attempts.push({ name: "service_role_client", client: serviceRoleClient() });
   } catch (e: unknown) {
@@ -278,6 +283,9 @@ export async function persistBrokerSnapshot(opts: {
       name: "service_role_client_unavailable",
       client: null,
     });
+  }
+  if (opts.supabase) {
+    attempts.push({ name: "request_client", client: opts.supabase as any });
   }
 
   const errors: string[] = [];
@@ -292,7 +300,7 @@ export async function persistBrokerSnapshot(opts: {
     if (!error) {
       return { key, updated_at: payload.updated_at };
     }
-    errors.push(`${attempt.name}: ${errMessage(error)}`);
+    errors.push(`${attempt.name}: ${annotatePersistenceError(errMessage(error))}`);
   }
 
   throw new Error(`Broker snapshot persistence failed (${errors.join(" | ")})`);
