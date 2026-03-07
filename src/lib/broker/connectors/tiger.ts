@@ -45,6 +45,19 @@ function pickFirst(obj: any, keys: string[]): unknown {
   return null;
 }
 
+function pickFirstWithKey(
+  obj: Record<string, unknown> | null | undefined,
+  keys: string[]
+): { key: string | null; value: unknown | null } {
+  if (!obj) return { key: null, value: null };
+  for (const key of keys) {
+    if ((obj as any)[key] != null) {
+      return { key, value: (obj as any)[key] };
+    }
+  }
+  return { key: null, value: null };
+}
+
 function isObject(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === "object" && !Array.isArray(v);
 }
@@ -158,6 +171,87 @@ function decodeGatewayEnvelope(json: unknown): {
     },
   };
 }
+
+const ACCOUNT_KEYS = {
+  as_of: ["as_of", "asOf", "updated_at", "timestamp", "time", "updateTime", "latestUpdateTime"],
+  currency: ["currency", "base_currency", "baseCurrency", "currencyCode"],
+  cash_available: [
+    "cash_available",
+    "cash",
+    "available_funds",
+    "available_cash",
+    "cash_balance",
+    "availableBalance",
+    "availableCash",
+    "withdrawableCash",
+    "cashAvailableForTrade",
+  ],
+  equity: [
+    "equity",
+    "net_liquidation",
+    "net_asset_value",
+    "total_assets",
+    "netAsset",
+    "totalEquity",
+    "accountValue",
+  ],
+  buying_power: [
+    "buying_power",
+    "buyingPower",
+    "max_buying_power",
+    "available_buying_power",
+    "availableBuyingPower",
+    "purchasingPower",
+  ],
+} as const;
+
+const POSITION_KEYS = {
+  symbol: ["symbol", "ticker", "contract", "instrument_id", "secuCode", "code"],
+  quantity: [
+    "quantity",
+    "qty",
+    "position",
+    "shares",
+    "positionQty",
+    "holdQty",
+    "positionQuantity",
+  ],
+  average_cost: [
+    "average_cost",
+    "avg_cost",
+    "cost_price",
+    "averagePrice",
+    "costPrice",
+    "avgPrice",
+    "holdingCost",
+    "openPrice",
+  ],
+  market_price: [
+    "market_price",
+    "last_price",
+    "price",
+    "latestPrice",
+    "marketPrice",
+    "last",
+    "close",
+  ],
+  market_value: [
+    "market_value",
+    "value",
+    "marketValue",
+    "positionValue",
+    "marketVal",
+  ],
+  unrealized_pnl: [
+    "unrealized_pnl",
+    "unrealized",
+    "floating_pnl",
+    "unrealizedPnl",
+    "unrealizedPL",
+    "pnl",
+    "positionPnl",
+  ],
+} as const;
 
 function getByPath(obj: unknown, path: string): unknown {
   const parts = path.split(".");
@@ -579,56 +673,48 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     ]);
 
     const fromObj = accountObj.value ?? (rootObj as any);
-    const asOf = String(
-      pickFirst(fromObj, ["as_of", "asOf", "updated_at", "timestamp", "time"]) ??
-        deepFindByKeys(json, ["as_of", "updated_at", "timestamp", "time"]) ??
-        nowIso()
-    );
-    const currency = String(
-      pickFirst(fromObj, ["currency", "base_currency", "baseCurrency"]) ??
-        deepFindByKeys(json, ["currency", "base_currency"]) ??
-        "USD"
-    );
-    const cash = toNum(
-      pickFirst(fromObj, [
-        "cash_available",
-        "cash",
-        "available_funds",
-        "available_cash",
-        "cash_balance",
-        "availableBalance",
-      ]) ??
-        deepFindByKeys(json, [
-          "cash_available",
-          "available_funds",
-          "available_cash",
-          "cash_balance",
-          "cash",
-        ])
-    );
-    const equity = toNum(
-      pickFirst(fromObj, ["equity", "net_liquidation", "net_asset_value", "total_assets"]) ??
-        deepFindByKeys(json, ["equity", "net_liquidation", "net_asset_value", "total_assets"])
-    );
-    const buyingPower = toNum(
-      pickFirst(fromObj, [
-        "buying_power",
-        "buyingPower",
-        "max_buying_power",
-        "available_buying_power",
-      ]) ??
-        deepFindByKeys(json, [
-          "buying_power",
-          "buyingPower",
-          "max_buying_power",
-          "available_buying_power",
-        ])
-    );
+    const asOfPick = pickFirstWithKey(fromObj, [...ACCOUNT_KEYS.as_of]);
+    const asOfDeep = asOfPick.value == null ? deepFindByKeys(json, [...ACCOUNT_KEYS.as_of]) : null;
+    const asOf = String(asOfPick.value ?? asOfDeep ?? nowIso());
+
+    const currencyPick = pickFirstWithKey(fromObj, [...ACCOUNT_KEYS.currency]);
+    const currencyDeep =
+      currencyPick.value == null ? deepFindByKeys(json, [...ACCOUNT_KEYS.currency]) : null;
+    const currency = String(currencyPick.value ?? currencyDeep ?? "USD");
+
+    const cashPick = pickFirstWithKey(fromObj, [...ACCOUNT_KEYS.cash_available]);
+    const cashDeep =
+      cashPick.value == null ? deepFindByKeys(json, [...ACCOUNT_KEYS.cash_available]) : null;
+    const cash = toNum(cashPick.value ?? cashDeep);
+
+    const equityPick = pickFirstWithKey(fromObj, [...ACCOUNT_KEYS.equity]);
+    const equityDeep =
+      equityPick.value == null ? deepFindByKeys(json, [...ACCOUNT_KEYS.equity]) : null;
+    const equity = toNum(equityPick.value ?? equityDeep);
+
+    const bpPick = pickFirstWithKey(fromObj, [...ACCOUNT_KEYS.buying_power]);
+    const bpDeep =
+      bpPick.value == null ? deepFindByKeys(json, [...ACCOUNT_KEYS.buying_power]) : null;
+    const buyingPower = toNum(bpPick.value ?? bpDeep);
 
     this.debug.account_parse = {
       selected_path: accountObj.path,
       shape: shapeSummary(json),
       decoding: decoded.diag,
+      candidate_keys: {
+        as_of: [...ACCOUNT_KEYS.as_of],
+        currency: [...ACCOUNT_KEYS.currency],
+        cash_available: [...ACCOUNT_KEYS.cash_available],
+        equity: [...ACCOUNT_KEYS.equity],
+        buying_power: [...ACCOUNT_KEYS.buying_power],
+      },
+      selected_sources: {
+        as_of: asOfPick.key ?? (asOfDeep != null ? "deep_search" : "default_now"),
+        currency: currencyPick.key ?? (currencyDeep != null ? "deep_search" : "default_USD"),
+        cash_available: cashPick.key ?? (cashDeep != null ? "deep_search" : "none"),
+        equity: equityPick.key ?? (equityDeep != null ? "deep_search" : "none"),
+        buying_power: bpPick.key ?? (bpDeep != null ? "deep_search" : "none"),
+      },
       mapped: {
         currency,
         cash_available: cash,
@@ -728,26 +814,33 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     };
     if (!Array.isArray(list)) return [];
     const asOf = nowIso();
+    let computedMarketValueCount = 0;
     const normalized = list
       .map((row: any) => {
-        const symbol = String(
-          pickFirst(row, ["symbol", "ticker", "contract", "instrument_id", "secuCode"]) ?? ""
-        )
-          .trim()
-          .toUpperCase();
-        const quantity = toNum(
-          pickFirst(row, ["quantity", "qty", "position", "shares", "positionQty", "holdQty"])
-        ) ?? 0;
-        const average_cost = toNum(
-          pickFirst(row, ["average_cost", "avg_cost", "cost_price", "averagePrice", "costPrice"])
-        );
-        const market_price = toNum(
-          pickFirst(row, ["market_price", "last_price", "price", "latestPrice", "marketPrice"])
-        );
-        const market_value = toNum(pickFirst(row, ["market_value", "value"]));
-        const unrealized_pnl = toNum(
-          pickFirst(row, ["unrealized_pnl", "unrealized", "floating_pnl", "unrealizedPnl"])
-        );
+        const symbolPick = pickFirstWithKey(row, [...POSITION_KEYS.symbol]);
+        const qtyPick = pickFirstWithKey(row, [...POSITION_KEYS.quantity]);
+        const avgPick = pickFirstWithKey(row, [...POSITION_KEYS.average_cost]);
+        const pricePick = pickFirstWithKey(row, [...POSITION_KEYS.market_price]);
+        const mktValPick = pickFirstWithKey(row, [...POSITION_KEYS.market_value]);
+        const upnlPick = pickFirstWithKey(row, [...POSITION_KEYS.unrealized_pnl]);
+
+        const symbol = String(symbolPick.value ?? "").trim().toUpperCase();
+        const quantity = toNum(qtyPick.value) ?? 0;
+        const average_cost = toNum(avgPick.value);
+        const market_price = toNum(pricePick.value);
+        let market_value = toNum(mktValPick.value);
+        const unrealized_pnl = toNum(upnlPick.value);
+        const market_value_computed =
+          market_value == null &&
+          market_price != null &&
+          Number.isFinite(market_price) &&
+          quantity > 0
+            ? Number((quantity * market_price).toFixed(4))
+            : null;
+        if (market_value == null && market_value_computed != null) {
+          market_value = market_value_computed;
+          computedMarketValueCount += 1;
+        }
         return {
           symbol,
           quantity,
@@ -755,6 +848,15 @@ export class TigerReadOnlyConnector implements BrokerConnector {
           market_price,
           market_value,
           unrealized_pnl,
+          __mapping: {
+            symbol_source: symbolPick.key,
+            quantity_source: qtyPick.key,
+            average_cost_source: avgPick.key,
+            market_price_source: pricePick.key,
+            market_value_source: mktValPick.key ?? (market_value_computed != null ? "computed_qty_x_price" : null),
+            unrealized_pnl_source: upnlPick.key,
+            market_value_computed: market_value_computed != null,
+          },
           as_of: asOf,
           source: "broker_api" as const,
         };
@@ -764,8 +866,28 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       ...(this.debug.positions_parse as any),
       normalized_count: normalized.length,
       sample_symbols: normalized.slice(0, 5).map((r) => r.symbol),
+      computed_market_value_count: computedMarketValueCount,
+      candidate_keys: {
+        symbol: [...POSITION_KEYS.symbol],
+        quantity: [...POSITION_KEYS.quantity],
+        average_cost: [...POSITION_KEYS.average_cost],
+        market_price: [...POSITION_KEYS.market_price],
+        market_value: [...POSITION_KEYS.market_value],
+        unrealized_pnl: [...POSITION_KEYS.unrealized_pnl],
+      },
+      selected_sources_sample: normalized.slice(0, 5).map((r: any) => ({
+        symbol: r.symbol,
+        quantity_source: r.__mapping?.quantity_source ?? null,
+        average_cost_source: r.__mapping?.average_cost_source ?? null,
+        market_price_source: r.__mapping?.market_price_source ?? null,
+        market_value_source: r.__mapping?.market_value_source ?? null,
+        unrealized_pnl_source: r.__mapping?.unrealized_pnl_source ?? null,
+      })),
     };
-    return normalized;
+    return normalized.map((row: any) => {
+      const { __mapping, ...clean } = row;
+      return clean;
+    });
   }
 
   async placeOrder(_payload: unknown): Promise<never> {
