@@ -352,7 +352,12 @@ function firstObjectSampleKeys(obj: unknown): string[] {
 
 function pickAccountSourceObject(json: unknown): { path: string | null; value: Record<string, unknown> | null } {
   // Prefer actual asset row item over container objects.
-  const item = firstObjectByPaths(json, ["data.items.0", "result.items.0", "results.items.0"]);
+  const item = firstObjectByPaths(json, [
+    "data.items.0",
+    "items.0",
+    "result.items.0",
+    "results.items.0",
+  ]);
   if (item.value) return item;
   // Fallback to other account/summary objects if no list item exists.
   return firstObjectByPaths(json, [
@@ -766,10 +771,14 @@ export class TigerReadOnlyConnector implements BrokerConnector {
         : [],
       asset_container_keys: isObject((json as any)?.data)
         ? Object.keys((json as any).data).slice(0, 40)
+        : isObject(json)
+        ? Object.keys(json as any).slice(0, 40)
         : [],
       selected_extraction_base_path: accountObj.path,
+      selected_asset_item_keys: isObject(accountObj.value) ? Object.keys(accountObj.value).slice(0, 40) : [],
       sample_decoded_asset_item_keys: firstObjectSampleKeys(
         getByPath(json, "data.items.0") ??
+          getByPath(json, "items.0") ??
           getByPath(json, "result.items.0") ??
           getByPath(json, "results.items.0") ??
           (json as any)?.data ??
