@@ -132,6 +132,18 @@ function formatGatewayTimestamp(date = new Date()) {
   )}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
 }
 
+function uniqueStrings(values: Array<string | null | undefined>) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const v = String(raw ?? "").trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
 function normalizePrivateKey(raw: string): string {
   let trimmed = String(raw ?? "").trim();
   if (
@@ -304,6 +316,96 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     };
   }
 
+  private isUnsupportedMethodError(json: unknown) {
+    const root = isObject(json) ? (json as any) : null;
+    const code = root?.code != null ? String(root.code) : "";
+    const message = String(root?.message ?? root?.msg ?? "");
+    return code === "1000" && /method does not support/i.test(message);
+  }
+
+  private extractGatewayError(json: unknown): string | null {
+    const root = isObject(json) ? (json as any) : null;
+    if (!root) return null;
+    const code = root.code != null ? String(root.code) : "";
+    const message = String(root.message ?? root.msg ?? "").trim();
+    if (!message && !code) return null;
+    if (!code || code === "0" || /success/i.test(message)) return null;
+    return `${code}:${message || "gateway error"}`;
+  }
+
+  private async executeWithMethodFallback(opts: {
+    pathOrUrl: string;
+    bizContent: Record<string, unknown>;
+    methods: string[];
+    debugPrefix: "account" | "positions";
+  }) {
+    const attempts: Array<{
+      method: string;
+      status: number;
+      ok: boolean;
+      code: string | null;
+      message: string | null;
+      envelope_keys: string[];
+      biz_content_keys: string[];
+      charset_value: string;
+      sign_type_value: string;
+      version_value: string;
+      timestamp_format_used: string;
+      sign_present: boolean;
+    }> = [];
+
+    for (const methodName of opts.methods) {
+      const request = this.signedInit({
+        pathOrUrl: opts.pathOrUrl,
+        methodName,
+        bizContent: opts.bizContent,
+      });
+      const res = await fetchWithRetry(request.url, request.init);
+      const json = await res.json().catch(() => null);
+      const root = isObject(json) ? (json as any) : {};
+      const code = root?.code != null ? String(root.code) : null;
+      const message = root?.message != null ? String(root.message) : root?.msg != null ? String(root.msg) : null;
+      attempts.push({
+        method: methodName,
+        status: res.status,
+        ok: res.ok,
+        code,
+        message,
+        envelope_keys: (request as any)?.signedMeta?.envelope_keys ?? [],
+        biz_content_keys: (request as any)?.signedMeta?.biz_content_keys ?? [],
+        charset_value: String((request as any)?.signedMeta?.charset_value ?? ""),
+        sign_type_value: String((request as any)?.signedMeta?.sign_type_value ?? ""),
+        version_value: String((request as any)?.signedMeta?.version_value ?? ""),
+        timestamp_format_used: String((request as any)?.signedMeta?.timestamp_format_used ?? ""),
+        sign_present: Boolean((request as any)?.signedMeta?.sign_present),
+      });
+
+      if (!res.ok) {
+        // Continue trying alternate methods for gateway method errors only.
+        if (this.isUnsupportedMethodError(json)) continue;
+        throw new Error(`Tiger ${opts.debugPrefix} request failed (${res.status})`);
+      }
+
+      if (this.isUnsupportedMethodError(json)) {
+        continue;
+      }
+
+      const gatewayError = this.extractGatewayError(json);
+      if (gatewayError) {
+        throw new Error(`Tiger gateway error: ${gatewayError}`);
+      }
+
+      (this.debug as any)[`${opts.debugPrefix}_method_attempts`] = attempts;
+      (this.debug as any)[`${opts.debugPrefix}_method_selected`] = methodName;
+      return { json, request, res, methodName, attempts };
+    }
+
+    (this.debug as any)[`${opts.debugPrefix}_method_attempts`] = attempts;
+    throw new Error(
+      `Tiger gateway method unsupported (${opts.debugPrefix}): ${opts.methods.join(", ")}`
+    );
+  }
+
   isConfigured(): boolean {
     return tigerConfigured(readBrokerEnv());
   }
@@ -322,11 +424,20 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     const accountBiz = buildTigerBizContent({
       accountId: env.tiger.account_id,
     });
-    const request = this.signedInit({
+    const accountMethods = uniqueStrings([
+      env.tiger.account_method,
+      "assets",
+      "get_assets",
+      "accounts",
+      "get_account",
+    ]);
+    const accountCall = await this.executeWithMethodFallback({
       pathOrUrl: env.tiger.account_endpoint,
-      methodName: env.tiger.account_method,
       bizContent: accountBiz,
+      methods: accountMethods,
+      debugPrefix: "account",
     });
+    const request = accountCall.request;
     this.debug.account_request = {
       endpoint: request.url,
       method: "POST",
@@ -340,7 +451,8 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       version_value: String((request as any)?.signedMeta?.version_value ?? ""),
       timestamp_format_used: String((request as any)?.signedMeta?.timestamp_format_used ?? ""),
       timestamp_value_used: String((request as any)?.signedMeta?.timestamp_value_used ?? ""),
-      method_used: String((request as any)?.signedMeta?.method_used ?? ""),
+      method_used: String((this.debug as any)?.account_method_selected ?? (request as any)?.signedMeta?.method_used ?? ""),
+      method_candidates: accountMethods,
       biz_content_present: Boolean((request as any)?.signedMeta?.biz_content_present),
       biz_content_keys: (request as any)?.signedMeta?.biz_content_keys ?? [],
       biz_content_length: Number((request as any)?.signedMeta?.biz_content_length ?? 0),
@@ -354,17 +466,13 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       signed_param_count: Number((request as any)?.signedMeta?.signed_param_count ?? 0),
       base_url: env.tiger.base_url,
     };
-    const res = await fetchWithRetry(request.url, request.init);
+    const res = accountCall.res;
     this.debug.account_http = {
       ok: res.ok,
       status: res.status,
       status_text: res.statusText,
     };
-    if (!res.ok) {
-      throw new Error(`Tiger account request failed (${res.status})`);
-    }
-
-    const json = await res.json().catch(() => null);
+    const json = accountCall.json;
     const rootObj = isObject(json) ? json : null;
     const accountObj = firstObjectByPaths(json, [
       "data.account",
@@ -456,11 +564,19 @@ export class TigerReadOnlyConnector implements BrokerConnector {
     const positionsBiz = buildTigerBizContent({
       accountId: env.tiger.account_id,
     });
-    const request = this.signedInit({
+    const positionsMethods = uniqueStrings([
+      env.tiger.positions_method,
+      "positions",
+      "get_positions",
+      "position_list",
+    ]);
+    const positionsCall = await this.executeWithMethodFallback({
       pathOrUrl: env.tiger.positions_endpoint,
-      methodName: env.tiger.positions_method,
       bizContent: positionsBiz,
+      methods: positionsMethods,
+      debugPrefix: "positions",
     });
+    const request = positionsCall.request;
     this.debug.positions_request = {
       endpoint: request.url,
       method: "POST",
@@ -474,7 +590,8 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       version_value: String((request as any)?.signedMeta?.version_value ?? ""),
       timestamp_format_used: String((request as any)?.signedMeta?.timestamp_format_used ?? ""),
       timestamp_value_used: String((request as any)?.signedMeta?.timestamp_value_used ?? ""),
-      method_used: String((request as any)?.signedMeta?.method_used ?? ""),
+      method_used: String((this.debug as any)?.positions_method_selected ?? (request as any)?.signedMeta?.method_used ?? ""),
+      method_candidates: positionsMethods,
       biz_content_present: Boolean((request as any)?.signedMeta?.biz_content_present),
       biz_content_keys: (request as any)?.signedMeta?.biz_content_keys ?? [],
       biz_content_length: Number((request as any)?.signedMeta?.biz_content_length ?? 0),
@@ -488,17 +605,13 @@ export class TigerReadOnlyConnector implements BrokerConnector {
       signed_param_count: Number((request as any)?.signedMeta?.signed_param_count ?? 0),
       base_url: env.tiger.base_url,
     };
-    const res = await fetchWithRetry(request.url, request.init);
+    const res = positionsCall.res;
     this.debug.positions_http = {
       ok: res.ok,
       status: res.status,
       status_text: res.statusText,
     };
-    if (!res.ok) {
-      throw new Error(`Tiger positions request failed (${res.status})`);
-    }
-
-    const json = await res.json().catch(() => null);
+    const json = positionsCall.json;
     const positionsList = firstArrayByPaths(json, [
       "data.positions",
       "data.items",
