@@ -106,6 +106,18 @@ function serviceRoleClient() {
   return createClient(url, key, { auth: { persistSession: false } }) as any;
 }
 
+function errMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object") {
+    const obj = e as Record<string, unknown>;
+    const code = obj.code ? String(obj.code) : null;
+    const message = obj.message ? String(obj.message) : JSON.stringify(obj);
+    return code ? `${code}: ${message}` : message;
+  }
+  return "Unknown broker persistence error";
+}
+
 export async function reconcileBrokerWithPortfolio(opts: {
   supabase: any;
   portfolio_id: string;
@@ -220,11 +232,11 @@ export async function reconcileBrokerWithPortfolio(opts: {
 }
 
 export async function persistBrokerSnapshot(opts: {
+  supabase?: any;
   user_id: string;
   snapshot: BrokerReadOnlyResult;
   reconciliation: unknown;
 }) {
-  const supa = serviceRoleClient();
   const userId = String(opts.user_id ?? "").trim();
   if (!userId) throw new Error("Missing user_id");
   const key = `broker_snapshot_last_run:${userId}`;
@@ -253,7 +265,35 @@ export async function persistBrokerSnapshot(opts: {
     },
     updated_at: new Date().toISOString(),
   };
-  const { error } = await supa.from("system_status").upsert(payload, { onConflict: "key" });
-  if (error) throw error;
-  return { key, updated_at: payload.updated_at };
+
+  const attempts: Array<{ name: string; client: any }> = [];
+  if (opts.supabase) {
+    attempts.push({ name: "request_client", client: opts.supabase as any });
+  }
+  try {
+    attempts.push({ name: "service_role_client", client: serviceRoleClient() });
+  } catch (e: unknown) {
+    // Keep going with request client if present; include details in final error only if all attempts fail.
+    attempts.push({
+      name: "service_role_client_unavailable",
+      client: null,
+    });
+  }
+
+  const errors: string[] = [];
+  for (const attempt of attempts) {
+    if (!attempt.client) {
+      errors.push(`${attempt.name}: unavailable`);
+      continue;
+    }
+    const { error } = await (attempt.client as any)
+      .from("system_status")
+      .upsert(payload, { onConflict: "key" });
+    if (!error) {
+      return { key, updated_at: payload.updated_at };
+    }
+    errors.push(`${attempt.name}: ${errMessage(error)}`);
+  }
+
+  throw new Error(`Broker snapshot persistence failed (${errors.join(" | ")})`);
 }

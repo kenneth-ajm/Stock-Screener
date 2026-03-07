@@ -8,6 +8,18 @@ import {
   reconcileBrokerWithPortfolio,
 } from "@/lib/broker/persistence";
 
+function errMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object") {
+    const obj = e as Record<string, unknown>;
+    const code = obj.code ? String(obj.code) : null;
+    const message = obj.message ? String(obj.message) : JSON.stringify(obj);
+    return code ? `${code}: ${message}` : message;
+  }
+  return "Failed to persist broker snapshot";
+}
+
 export async function GET() {
   try {
     const cookieStore = await cookies();
@@ -59,6 +71,7 @@ export async function GET() {
     };
     try {
       const saved = await persistBrokerSnapshot({
+        supabase: supabase as any,
         user_id: user.id,
         snapshot,
         reconciliation,
@@ -74,7 +87,7 @@ export async function GET() {
         ok: false,
         key: null,
         updated_at: null,
-        error: e instanceof Error ? e.message : "Failed to persist broker snapshot",
+        error: errMessage(e),
       };
     }
 
