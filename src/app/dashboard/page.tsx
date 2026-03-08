@@ -406,15 +406,17 @@ export default async function DashboardPage({
         <div className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-3xl font-semibold tracking-tight text-slate-900 sm:text-[2.15rem]">Dashboard</h1>
+          </div>
+          <p className="text-sm leading-6 text-slate-600">Morning briefing for portfolio, market, and ideas.</p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="surface-chip inline-flex px-2.5 py-1 text-xs font-medium text-slate-700">
+              {portfolioSourceLabel}
+            </p>
             <div className="flex items-center gap-2">
               <TickerCheckClient breadthState={breadth.breadthState} breadthLabel={breadth.breadthLabel} />
               <PrivacyToggle />
             </div>
           </div>
-          <p className="text-sm leading-6 text-slate-600">Morning briefing for portfolio, market, and ideas.</p>
-          <p className="surface-chip inline-flex px-2.5 py-1 text-xs font-medium text-slate-700">
-            {portfolioSourceLabel}
-          </p>
           {showDiagnostics ? (
             <div className="mt-2 rounded-xl border border-[#e5d8c4] bg-[#fffdf8] px-3 py-2 text-[11px] text-slate-600">
               build={buildMarker}
