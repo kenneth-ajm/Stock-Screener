@@ -115,8 +115,23 @@ const loadScreenerDataCached = unstable_cache(
     ) as any;
 
     const lctd = await getLCTD(supabase as any);
-    const mappedUniverse = defaultUniverseForStrategy(strategyVersion) || universeSlug;
+    const requestedUniverse = String(universeSlug ?? "").trim();
+    let mappedUniverse = requestedUniverse || defaultUniverseForStrategy(strategyVersion) || DEFAULT_UNIVERSE;
     const dateUsed = requestedDate && requestedDate.trim() ? requestedDate.trim() : lctd.lctd;
+    if (!requestedUniverse) {
+      const { data: latestUniverseRow } = await (supabase as any)
+        .from("daily_scans")
+        .select("universe_slug,date")
+        .eq("strategy_version", strategyVersion)
+        .not("universe_slug", "is", null)
+        .order("date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const latestUniverse = String(latestUniverseRow?.universe_slug ?? "").trim();
+      if (latestUniverse) {
+        mappedUniverse = latestUniverse;
+      }
+    }
     const { data: regimeExactRows } = await supabase
       .from("market_regime")
       .select("date,state")
@@ -193,7 +208,23 @@ const loadScreenerDataCached = unstable_cache(
 
     let nonSectorDateUsed = dateUsed;
     let nonSectorSource = "daily_scans_cache";
-    const { data: rows } = isSectorMomentum
+    const fetchNonSectorRowsFor = async (d: string | null) => {
+      if (!d) return [] as any[];
+      const { data } = await (supabase as any)
+        .from("daily_scans")
+        .select(
+          "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json"
+        )
+        .eq("universe_slug", mappedUniverse)
+        .eq("strategy_version", strategyVersion)
+        .eq("date", d)
+        .order("rank", { ascending: true, nullsFirst: false })
+        .order("confidence", { ascending: false })
+        .order("symbol", { ascending: true })
+        .limit(200);
+      return (data ?? []) as any[];
+    };
+    const rows = isSectorMomentum
       ? ({
           data: (sectorRows ?? []).map((r: any) => ({
             ...r,
@@ -201,46 +232,42 @@ const loadScreenerDataCached = unstable_cache(
             theme: String(r?.reason_json?.group?.theme ?? ""),
           })),
         } as any)
-        : dateUsed
-        ? await (supabase as any)
-            .from("daily_scans")
-            .select(
-              "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json"
-            )
-            .eq("universe_slug", mappedUniverse)
-            .eq("strategy_version", strategyVersion)
-            .eq("date", dateUsed)
-            .order("rank", { ascending: true, nullsFirst: false })
-            .order("confidence", { ascending: false })
-            .order("symbol", { ascending: true })
-            .limit(200)
-        : ({ data: [] } as any);
+      : ({ data: await fetchNonSectorRowsFor(nonSectorDateUsed) } as any);
 
-    let nonSectorRows = ((rows ?? []) as any[]) || [];
+    let nonSectorRows = ((rows?.data ?? []) as any[]) || [];
+    if (!isSectorMomentum && nonSectorRows.length === 0 && !requestedUniverse) {
+      const { data: latestStrategyRow } = await (supabase as any)
+        .from("daily_scans")
+        .select("date,universe_slug")
+        .eq("strategy_version", strategyVersion)
+        .not("universe_slug", "is", null)
+        .order("date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const fallbackUniverse = String(latestStrategyRow?.universe_slug ?? "").trim();
+      const fallbackDate = latestStrategyRow?.date ? String(latestStrategyRow.date) : null;
+      if (fallbackUniverse) {
+        mappedUniverse = fallbackUniverse;
+      }
+      if (fallbackDate) {
+        nonSectorDateUsed = fallbackDate;
+        nonSectorRows = await fetchNonSectorRowsFor(nonSectorDateUsed);
+        nonSectorSource = "daily_scans_cache_fallback_latest_strategy_universe";
+      }
+    }
     if (!isSectorMomentum && nonSectorRows.length === 0) {
       const { data: latestDateRow } = await (supabase as any)
         .from("daily_scans")
         .select("date")
         .eq("strategy_version", strategyVersion)
+        .eq("universe_slug", mappedUniverse)
         .order("date", { ascending: false })
         .limit(1)
         .maybeSingle();
       const fallbackDate = latestDateRow?.date ? String(latestDateRow.date) : null;
       if (fallbackDate && fallbackDate !== nonSectorDateUsed) {
         nonSectorDateUsed = fallbackDate;
-        const { data: fallbackRows } = await (supabase as any)
-          .from("daily_scans")
-          .select(
-            "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json"
-          )
-          .eq("universe_slug", mappedUniverse)
-          .eq("strategy_version", strategyVersion)
-          .eq("date", nonSectorDateUsed)
-          .order("rank", { ascending: true, nullsFirst: false })
-          .order("confidence", { ascending: false })
-          .order("symbol", { ascending: true })
-          .limit(200);
-        nonSectorRows = (fallbackRows ?? []) as any[];
+        nonSectorRows = await fetchNonSectorRowsFor(nonSectorDateUsed);
         nonSectorSource = "daily_scans_cache_fallback_latest_date";
       }
     }
@@ -391,6 +418,10 @@ const loadScreenerDataCached = unstable_cache(
     return {
       ok: true,
       meta: {
+        strategy_version: strategyVersion,
+        universe_slug: mappedUniverse,
+        requested_universe_slug: requestedUniverse || null,
+        requested_date: requestedDate ?? null,
         date_used: isSectorMomentum ? sectorDateUsed ?? null : nonSectorDateUsed ?? null,
         lctd: lctd.lctd,
         lctd_source: lctd.source,
@@ -451,7 +482,7 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url);
     const strategyVersion = normalizeStrategyVersion(url.searchParams.get("strategy_version"));
-    const universeSlug = String(url.searchParams.get("universe_slug") ?? DEFAULT_UNIVERSE).trim() || DEFAULT_UNIVERSE;
+    const universeSlug = String(url.searchParams.get("universe_slug") ?? "").trim();
     const date = String(url.searchParams.get("date") ?? "").trim() || null;
 
     const data = await loadScreenerDataCached(user.id, universeSlug, strategyVersion, date);

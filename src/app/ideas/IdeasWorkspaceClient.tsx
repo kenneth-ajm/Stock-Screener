@@ -44,6 +44,10 @@ type IdeaRow = {
 type Payload = {
   ok: boolean;
   meta?: {
+    strategy_version?: string | null;
+    universe_slug?: string | null;
+    requested_universe_slug?: string | null;
+    requested_date?: string | null;
     lctd: string | null;
     date_used?: string | null;
     data_source?: string | null;
@@ -277,13 +281,16 @@ export default function IdeasWorkspaceClient({
     const validated = Number(data?.meta?.rows_after_validation_count ?? 0);
     const display = Number(data?.meta?.rows_display_count ?? rows.length ?? 0);
     if (display > 0) return null;
+    const strategyUsed = data?.meta?.strategy_version ?? strategy;
+    const universeUsed = data?.meta?.universe_slug ?? defaultUniverseForStrategy(strategy);
+    const dateShown = data?.meta?.date_used ?? data?.meta?.requested_date ?? data?.meta?.lctd ?? "latest";
     if (raw === 0) {
-      return `No rows found for ${strategy} on ${data?.meta?.date_used ?? data?.meta?.lctd ?? "latest date"}.`;
+      return `No rows for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
     }
     if (validated === 0) {
-      return "Rows were filtered out by validation checks (for example entry/price mismatch).";
+      return `Rows were filtered out after validation for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
     }
-    return "No BUY/WATCH candidates after current display caps for this strategy/date.";
+    return `No BUY/WATCH candidates after display caps for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
   }, [loading, data, rows.length, strategy]);
   const fillNum = Number(fill);
   const stopNum = Number(selected?.stop ?? 0);
@@ -524,6 +531,7 @@ export default function IdeasWorkspaceClient({
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
           <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
+          <span className="surface-chip px-2.5 py-1">Latest scan: {data?.meta?.date_used ?? "—"}</span>
           <span className="surface-chip px-2.5 py-1">LCTD: {data?.meta?.lctd ?? "—"}</span>
           <span className="surface-chip px-2.5 py-1">
             %&gt;SMA50: {Number(data?.meta?.pct_above_sma50 ?? 0).toFixed(1)}%
@@ -561,8 +569,11 @@ export default function IdeasWorkspaceClient({
           build={buildMarker}
           {" • "}page_marker={pageMarker}
           {" • "}strategy_param={strategyParamRaw ?? "—"}
-          {" • "}resolved_strategy={strategy}
-          {" • "}strategy_version={strategy}
+          {" • "}resolved_strategy_tab={strategy}
+          {" • "}strategy_version={data?.meta?.strategy_version ?? strategy}
+          {" • "}universe={data?.meta?.universe_slug ?? "—"}
+          {" • "}requested_universe={data?.meta?.requested_universe_slug ?? "—"}
+          {" • "}requested_date={data?.meta?.requested_date ?? "—"}
           {" • "}rows={rows.length}
           {" • "}date_used={data?.meta?.date_used ?? "—"}
           {" • "}lctd={data?.meta?.lctd ?? "—"}
