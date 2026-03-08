@@ -217,11 +217,10 @@ const loadScreenerDataCached = unstable_cache(
         : ({ data: [] } as any);
 
     let nonSectorRows = ((rows ?? []) as any[]) || [];
-    if (!isSectorMomentum && nonSectorRows.length === 0 && !requestedDate) {
+    if (!isSectorMomentum && nonSectorRows.length === 0) {
       const { data: latestDateRow } = await (supabase as any)
         .from("daily_scans")
         .select("date")
-        .eq("universe_slug", mappedUniverse)
         .eq("strategy_version", strategyVersion)
         .order("date", { ascending: false })
         .limit(1)
