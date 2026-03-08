@@ -693,6 +693,7 @@ export default function IdeasWorkspaceClient({
                   <th className="px-4 py-3.5">Delta</th>
                   <th className="px-4 py-3.5">Stop</th>
                   <th className="px-4 py-3.5">TP1</th>
+                  <th className="px-4 py-3.5">Zone</th>
                   <th className="px-4 py-3.5">Action</th>
                   <th className="px-4 py-3.5">Position Cost</th>
                 </tr>
@@ -700,7 +701,7 @@ export default function IdeasWorkspaceClient({
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-5 text-sm text-slate-600" colSpan={11}>
+                    <td className="px-4 py-5 text-sm text-slate-600" colSpan={12}>
                       {emptyStateMessage ?? "No rows available."}
                     </td>
                   </tr>
@@ -726,6 +727,16 @@ export default function IdeasWorkspaceClient({
                         zone_high: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_high,
                       })
                     : "No live price";
+                const zoneStatus =
+                  live === null || !Number.isFinite(entry) || entry <= 0
+                    ? null
+                    : reason === "Below trigger"
+                    ? "BELOW_TRIGGER"
+                    : live <= entry
+                    ? "IN_ZONE"
+                    : live <= entry * 1.02
+                    ? "ABOVE_ENTRY"
+                    : "TOO_EXTENDED";
                 const exec = applyBreadthToAction(
                   applyEarningsRiskToAction(mapExecutionState(reason), earnings),
                   breadth
@@ -762,6 +773,25 @@ export default function IdeasWorkspaceClient({
                     <td className="px-4 py-3.5">{fmtSignedPct(deltaPct)}</td>
                     <td className="px-4 py-3.5">{Number(row.stop ?? 0).toFixed(2)}</td>
                     <td className="px-4 py-3.5">{Number(row.tp1 ?? 0).toFixed(2)}</td>
+                    <td className="px-4 py-3.5">
+                      {zoneStatus ? (
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                            zoneStatus === "IN_ZONE"
+                              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                              : zoneStatus === "ABOVE_ENTRY"
+                              ? "border-amber-200 bg-amber-50 text-amber-700"
+                              : zoneStatus === "BELOW_TRIGGER"
+                              ? "border-sky-200 bg-sky-50 text-sky-700"
+                              : "border-rose-200 bg-rose-50 text-rose-700"
+                          }`}
+                        >
+                          {zoneStatus}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3.5">
                       <div className="space-y-1">
                         <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
