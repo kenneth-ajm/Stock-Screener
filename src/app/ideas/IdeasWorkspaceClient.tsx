@@ -51,9 +51,15 @@ type Payload = {
     lctd: string | null;
     date_used?: string | null;
     data_source?: string | null;
+    fallback_decisions?: string[] | null;
     rows_raw_count?: number | null;
     rows_after_validation_count?: number | null;
     rows_display_count?: number | null;
+    response_shape?: {
+      raw_rows_is_array?: boolean;
+      validated_rows_is_array?: boolean;
+      final_rows_is_array?: boolean;
+    } | null;
     regime_state: string | null;
     breadth_state?: "STRONG" | "MIXED" | "WEAK" | null;
     breadth_label?: string | null;
@@ -164,8 +170,12 @@ export default function IdeasWorkspaceClient({
         const json = await r.json().catch(() => null);
         if (!mounted) return;
         if (!r.ok || !json) {
+          const apiError = (json as any)?.error ?? `HTTP ${r.status}`;
+          const safeError = String(apiError).toLowerCase().includes("not iterable")
+            ? "Data shape mismatch from screener API"
+            : apiError;
           setLastLoadOk(false);
-          setData({ ok: false, error: (json as any)?.error ?? `HTTP ${r.status}` });
+          setData({ ok: false, error: safeError });
           return;
         }
         setLastLoadOk(Boolean(json?.ok));
@@ -578,9 +588,13 @@ export default function IdeasWorkspaceClient({
           {" • "}date_used={data?.meta?.date_used ?? "—"}
           {" • "}lctd={data?.meta?.lctd ?? "—"}
           {" • "}source={data?.meta?.data_source ?? "—"}
+          {" • "}fallbacks={(data?.meta?.fallback_decisions ?? []).join(" > ") || "none"}
           {" • "}raw={Number(data?.meta?.rows_raw_count ?? 0)}
           {" • "}validated={Number(data?.meta?.rows_after_validation_count ?? 0)}
           {" • "}display={Number(data?.meta?.rows_display_count ?? 0)}
+          {" • "}shape_raw={String(Boolean(data?.meta?.response_shape?.raw_rows_is_array))}
+          {" • "}shape_validated={String(Boolean(data?.meta?.response_shape?.validated_rows_is_array))}
+          {" • "}shape_final={String(Boolean(data?.meta?.response_shape?.final_rows_is_array))}
           {" • "}ok={loading ? "loading" : lastLoadOk === null ? "unknown" : lastLoadOk ? "true" : "false"}
           {" • "}api={lastApiUrl || "—"}
         </div>
