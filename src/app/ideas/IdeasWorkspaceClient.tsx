@@ -72,6 +72,18 @@ type Payload = {
     rows_count_scope?: string | null;
     rows_query_limit?: number | null;
     selected_universe_has_rows?: boolean | null;
+    universe_availability?: Record<
+      string,
+      {
+        universe_slug: string;
+        latest_date: string | null;
+        rows: number;
+        buy: number;
+        watch: number;
+        avoid: number;
+        has_scans: boolean;
+      }
+    > | null;
     response_shape?: {
       raw_rows_is_array?: boolean;
       validated_rows_is_array?: boolean;
@@ -380,6 +392,11 @@ export default function IdeasWorkspaceClient({
       queryLimit: Number(data?.meta?.rows_query_limit ?? allRows.length ?? 0),
     };
   }, [allRows, breadth, data?.meta, earningsBySymbol, quoteBySymbol, strategy]);
+  const universeAvailability = data?.meta?.universe_availability ?? {};
+  const coreAvailability = universeAvailability["core_800"] ?? null;
+  const midcapAvailability = universeAvailability["midcap_1000"] ?? null;
+  const isCoreEnabled = !coreAvailability ? true : Boolean(coreAvailability.has_scans);
+  const isMidcapEnabled = !midcapAvailability ? true : Boolean(midcapAvailability.has_scans);
   const emptyStateMessage = useMemo(() => {
     if (loading) return "Loading ideas…";
     if (!data?.ok) return `Failed to load data: ${data?.error ?? "Unknown error"}`;
@@ -394,6 +411,9 @@ export default function IdeasWorkspaceClient({
     const signalCountsValidated = data?.meta?.rows_signal_counts_validated ?? {};
     const rawActionable = Number(signalCountsRaw.buy ?? 0) + Number(signalCountsRaw.watch ?? 0);
     const validatedActionable = Number(signalCountsValidated.buy ?? 0) + Number(signalCountsValidated.watch ?? 0);
+    if (selectedFilter === "all" && raw === 0 && universeMode !== "auto") {
+      return `No scans available yet for strategy=${strategyUsed}, universe=${universeUsed}. Try Auto mode for the latest populated universe.`;
+    }
     if (selectedFilter === "all") {
       if (raw === 0) {
         return `No scans available yet for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
@@ -416,7 +436,7 @@ export default function IdeasWorkspaceClient({
       return `BUY/WATCH rows exist but display filtering removed them for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
     }
     return `No BUY/WATCH candidates after display caps for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
-  }, [loading, data, filteredRows.length, strategy, selectedFilter]);
+  }, [loading, data, filteredRows.length, strategy, selectedFilter, universeMode]);
   const fillNum = Number(fill);
   const stopNum = Number(selected?.stop ?? 0);
   const riskPerShare = fillNum > 0 && stopNum > 0 ? fillNum - stopNum : 0;
@@ -738,9 +758,12 @@ export default function IdeasWorkspaceClient({
           </button>
           <button
             onClick={() => setUniverseMode("core_800")}
+            disabled={!isCoreEnabled}
             className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
               universeMode === "core_800"
                 ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : !isCoreEnabled
+                ? "cursor-not-allowed border-transparent bg-transparent text-slate-400"
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
@@ -748,9 +771,12 @@ export default function IdeasWorkspaceClient({
           </button>
           <button
             onClick={() => setUniverseMode("midcap_1000")}
+            disabled={!isMidcapEnabled}
             className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
               universeMode === "midcap_1000"
                 ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : !isMidcapEnabled
+                ? "cursor-not-allowed border-transparent bg-transparent text-slate-400"
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
@@ -794,6 +820,9 @@ export default function IdeasWorkspaceClient({
             Slots: {data?.capacity?.slots_left ?? 0}
           </span>
         </div>
+      </div>
+      <div className="mt-[-8px] text-[11px] text-slate-500">
+        Auto selects the latest populated universe for each strategy. Unavailable explicit universes are marked as not scanned yet.
       </div>
 
       <div className="surface-card px-3.5 py-3">
@@ -846,6 +875,10 @@ export default function IdeasWorkspaceClient({
           {" • "}universe={data?.meta?.universe_slug ?? "—"}
           {" • "}requested_universe={data?.meta?.requested_universe_slug ?? "—"}
           {" • "}selected_universe_has_rows={String(Boolean(data?.meta?.selected_universe_has_rows))}
+          {" • "}core_has_scans={String(Boolean(coreAvailability?.has_scans))}
+          {" • "}core_latest={coreAvailability?.latest_date ?? "—"}
+          {" • "}midcap_has_scans={String(Boolean(midcapAvailability?.has_scans))}
+          {" • "}midcap_latest={midcapAvailability?.latest_date ?? "—"}
           {" • "}requested_date={data?.meta?.requested_date ?? "—"}
           {" • "}rows={rows.length}
           {" • "}rows_filtered={filteredRows.length}

@@ -52,6 +52,54 @@ type ScanRow = {
   theme?: string | null;
 };
 
+async function latestUniverseStats(supabase: any, strategyVersion: string, universeSlug: string) {
+  const { data: latest } = await supabase
+    .from("daily_scans")
+    .select("date")
+    .eq("strategy_version", strategyVersion)
+    .eq("universe_slug", universeSlug)
+    .order("date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const latestDate = latest?.date ? String(latest.date) : null;
+  if (!latestDate) {
+    return {
+      universe_slug: universeSlug,
+      latest_date: null,
+      rows: 0,
+      buy: 0,
+      watch: 0,
+      avoid: 0,
+      has_scans: false,
+    };
+  }
+  const { data: rows } = await supabase
+    .from("daily_scans")
+    .select("signal")
+    .eq("strategy_version", strategyVersion)
+    .eq("universe_slug", universeSlug)
+    .eq("date", latestDate);
+  const arr = Array.isArray(rows) ? rows : [];
+  let buy = 0;
+  let watch = 0;
+  let avoid = 0;
+  for (const row of arr) {
+    const sig = String((row as any)?.signal ?? "").toUpperCase();
+    if (sig === "BUY") buy += 1;
+    else if (sig === "WATCH") watch += 1;
+    else if (sig === "AVOID") avoid += 1;
+  }
+  return {
+    universe_slug: universeSlug,
+    latest_date: latestDate,
+    rows: arr.length,
+    buy,
+    watch,
+    avoid,
+    has_scans: arr.length > 0,
+  };
+}
+
 function rankRows(rows: ScanRow[]) {
   return [...rows].sort((a, b) => {
     const ar = typeof a.rank_score === "number" ? a.rank_score : Number(a.confidence ?? 0);
@@ -421,6 +469,12 @@ const loadScreenerDataCached = unstable_cache(
       watch: rowsFinal.filter((r) => r.signal === "WATCH").length,
       avoid: rowsFinal.filter((r) => r.signal === "AVOID").length,
     };
+    const [coreStats, midcapStats, liquidStats, growthStats] = await Promise.all([
+      latestUniverseStats(supabase as any, strategyVersion, "core_800"),
+      latestUniverseStats(supabase as any, strategyVersion, "midcap_1000"),
+      latestUniverseStats(supabase as any, strategyVersion, "liquid_2000"),
+      latestUniverseStats(supabase as any, strategyVersion, "growth_1500"),
+    ]);
 
     return {
       ok: true,
@@ -443,6 +497,12 @@ const loadScreenerDataCached = unstable_cache(
         rows_count_scope: "loaded_rows_limit",
         rows_query_limit: MAX_ROWS,
         selected_universe_has_rows: rawRows.length > 0,
+        universe_availability: {
+          core_800: coreStats,
+          midcap_1000: midcapStats,
+          liquid_2000: liquidStats,
+          growth_1500: growthStats,
+        },
         response_shape: {
           raw_rows_is_array: Array.isArray(rawRows),
           validated_rows_is_array: Array.isArray(entryValidatedRows),
