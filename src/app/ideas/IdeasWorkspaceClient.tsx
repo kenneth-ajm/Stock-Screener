@@ -208,7 +208,7 @@ export default function IdeasWorkspaceClient({
   }, [strategy]);
 
   useEffect(() => {
-    const symbols = (data?.rows ?? []).slice(0, 10).map((r) => r.symbol).filter(Boolean);
+    const symbols = (data?.rows ?? []).slice(0, 100).map((r) => r.symbol).filter(Boolean);
     if (symbols.length === 0) {
       setQuoteBySymbol({});
       return;
@@ -235,7 +235,7 @@ export default function IdeasWorkspaceClient({
   }, [data?.rows]);
 
   useEffect(() => {
-    const symbols = (data?.rows ?? []).slice(0, 10).map((r) => r.symbol).filter(Boolean);
+    const symbols = (data?.rows ?? []).slice(0, 100).map((r) => r.symbol).filter(Boolean);
     if (symbols.length === 0) {
       setEarningsBySymbol({});
       return;
@@ -298,13 +298,74 @@ export default function IdeasWorkspaceClient({
     setSelected(null);
   }, [initialSymbol, data?.rows]);
 
-  const rows = useMemo(() => (data?.rows ?? []).slice(0, 10), [data]);
+  const allRows = useMemo(() => data?.rows ?? [], [data]);
+  const rows = useMemo(() => allRows.slice(0, 10), [allRows]);
   const filteredRows = useMemo(() => {
     if (selectedFilter === "all") return rows;
     if (selectedFilter === "buy") return rows.filter((r) => r.signal === "BUY");
     if (selectedFilter === "watch") return rows.filter((r) => r.signal === "WATCH");
     return rows.filter((r) => r.signal === "BUY" && r.action !== "SKIP");
   }, [rows, selectedFilter]);
+  const funnel = useMemo(() => {
+    const rowsRaw = Number(data?.meta?.rows_raw_count ?? allRows.length ?? 0);
+    const rowsValidated = Number(data?.meta?.rows_after_validation_count ?? allRows.length ?? 0);
+    const rowsDisplay = Number(data?.meta?.rows_display_count ?? allRows.length ?? 0);
+    const signalCounts = data?.meta?.rows_signal_counts_display ?? data?.meta?.rows_signal_counts_validated ?? data?.meta?.rows_signal_counts_raw ?? {};
+    const buyCount = Number(signalCounts.buy ?? 0);
+    const watchCount = Number(signalCounts.watch ?? 0);
+    const runtime = allRows.reduce(
+      (acc, row) => {
+        const q = quoteBySymbol[row.symbol];
+        const rawLive = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
+        const entry = Number(row.entry ?? 0);
+        const mismatch =
+          rawLive !== null &&
+          entry > 0 &&
+          Math.abs((rawLive - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
+        const live = mismatch ? null : rawLive;
+        const reason =
+          mismatch
+            ? "Price mismatch"
+            : live !== null
+              ? getEntryStatus({
+                  price: live,
+                  zone_low: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_low,
+                  zone_high: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_high,
+                })
+              : "No live price";
+        const sym = String(row.symbol ?? "").trim().toUpperCase();
+        const earnings = earningsBySymbol[sym] ?? null;
+        const exec = applyBreadthToAction(
+          applyEarningsRiskToAction(mapExecutionState(reason), earnings),
+          breadth
+        );
+        if (row.signal === "BUY") {
+          acc.buyRows += 1;
+          if (reason === "Within zone" || reason === "Extended") acc.buyInZone += 1;
+          if (exec.action !== "SKIP") acc.buyNotSkipped += 1;
+          if (exec.action === "BUY NOW") acc.finalActionable += 1;
+        }
+        return acc;
+      },
+      {
+        buyRows: 0,
+        buyInZone: 0,
+        buyNotSkipped: 0,
+        finalActionable: 0,
+      }
+    );
+    return {
+      rowsRaw,
+      rowsValidated,
+      rowsDisplay,
+      buyCount,
+      watchCount,
+      buyInZone: runtime.buyInZone,
+      buyNotSkipped: runtime.buyNotSkipped,
+      finalActionable: runtime.finalActionable,
+      buyRowsObserved: runtime.buyRows,
+    };
+  }, [allRows, breadth, data?.meta, earningsBySymbol, quoteBySymbol, strategy]);
   const emptyStateMessage = useMemo(() => {
     if (loading) return "Loading ideas…";
     if (!data?.ok) return `Failed to load data: ${data?.error ?? "Unknown error"}`;
@@ -682,6 +743,43 @@ export default function IdeasWorkspaceClient({
           <span className="surface-chip px-2.5 py-1">
             Slots: {data?.capacity?.slots_left ?? 0}
           </span>
+        </div>
+      </div>
+
+      <div className="surface-card px-3.5 py-3">
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Signal Funnel</div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+            <div className="text-[10px] text-slate-500">Total scanned</div>
+            <div className="text-sm font-semibold text-slate-900">{funnel.rowsRaw}</div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+            <div className="text-[10px] text-slate-500">After validation</div>
+            <div className="text-sm font-semibold text-slate-900">{funnel.rowsValidated}</div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+            <div className="text-[10px] text-slate-500">BUY</div>
+            <div className="text-sm font-semibold text-slate-900">{funnel.buyCount}</div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+            <div className="text-[10px] text-slate-500">WATCH</div>
+            <div className="text-sm font-semibold text-slate-900">{funnel.watchCount}</div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+            <div className="text-[10px] text-slate-500">BUY in zone</div>
+            <div className="text-sm font-semibold text-slate-900">{funnel.buyInZone}</div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+            <div className="text-[10px] text-slate-500">BUY not skipped</div>
+            <div className="text-sm font-semibold text-slate-900">{funnel.buyNotSkipped}</div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+            <div className="text-[10px] text-slate-500">Final actionable</div>
+            <div className="text-sm font-semibold text-slate-900">{funnel.finalActionable}</div>
+          </div>
+        </div>
+        <div className="mt-2 text-[11px] text-slate-500">
+          Displayed rows after ranking caps: {funnel.rowsDisplay}. Execution-stage counts are computed from loaded rows ({allRows.length}).
         </div>
       </div>
 
