@@ -123,7 +123,7 @@ function fmtSignedPct(v: number | null) {
 
 export default function IdeasWorkspaceClient({
   initialStrategy = "v1",
-  initialUniverse = "core_800",
+  initialUniverse = "auto",
   initialSymbol = null,
   strategyParamRaw = null,
   showDiagnostics = false,
@@ -139,7 +139,7 @@ export default function IdeasWorkspaceClient({
   pageMarker?: string;
 }) {
   const [strategy, setStrategy] = useState<StrategyVersion>(initialStrategy);
-  const [universeSlug, setUniverseSlug] = useState<string>(initialUniverse);
+  const [universeMode, setUniverseMode] = useState<string>(initialUniverse);
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<IdeaRow | null>(null);
@@ -176,13 +176,15 @@ export default function IdeasWorkspaceClient({
   }, [initialStrategy]);
 
   useEffect(() => {
-    setUniverseSlug(initialUniverse);
+    setUniverseMode(initialUniverse);
   }, [initialUniverse]);
 
   useEffect(() => {
     let mounted = true;
     setLoading(true);
-    const apiUrl = `/api/screener-data?strategy_version=${strategy}&universe_slug=${encodeURIComponent(universeSlug)}`;
+    const qs = new URLSearchParams({ strategy_version: strategy });
+    if (universeMode !== "auto") qs.set("universe_slug", universeMode);
+    const apiUrl = `/api/screener-data?${qs.toString()}`;
     setLastApiUrl(apiUrl);
     setLastLoadOk(null);
     fetch(apiUrl, {
@@ -212,7 +214,7 @@ export default function IdeasWorkspaceClient({
     return () => {
       mounted = false;
     };
-  }, [strategy, universeSlug]);
+  }, [strategy, universeMode]);
 
   useEffect(() => {
     const symbols = (data?.rows ?? []).slice(0, 100).map((r) => r.symbol).filter(Boolean);
@@ -465,7 +467,7 @@ export default function IdeasWorkspaceClient({
       const query = new URLSearchParams({
         symbol: selected.symbol,
         strategy_version: strategy,
-        universe_slug: universeSlug,
+        universe_slug: universeMode === "auto" ? data?.meta?.universe_slug ?? defaultUniverseForStrategy(strategy) : universeMode,
         date: data?.meta?.lctd ?? "",
       });
       const res = await fetch(`/api/scan-row-detail?${query.toString()}`, { cache: "no-store" });
@@ -720,9 +722,19 @@ export default function IdeasWorkspaceClient({
         </div>
         <div className="flex items-center gap-2 rounded-xl border border-[#e3d5bf] bg-[#fcf8f1] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
           <button
-            onClick={() => setUniverseSlug("core_800")}
+            onClick={() => setUniverseMode("auto")}
             className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
-              universeSlug === "core_800"
+              universeMode === "auto"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
+            }`}
+          >
+            Auto
+          </button>
+          <button
+            onClick={() => setUniverseMode("core_800")}
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
+              universeMode === "core_800"
                 ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
@@ -730,9 +742,9 @@ export default function IdeasWorkspaceClient({
             Core 800
           </button>
           <button
-            onClick={() => setUniverseSlug("midcap_1000")}
+            onClick={() => setUniverseMode("midcap_1000")}
             className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
-              universeSlug === "midcap_1000"
+              universeMode === "midcap_1000"
                 ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
@@ -743,6 +755,10 @@ export default function IdeasWorkspaceClient({
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
           <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
           <span className="surface-chip px-2.5 py-1">Latest scan: {data?.meta?.date_used ?? "—"}</span>
+          <span className="surface-chip px-2.5 py-1">
+            Universe: {data?.meta?.universe_slug ?? "—"}
+            {universeMode === "auto" ? " (auto)" : ""}
+          </span>
           <span className="surface-chip px-2.5 py-1">LCTD: {data?.meta?.lctd ?? "—"}</span>
           <span className="surface-chip px-2.5 py-1">
             %&gt;SMA50: {Number(data?.meta?.pct_above_sma50 ?? 0).toFixed(1)}%
@@ -818,7 +834,7 @@ export default function IdeasWorkspaceClient({
           {" • "}page_marker={pageMarker}
           {" • "}strategy_param={strategyParamRaw ?? "—"}
           {" • "}resolved_strategy_tab={strategy}
-          {" • "}selected_universe={universeSlug}
+          {" • "}selected_universe={universeMode}
           {" • "}strategy_version={data?.meta?.strategy_version ?? strategy}
           {" • "}filter={selectedFilter}
           {" • "}universe={data?.meta?.universe_slug ?? "—"}

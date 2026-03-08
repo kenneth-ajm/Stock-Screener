@@ -27,8 +27,10 @@ export default async function IdeasPage({
   const initialSymbol = String(params.symbol ?? "").trim().toUpperCase() || null;
   const initialUniverse = (() => {
     const raw = String(params.universe ?? "").trim().toLowerCase();
+    if (raw === "auto" || raw === "") return "auto";
     if (raw === "midcap_1000" || raw === "midcap" || raw === "mid") return "midcap_1000";
-    return "core_800";
+    if (raw === "core_800" || raw === "core") return "core_800";
+    return "auto";
   })();
   const diagRaw = String(params.diag ?? "").trim().toLowerCase();
   const showDiagnostics = diagRaw === "1" || diagRaw === "true";
