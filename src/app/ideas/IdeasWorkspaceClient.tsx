@@ -8,6 +8,7 @@ import { applyBreadthToAction } from "@/lib/market_breadth";
 import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
 type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold";
+type IdeasFilter = "all" | "buy" | "watch" | "actionable";
 
 type IdeaRow = {
   symbol: string;
@@ -160,6 +161,7 @@ export default function IdeasWorkspaceClient({
   const [tp2Pct, setTp2Pct] = useState("");
   const [tp2Price, setTp2Price] = useState("");
   const [tp2SizePct, setTp2SizePct] = useState("50");
+  const [selectedFilter, setSelectedFilter] = useState<IdeasFilter>("all");
   const breadth = {
     breadthState: data?.meta?.breadth_state ?? "STRONG",
     breadthLabel: data?.meta?.breadth_label ?? "Breadth strong",
@@ -296,12 +298,18 @@ export default function IdeasWorkspaceClient({
   }, [initialSymbol, data?.rows]);
 
   const rows = useMemo(() => (data?.rows ?? []).slice(0, 10), [data]);
+  const filteredRows = useMemo(() => {
+    if (selectedFilter === "all") return rows;
+    if (selectedFilter === "buy") return rows.filter((r) => r.signal === "BUY");
+    if (selectedFilter === "watch") return rows.filter((r) => r.signal === "WATCH");
+    return rows.filter((r) => r.signal === "BUY" && r.action !== "SKIP");
+  }, [rows, selectedFilter]);
   const emptyStateMessage = useMemo(() => {
     if (loading) return "Loading ideas…";
     if (!data?.ok) return `Failed to load data: ${data?.error ?? "Unknown error"}`;
     const raw = Number(data?.meta?.rows_raw_count ?? 0);
     const validated = Number(data?.meta?.rows_after_validation_count ?? 0);
-    const display = Number(data?.meta?.rows_display_count ?? rows.length ?? 0);
+    const display = Number(data?.meta?.rows_display_count ?? filteredRows.length ?? 0);
     if (display > 0) return null;
     const strategyUsed = data?.meta?.strategy_version ?? strategy;
     const universeUsed = data?.meta?.universe_slug ?? defaultUniverseForStrategy(strategy);
@@ -323,7 +331,7 @@ export default function IdeasWorkspaceClient({
       return `BUY/WATCH rows exist but display filtering removed them for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
     }
     return `No BUY/WATCH candidates after display caps for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
-  }, [loading, data, rows.length, strategy]);
+  }, [loading, data, filteredRows.length, strategy]);
   const fillNum = Number(fill);
   const stopNum = Number(selected?.stop ?? 0);
   const riskPerShare = fillNum > 0 && stopNum > 0 ? fillNum - stopNum : 0;
@@ -620,10 +628,12 @@ export default function IdeasWorkspaceClient({
           {" • "}strategy_param={strategyParamRaw ?? "—"}
           {" • "}resolved_strategy_tab={strategy}
           {" • "}strategy_version={data?.meta?.strategy_version ?? strategy}
+          {" • "}filter={selectedFilter}
           {" • "}universe={data?.meta?.universe_slug ?? "—"}
           {" • "}requested_universe={data?.meta?.requested_universe_slug ?? "—"}
           {" • "}requested_date={data?.meta?.requested_date ?? "—"}
           {" • "}rows={rows.length}
+          {" • "}rows_filtered={filteredRows.length}
           {" • "}date_used={data?.meta?.date_used ?? "—"}
           {" • "}lctd={data?.meta?.lctd ?? "—"}
           {" • "}source={data?.meta?.data_source ?? "—"}
@@ -646,31 +656,56 @@ export default function IdeasWorkspaceClient({
         {loading ? <div className="p-5 text-sm text-slate-600">Loading ideas…</div> : null}
         {!loading && !data?.ok ? <div className="p-5 text-sm text-rose-600">Failed: {data?.error ?? "Unknown error"}</div> : null}
         {!loading && data?.ok ? (
-          <table className="w-full text-sm leading-6">
-            <thead className="text-left text-xs text-slate-500">
-              <tr className="border-b border-[#e2d2b7]">
-                <th className="px-4 py-3.5">Symbol</th>
-                <th className="px-4 py-3.5">Signal</th>
-                <th className="px-4 py-3.5">Rank</th>
-                <th className="px-4 py-3.5">Quality</th>
-                <th className="px-4 py-3.5">Entry</th>
-                <th className="px-4 py-3.5">Live</th>
-                <th className="px-4 py-3.5">Delta</th>
-                <th className="px-4 py-3.5">Stop</th>
-                <th className="px-4 py-3.5">TP1</th>
-                <th className="px-4 py-3.5">Action</th>
-                <th className="px-4 py-3.5">Position Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 ? (
-                <tr>
-                  <td className="px-4 py-5 text-sm text-slate-600" colSpan={11}>
-                    {emptyStateMessage ?? "No rows available."}
-                  </td>
+          <>
+            <div className="border-b border-[#e2d2b7] bg-[#fffaf2] px-4 py-2.5">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-slate-500">Filter:</span>
+                {([
+                  { key: "all", label: "All" },
+                  { key: "buy", label: "BUY" },
+                  { key: "watch", label: "WATCH" },
+                  { key: "actionable", label: "Actionable" },
+                ] as Array<{ key: IdeasFilter; label: string }>).map((f) => (
+                  <button
+                    key={f.key}
+                    type="button"
+                    onClick={() => setSelectedFilter(f.key)}
+                    className={`rounded-full border px-2.5 py-1 font-medium transition ${
+                      selectedFilter === f.key
+                        ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900"
+                        : "border-[#e4d5be] bg-[#fffdf8] text-slate-600 hover:bg-[#f7efe1]"
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <table className="w-full text-sm leading-6">
+              <thead className="text-left text-xs text-slate-500">
+                <tr className="border-b border-[#e2d2b7]">
+                  <th className="px-4 py-3.5">Symbol</th>
+                  <th className="px-4 py-3.5">Signal</th>
+                  <th className="px-4 py-3.5">Rank</th>
+                  <th className="px-4 py-3.5">Quality</th>
+                  <th className="px-4 py-3.5">Entry</th>
+                  <th className="px-4 py-3.5">Live</th>
+                  <th className="px-4 py-3.5">Delta</th>
+                  <th className="px-4 py-3.5">Stop</th>
+                  <th className="px-4 py-3.5">TP1</th>
+                  <th className="px-4 py-3.5">Action</th>
+                  <th className="px-4 py-3.5">Position Cost</th>
                 </tr>
-              ) : null}
-              {rows.map((row) => {
+              </thead>
+              <tbody>
+                {filteredRows.length === 0 ? (
+                  <tr>
+                    <td className="px-4 py-5 text-sm text-slate-600" colSpan={11}>
+                      {emptyStateMessage ?? "No rows available."}
+                    </td>
+                  </tr>
+                ) : null}
+                {filteredRows.map((row) => {
                 const q = quoteBySymbol[row.symbol];
                 const sym = String(row.symbol ?? "").trim().toUpperCase();
                 const earnings = earningsBySymbol[sym] ?? null;
@@ -749,8 +784,9 @@ export default function IdeasWorkspaceClient({
                   </tr>
                 );
               })}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </>
         ) : null}
       </div>
 
