@@ -327,12 +327,6 @@ export default async function DashboardPage({
         },
         { label: "Buying Power", value: <PrivacyMoney value={brokerAccount?.buying_power ?? null} />, subtitle: null, sourceField: "broker.account.buying_power" },
         {
-          label: "Broker Market Value",
-          value: <PrivacyMoney value={totalExposure} />,
-          subtitle: "From broker snapshot positions",
-          sourceField: "sum(broker.positions.market_value)",
-        },
-        {
           label: "Broker Positions",
           value: String(brokerSnapshot?.positions_count ?? brokerPositions.length ?? 0),
           subtitle: null,
@@ -346,15 +340,9 @@ export default async function DashboardPage({
         },
       ]
     : [
-        { label: "Account size", value: <PrivacyMoney value={snapshot?.account_size ?? null} />, subtitle: null, sourceField: "internal.snapshot.account_size" },
+        { label: "Account Size", value: <PrivacyMoney value={snapshot?.account_size ?? null} />, subtitle: null, sourceField: "internal.snapshot.account_size" },
         {
-          label: "Capital deployed",
-          value: <PrivacyMoney value={snapshot?.deployed_cost_basis ?? null} />,
-          subtitle: "Cost basis",
-          sourceField: "internal.snapshot.deployed_cost_basis",
-        },
-        {
-          label: "Cash available",
+          label: "Cash Available",
           value: (
             <>
               <PrivacyMoney value={snapshot?.cash_available ?? null} /> ({snapshot?.cash_source === "manual" ? "Exact" : "Estimated"})
@@ -363,9 +351,9 @@ export default async function DashboardPage({
           subtitle: null,
           sourceField: "internal.snapshot.cash_available",
         },
-        { label: "Market value", value: <PrivacyMoney value={snapshot?.market_value_optional ?? null} />, subtitle: null, sourceField: "internal.snapshot.market_value_optional" },
-        { label: "Open positions", value: String(snapshot?.open_count ?? 0), subtitle: null, sourceField: "internal.snapshot.open_count" },
-        { label: "Risk deployed", value: "—", subtitle: null, sourceField: "n/a" },
+        { label: "Capital Deployed", value: <PrivacyMoney value={snapshot?.deployed_cost_basis ?? null} />, subtitle: "Cost basis", sourceField: "internal.snapshot.deployed_cost_basis" },
+        { label: "Open Positions", value: String(snapshot?.open_count ?? 0), subtitle: null, sourceField: "internal.snapshot.open_count" },
+        { label: "Risk / Trade", value: `${(riskPerTrade * 100).toFixed(1)}%`, subtitle: null, sourceField: "internal.portfolio.risk_per_trade" },
       ];
   const topSignals = momentum.top.slice(0, 5);
   const topSymbols = Array.from(
@@ -414,14 +402,14 @@ export default async function DashboardPage({
 
   return (
     <AppShell currentPath="/dashboard" userEmail={user.email ?? ""} portfolios={portfolios}>
-      <div className="space-y-8">
-        <div>
+      <div className="space-y-5">
+        <div className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-3xl font-semibold tracking-tight text-slate-900 sm:text-[2.15rem]">Dashboard</h1>
             <PrivacyToggle />
           </div>
-          <p className="mt-1.5 text-sm leading-6 text-slate-600">Morning briefing for portfolio, market, and ideas.</p>
-          <p className="surface-chip mt-3 inline-flex px-2.5 py-1 text-xs font-medium text-slate-700">
+          <p className="text-sm leading-6 text-slate-600">Morning briefing for portfolio, market, and ideas.</p>
+          <p className="surface-chip inline-flex px-2.5 py-1 text-xs font-medium text-slate-700">
             {portfolioSourceLabel}
           </p>
           {showDiagnostics ? (
@@ -442,12 +430,12 @@ export default async function DashboardPage({
           ) : null}
         </div>
 
-        <section className="surface-panel px-4 py-3">
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+        <section className="surface-panel px-3 py-2.5">
+          <div className={`grid gap-2 ${isBrokerLinked ? "sm:grid-cols-2 lg:grid-cols-5" : "sm:grid-cols-2 lg:grid-cols-5"}`}>
             {summaryCards.map((card) => (
-              <div key={card.label} className="surface-card px-3 py-2.5">
-                <div className="muted-label">{card.label}</div>
-                <div className="mt-1 text-xl font-semibold tracking-tight text-slate-900">{card.value}</div>
+              <div key={card.label} className="surface-card px-3 py-2">
+                <div className="muted-label uppercase tracking-[0.06em]">{card.label}</div>
+                <div className="mt-0.5 text-lg font-semibold tracking-tight text-slate-900">{card.value}</div>
                 {card.subtitle ? <div className="mt-1 text-[11px] text-slate-500">{card.subtitle}</div> : null}
               </div>
             ))}
@@ -455,74 +443,9 @@ export default async function DashboardPage({
         </section>
 
         <section className="grid gap-3 lg:grid-cols-3">
-          <div className="surface-panel p-4 lg:col-span-2">
-            <div className="mb-2 flex items-center justify-between">
-              <div className="section-title">Quick Ticker Check</div>
-              <div className="text-xs text-slate-500">Manual check</div>
-            </div>
-            <TickerCheckClient breadthState={breadth.breadthState} breadthLabel={breadth.breadthLabel} />
-          </div>
-          <div className="surface-panel p-4">
-            <div className="section-title">Top Signals Today</div>
-            <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-              <div className="surface-card px-2 py-2">
-                <div className="muted-label">BUY</div>
-                <div className="mt-1 text-lg font-semibold text-emerald-700">{momentum.buy}</div>
-              </div>
-              <div className="surface-card px-2 py-2">
-                <div className="muted-label">WATCH</div>
-                <div className="mt-1 text-lg font-semibold text-amber-700">{momentum.watch}</div>
-              </div>
-              <div className="surface-card px-2 py-2">
-                <div className="muted-label">AVOID</div>
-                <div className="mt-1 text-lg font-semibold text-rose-700">{momentum.avoid}</div>
-              </div>
-            </div>
-            <div className="mt-3 text-xs text-slate-600">
-              Trend Hold: <span className="font-medium">{trend.buy}</span> BUY /{" "}
-              <span className="font-medium">{trend.watch}</span> WATCH
-            </div>
-          </div>
-        </section>
-
-        <section className="surface-panel p-5 sm:p-6">
-          <div className="section-title">Portfolio Risk</div>
-          <div className="mt-4 grid gap-3.5 md:grid-cols-3">
-            <div className="surface-card p-3.5">
-              <div className="muted-label">Total Exposure</div>
-              <div className="mt-1 text-xl font-semibold text-slate-900"><PrivacyMoney value={totalExposure} /></div>
-              {isBrokerLinked ? <div className="mt-1 text-[11px] text-slate-500">Broker snapshot market value</div> : null}
-            </div>
-            <div className="surface-card p-3.5">
-              <div className="muted-label">Cash Available</div>
-              <div className="mt-1 text-xl font-semibold text-slate-900"><PrivacyMoney value={cashAvailable} /></div>
-            </div>
-            <div className="surface-card p-3.5">
-              <div className="muted-label">Risk / Trade</div>
-              <div className="mt-1 text-xl font-semibold text-slate-900">{(riskPerTrade * 100).toFixed(1)}%</div>
-            </div>
-            <div className="surface-card p-3.5">
-              <div className="muted-label">Risk Deployed</div>
-              <div className="mt-1 text-xl font-semibold text-slate-900"><PrivacyMoney value={totalRiskDeployed} /></div>
-              {isBrokerLinked ? <div className="mt-1 text-[11px] text-slate-500">From internal tracked stops</div> : null}
-            </div>
-            <div className="surface-card p-3.5">
-              <div className="muted-label">Max Stop Loss Risk</div>
-              <div className="mt-1 text-xl font-semibold text-slate-900"><PrivacyMoney value={maxLossIfAllStopsHit} /></div>
-            </div>
-            <div className="surface-card p-3.5">
-              <div className="muted-label">Account Risk %</div>
-              <div className="mt-1 text-xl font-semibold text-slate-900">
-                {accountRiskPct != null && Number.isFinite(accountRiskPct) ? `${accountRiskPct.toFixed(1)}%` : "—"}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="grid gap-3 lg:grid-cols-3">
-          <section className="surface-panel p-4">
+          <section className="surface-panel p-3.5">
             <div className="section-title">Market Context</div>
-            <div className="mt-3 space-y-2 text-sm text-slate-700">
+            <div className="mt-2.5 space-y-2 text-sm text-slate-700">
               <div className="flex flex-wrap items-center gap-2">
                 <span
                   className={`rounded-full border px-2 py-1 text-xs font-semibold ${
@@ -546,7 +469,8 @@ export default async function DashboardPage({
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="surface-card px-2.5 py-2">LCTD: <span className="font-mono">{lctd.lctd ?? "—"}</span></div>
+                <div className="surface-card px-2.5 py-1.5">Latest scan: <span className="font-mono">{momentum.date ?? lctd.lctd ?? "—"}</span></div>
+                <div className="surface-card px-2.5 py-1.5">LCTD: <span className="font-mono">{lctd.lctd ?? "—"}</span></div>
                 <div className="surface-card px-2.5 py-2">Close: <span className="font-mono">{regime?.close != null ? Number(regime.close).toFixed(2) : "—"}</span></div>
                 <div className="surface-card px-2.5 py-2">SMA200: <span className="font-mono">{regime?.sma200 != null ? Number(regime.sma200).toFixed(2) : "—"}</span></div>
                 <div className="surface-card px-2.5 py-2">%&gt;SMA50: <span className="font-mono">{breadth.pctAboveSma50.toFixed(1)}%</span></div>
@@ -555,15 +479,29 @@ export default async function DashboardPage({
             </div>
           </section>
 
-          <section className="surface-panel p-4">
+          <section className="surface-panel p-3.5">
             <div className="mb-3 flex items-center justify-between">
-              <div className="section-title">Top Signals</div>
+              <div className="section-title">Top Signals Today</div>
               <Link
                 href="/ideas?strategy=momentum"
                 className="rounded-lg border border-[#d9ccb5] bg-[#efe6d6] px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-[#e8ddca]"
               >
                 Open Ideas
               </Link>
+            </div>
+            <div className="mb-2 grid grid-cols-3 gap-2 text-center">
+              <div className="surface-card px-2 py-1.5">
+                <div className="muted-label">BUY</div>
+                <div className="mt-0.5 text-base font-semibold text-emerald-700">{momentum.buy}</div>
+              </div>
+              <div className="surface-card px-2 py-1.5">
+                <div className="muted-label">WATCH</div>
+                <div className="mt-0.5 text-base font-semibold text-amber-700">{momentum.watch}</div>
+              </div>
+              <div className="surface-card px-2 py-1.5">
+                <div className="muted-label">AVOID</div>
+                <div className="mt-0.5 text-base font-semibold text-rose-700">{momentum.avoid}</div>
+              </div>
             </div>
             <div className="space-y-2.5">
               {topSignals.slice(0, 4).map((row: any) => (
@@ -593,7 +531,7 @@ export default async function DashboardPage({
             </div>
           </section>
 
-          <section className="surface-panel p-4">
+          <section className="surface-panel p-3.5">
             <div className="mb-3 flex items-center justify-between">
               <div className="section-title">Sector Momentum</div>
               <Link href="/ideas?strategy=sector" className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]">
@@ -631,58 +569,33 @@ export default async function DashboardPage({
           </section>
         </section>
 
-        <section className="surface-panel p-5 sm:p-6">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="section-title">Broker Snapshot (Read-only)</div>
-            <Link
-              href="/broker"
-              className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]"
-            >
-              Open broker
-            </Link>
-          </div>
-          <div className="grid gap-3.5 md:grid-cols-6">
-            <div className="surface-card p-3.5 md:col-span-2">
-              <div className="muted-label">Connection</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">
-                {brokerConnected ? "Connected" : brokerSnapshot?.configured ? "Configured / Not Connected" : "Not Configured"}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                Last sync: {brokerStatusRow?.updated_at ?? "—"}
-              </div>
-            </div>
-            <div className="surface-card p-3.5">
-              <div className="muted-label">Currency</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{brokerAccount?.currency ?? "—"}</div>
-            </div>
-            <div className="surface-card p-3.5">
-              <div className="muted-label">Cash Available</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900"><PrivacyMoney value={brokerAccount?.cash_available} /></div>
-            </div>
-            <div className="surface-card p-3.5">
-              <div className="muted-label">Equity</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900"><PrivacyMoney value={brokerAccount?.equity} /></div>
-            </div>
-            <div className="surface-card p-3.5">
-              <div className="muted-label">Buying Power</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900"><PrivacyMoney value={brokerAccount?.buying_power} /></div>
-            </div>
-            <div className="surface-card p-3.5">
-              <div className="muted-label">Positions</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{brokerSnapshot?.positions_count ?? 0}</div>
-            </div>
-          </div>
-        </section>
-
         <section className="grid gap-3 md:grid-cols-2">
-          <div className="surface-panel p-4 sm:p-5">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-base font-semibold tracking-tight">Open Positions Snapshot</div>
+          <div className="surface-panel p-3.5">
+            <div className="mb-2.5 flex items-center justify-between">
+              <div className="section-title">Portfolio Exposure</div>
               <Link href="/positions" className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]">
                 Open positions
               </Link>
             </div>
-            <div className="space-y-2 text-sm">
+            <div className="mb-2 grid grid-cols-2 gap-2">
+              <div className="surface-card px-2.5 py-2">
+                <div className="muted-label">Total Exposure</div>
+                <div className="mt-0.5 text-base font-semibold text-slate-900"><PrivacyMoney value={totalExposure} /></div>
+              </div>
+              <div className="surface-card px-2.5 py-2">
+                <div className="muted-label">Cash Available</div>
+                <div className="mt-0.5 text-base font-semibold text-slate-900"><PrivacyMoney value={cashAvailable} /></div>
+              </div>
+              <div className="surface-card px-2.5 py-2">
+                <div className="muted-label">Risk Deployed</div>
+                <div className="mt-0.5 text-base font-semibold text-slate-900"><PrivacyMoney value={totalRiskDeployed} /></div>
+              </div>
+              <div className="surface-card px-2.5 py-2">
+                <div className="muted-label">Max Stop Loss</div>
+                <div className="mt-0.5 text-base font-semibold text-slate-900"><PrivacyMoney value={maxLossIfAllStopsHit} /></div>
+              </div>
+            </div>
+            <div className="space-y-1.5 text-sm">
               <div className="text-xs text-slate-500">
                 {isBrokerLinked ? "Showing broker-held positions (read-only snapshot)." : "Showing internal tracked open positions."}
               </div>
@@ -700,26 +613,57 @@ export default async function DashboardPage({
               ))}
             </div>
           </div>
-          <div className="surface-panel p-4 sm:p-5">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-base font-semibold tracking-tight">Strategy Pulse</div>
-              <div className="text-xs text-slate-500">Current scan date</div>
+          <div className="surface-panel p-3.5">
+            <div className="mb-2.5 flex items-center justify-between">
+              <div className="section-title">Execution & Broker</div>
+              <Link
+                href="/broker"
+                className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]"
+              >
+                Open broker
+              </Link>
             </div>
-            <div className="space-y-2.5">
-              <div className="surface-card flex items-center justify-between px-3 py-2.5 text-sm">
+            <div className="space-y-2">
+              <div className="surface-card grid grid-cols-2 gap-2 px-3 py-2 text-sm">
+                <div>
+                  <div className="muted-label">Broker status</div>
+                  <div className="mt-0.5 font-semibold text-slate-900">
+                    {brokerConnected ? "Connected" : brokerSnapshot?.configured ? "Configured / Not Connected" : "Not Configured"}
+                  </div>
+                </div>
+                <div>
+                  <div className="muted-label">Last sync</div>
+                  <div className="mt-0.5 text-xs text-slate-700">{brokerStatusRow?.updated_at ?? "—"}</div>
+                </div>
+              </div>
+              <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
                 <span className="font-medium text-slate-900">Momentum Swing</span>
                 <span className="text-slate-700">BUY {momentum.buy} / WATCH {momentum.watch}</span>
               </div>
-              <div className="surface-card flex items-center justify-between px-3 py-2.5 text-sm">
+              <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
                 <span className="font-medium text-slate-900">Trend Hold</span>
                 <span className="text-slate-700">BUY {trend.buy} / WATCH {trend.watch}</span>
               </div>
-              <div className="surface-card flex items-center justify-between px-3 py-2.5 text-sm">
+              <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
                 <span className="font-medium text-slate-900">Sector Momentum</span>
                 <span className="text-slate-700">{sectorMomentum.ok ? `${sectorMomentum.candidates.length} candidates` : "Unavailable"}</span>
               </div>
+              <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
+                <span className="font-medium text-slate-900">Account Risk %</span>
+                <span className="text-slate-700">
+                  {accountRiskPct != null && Number.isFinite(accountRiskPct) ? `${accountRiskPct.toFixed(1)}%` : "—"}
+                </span>
+              </div>
             </div>
           </div>
+        </section>
+
+        <section className="surface-panel p-3.5">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="section-title">Quick Ticker Check</div>
+            <div className="text-xs text-slate-500">Manual check</div>
+          </div>
+          <TickerCheckClient breadthState={breadth.breadthState} breadthLabel={breadth.breadthLabel} />
         </section>
       </div>
     </AppShell>
