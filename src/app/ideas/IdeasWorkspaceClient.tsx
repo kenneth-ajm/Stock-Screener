@@ -7,7 +7,7 @@ import { applyEarningsRiskToAction, type EarningsRisk } from "@/lib/earnings_ris
 import { applyBreadthToAction } from "@/lib/market_breadth";
 import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
-type StrategyVersion = "v2_core_momentum" | "v1_sector_momentum" | "v1_trend_hold";
+type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold";
 
 type IdeaRow = {
   symbol: string;
@@ -98,7 +98,7 @@ function fmtSignedPct(v: number | null) {
 }
 
 export default function IdeasWorkspaceClient({
-  initialStrategy = "v2_core_momentum",
+  initialStrategy = "v1",
   initialSymbol = null,
   strategyParamRaw = null,
   showDiagnostics = false,
@@ -492,9 +492,9 @@ export default function IdeasWorkspaceClient({
       <div className="surface-panel flex flex-wrap items-center justify-between gap-4 p-4">
         <div className="flex items-center gap-2 rounded-xl border border-[#e3d5bf] bg-[#fcf8f1] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
           <button
-            onClick={() => setStrategy("v2_core_momentum")}
+            onClick={() => setStrategy("v1")}
             className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
-              strategy === "v2_core_momentum"
+              strategy === "v1"
                 ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}

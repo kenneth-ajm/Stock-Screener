@@ -10,9 +10,9 @@ function normalizeIdeasStrategy(input: string | null | undefined) {
   const raw = String(input ?? "").trim().toLowerCase();
   if (raw === "v1_trend_hold" || raw === "trend") return "v1_trend_hold";
   if (raw === "v1_sector_momentum" || raw === "sector") return "v1_sector_momentum";
-  if (raw === "v2_core_momentum" || raw === "momentum" || raw === "core" || raw === "swing" || raw === "")
-    return "v2_core_momentum";
-  return "v2_core_momentum";
+  if (raw === "v1" || raw === "v2_core_momentum" || raw === "momentum" || raw === "core" || raw === "swing" || raw === "")
+    return "v1";
+  return "v1";
 }
 
 export default async function IdeasPage({
@@ -22,7 +22,7 @@ export default async function IdeasPage({
 }) {
   const { user, portfolios } = await getWorkspaceContext("/ideas");
   const params = (await searchParams) ?? {};
-  const initialStrategy = normalizeIdeasStrategy(params.strategy ?? "v2_core_momentum");
+  const initialStrategy = normalizeIdeasStrategy(params.strategy ?? "v1");
   const strategyParamRaw = String(params.strategy ?? "").trim() || null;
   const initialSymbol = String(params.symbol ?? "").trim().toUpperCase() || null;
   const diagRaw = String(params.diag ?? "").trim().toLowerCase();

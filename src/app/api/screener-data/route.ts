@@ -15,7 +15,7 @@ import {
 import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
 const DEFAULT_UNIVERSE = "core_800";
-const DEFAULT_STRATEGY = "v2_core_momentum";
+const DEFAULT_STRATEGY = "v1";
 const BUY_CAP = 5;
 const WATCH_CAP = 10;
 const ENTRY_MISMATCH_THRESHOLD_PCT = 0.6;
@@ -25,8 +25,8 @@ function normalizeStrategyVersion(input: string | null | undefined) {
   if (!raw) return DEFAULT_STRATEGY;
   if (raw === "trend" || raw === "v1_trend_hold") return "v1_trend_hold";
   if (raw === "sector" || raw === "v1_sector_momentum") return "v1_sector_momentum";
-  if (raw === "momentum" || raw === "swing" || raw === "core" || raw === "v2_core_momentum")
-    return "v2_core_momentum";
+  if (raw === "momentum" || raw === "swing" || raw === "core" || raw === "v2_core_momentum" || raw === "v1")
+    return "v1";
   return raw;
 }
 
@@ -148,7 +148,7 @@ const loadScreenerDataCached = unstable_cache(
         if (!d) return [] as any[];
         const { data } = await (supabase as any)
           .from("daily_scans")
-          .select("symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,quality_score,risk_grade,quality_signal,quality_summary,reason_summary,reason_json")
+          .select("symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json")
           .eq("universe_slug", mappedUniverse)
           .eq("strategy_version", strategyVersion)
           .eq("date", d)
@@ -205,7 +205,7 @@ const loadScreenerDataCached = unstable_cache(
         ? await (supabase as any)
             .from("daily_scans")
             .select(
-              "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,quality_score,risk_grade,quality_signal,quality_summary,reason_summary"
+              "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json"
             )
             .eq("universe_slug", mappedUniverse)
             .eq("strategy_version", strategyVersion)
@@ -232,7 +232,7 @@ const loadScreenerDataCached = unstable_cache(
         const { data: fallbackRows } = await (supabase as any)
           .from("daily_scans")
           .select(
-            "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,quality_score,risk_grade,quality_signal,quality_summary,reason_summary"
+            "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json"
           )
           .eq("universe_slug", mappedUniverse)
           .eq("strategy_version", strategyVersion)
@@ -300,11 +300,15 @@ const loadScreenerDataCached = unstable_cache(
 
     const cappedRows = applyDisplayCaps(entryValidatedRows);
     const withActions = cappedRows.map((row) => {
+      const persistedSignalQuality = (row?.reason_json as any)?.signal_quality as
+        | { quality_score?: unknown; risk_grade?: unknown; quality_signal?: unknown; summary?: unknown }
+        | undefined;
       const quality =
-        typeof row.quality_score === "number" && Number.isFinite(row.quality_score)
+        typeof persistedSignalQuality?.quality_score === "number" &&
+        Number.isFinite(persistedSignalQuality?.quality_score)
           ? {
-              quality_score: Number(row.quality_score),
-              risk_grade: (row.risk_grade ?? "C") as "A" | "B" | "C" | "D",
+              quality_score: Number(persistedSignalQuality.quality_score),
+              risk_grade: (persistedSignalQuality?.risk_grade ?? "C") as "A" | "B" | "C" | "D",
             }
           : scoreSignalQuality({
               strategy_version: strategyVersion,
@@ -352,10 +356,10 @@ const loadScreenerDataCached = unstable_cache(
         tp2: Number(row.tp2 ?? 0),
         rank: row.rank ?? null,
         rank_score: row.rank_score ?? null,
-        quality_score: row.quality_score ?? null,
-        risk_grade: row.risk_grade ?? null,
-        quality_signal: row.quality_signal ?? null,
-        quality_summary: row.quality_summary ?? null,
+        quality_score: persistedSignalQuality?.quality_score ?? null,
+        risk_grade: (persistedSignalQuality?.risk_grade as any) ?? null,
+        quality_signal: (persistedSignalQuality?.quality_signal as any) ?? null,
+        quality_summary: (persistedSignalQuality?.summary as any) ?? null,
         trade_risk_layer: persistedTradeRisk ?? tradeRisk,
         reason_summary: row.reason_summary ?? null,
         reason_json: row.reason_json ?? null,
