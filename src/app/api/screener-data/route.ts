@@ -12,7 +12,7 @@ import { buildTradeRiskLayer } from "@/lib/trade_risk_layer";
 import {
   SECTOR_MOMENTUM_STRATEGY_VERSION,
 } from "@/lib/sector_momentum";
-import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
+import { allowedUniversesForStrategy, defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY = "v1";
@@ -166,13 +166,16 @@ const loadScreenerDataCached = unstable_cache(
 
     const lctd = await getLCTD(supabase as any);
     const requestedUniverse = String(universeSlug ?? "").trim();
+    const allowedUniverses = allowedUniversesForStrategy(strategyVersion);
     let mappedUniverse = requestedUniverse || defaultUniverseForStrategy(strategyVersion) || DEFAULT_UNIVERSE;
+    const isAutoUniverse = !requestedUniverse;
     const dateUsed = requestedDate && requestedDate.trim() ? requestedDate.trim() : lctd.lctd;
     if (!requestedUniverse) {
       const { data: latestUniverseRow } = await (supabase as any)
         .from("daily_scans")
         .select("universe_slug,date")
         .eq("strategy_version", strategyVersion)
+        .in("universe_slug", allowedUniverses)
         .not("universe_slug", "is", null)
         .order("date", { ascending: false })
         .limit(1)
@@ -224,69 +227,62 @@ const loadScreenerDataCached = unstable_cache(
     let resolvedDateUsed = dateUsed;
     let dataSource = "daily_scans_cache";
     const fallbackDecisions: string[] = [];
-    let rawRows: ScanRow[] = await fetchRowsFor(mappedUniverse, resolvedDateUsed);
+    let rawRows: ScanRow[] = [];
+    const autoUniverseDates: Array<{ universe_slug: string; date_used: string | null; rows: number }> = [];
 
-    if (rawRows.length === 0) {
-      const { data: latestDateSameUniverse } = await (supabase as any)
-        .from("daily_scans")
-        .select("date")
-        .eq("strategy_version", strategyVersion)
-        .eq("universe_slug", mappedUniverse)
-        .order("date", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const fallbackDate = latestDateSameUniverse?.date ? String(latestDateSameUniverse.date) : null;
-      if (fallbackDate && fallbackDate !== resolvedDateUsed) {
-        resolvedDateUsed = fallbackDate;
-        rawRows = await fetchRowsFor(mappedUniverse, resolvedDateUsed);
-        dataSource = "daily_scans_cache_fallback_latest_date";
-        fallbackDecisions.push(`date->${resolvedDateUsed} (latest for strategy+universe)`);
-      }
-    }
-
-    if (rawRows.length === 0 && !requestedUniverse) {
-      const { data: latestAnyUniverse } = await (supabase as any)
-        .from("daily_scans")
-        .select("date,universe_slug")
-        .eq("strategy_version", strategyVersion)
-        .not("universe_slug", "is", null)
-        .order("date", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const fallbackUniverse = String(latestAnyUniverse?.universe_slug ?? "").trim();
-      const fallbackDate = latestAnyUniverse?.date ? String(latestAnyUniverse.date) : null;
-      if (fallbackUniverse && fallbackDate) {
-        if (fallbackUniverse !== mappedUniverse) {
-          mappedUniverse = fallbackUniverse;
-          fallbackDecisions.push(`universe->${mappedUniverse} (latest for strategy)`);
+    if (isAutoUniverse) {
+      dataSource = "daily_scans_cache_auto_union";
+      const unionRows: ScanRow[] = [];
+      for (const universe of allowedUniverses) {
+        let universeDate = resolvedDateUsed;
+        let rows = await fetchRowsFor(universe, universeDate);
+        if (rows.length === 0) {
+          const { data: latestDateSameUniverse } = await (supabase as any)
+            .from("daily_scans")
+            .select("date")
+            .eq("strategy_version", strategyVersion)
+            .eq("universe_slug", universe)
+            .order("date", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          const fallbackDate = latestDateSameUniverse?.date ? String(latestDateSameUniverse.date) : null;
+          if (fallbackDate && fallbackDate !== universeDate) {
+            universeDate = fallbackDate;
+            rows = await fetchRowsFor(universe, universeDate);
+          }
         }
-        if (fallbackDate !== resolvedDateUsed) {
-          resolvedDateUsed = fallbackDate;
-          fallbackDecisions.push(`date->${resolvedDateUsed} (latest for strategy)`);
-        }
-        rawRows = await fetchRowsFor(mappedUniverse, resolvedDateUsed);
-        dataSource = "daily_scans_cache_fallback_latest_strategy_universe";
+        autoUniverseDates.push({
+          universe_slug: universe,
+          date_used: universeDate ?? null,
+          rows: rows.length,
+        });
+        unionRows.push(...rows);
       }
-    }
-
-    if (!isSectorMomentum && !requestedDate) {
-      const actionableCount = rawRows.filter((r) => r.signal === "BUY" || r.signal === "WATCH").length;
-      if (actionableCount === 0) {
-        const { data: latestActionableDateRow } = await (supabase as any)
+      rawRows = unionRows;
+      const populated = autoUniverseDates
+        .filter((u) => u.rows > 0)
+        .sort((a, b) => String(b.date_used ?? "").localeCompare(String(a.date_used ?? "")));
+      if (populated[0]?.universe_slug) {
+        mappedUniverse = populated[0].universe_slug;
+        resolvedDateUsed = populated[0].date_used ?? resolvedDateUsed;
+      }
+    } else {
+      rawRows = await fetchRowsFor(mappedUniverse, resolvedDateUsed);
+      if (rawRows.length === 0) {
+        const { data: latestDateSameUniverse } = await (supabase as any)
           .from("daily_scans")
           .select("date")
           .eq("strategy_version", strategyVersion)
           .eq("universe_slug", mappedUniverse)
-          .in("signal", ["BUY", "WATCH"])
           .order("date", { ascending: false })
           .limit(1)
           .maybeSingle();
-        const fallbackActionableDate = latestActionableDateRow?.date ? String(latestActionableDateRow.date) : null;
-        if (fallbackActionableDate && fallbackActionableDate !== resolvedDateUsed) {
-          resolvedDateUsed = fallbackActionableDate;
+        const fallbackDate = latestDateSameUniverse?.date ? String(latestDateSameUniverse.date) : null;
+        if (fallbackDate && fallbackDate !== resolvedDateUsed) {
+          resolvedDateUsed = fallbackDate;
           rawRows = await fetchRowsFor(mappedUniverse, resolvedDateUsed);
-          dataSource = "daily_scans_cache_fallback_latest_actionable_date";
-          fallbackDecisions.push(`date->${resolvedDateUsed} (latest BUY/WATCH for strategy+universe)`);
+          dataSource = "daily_scans_cache_fallback_latest_date";
+          fallbackDecisions.push(`date->${resolvedDateUsed} (latest for strategy+universe)`);
         }
       }
     }
@@ -497,6 +493,9 @@ const loadScreenerDataCached = unstable_cache(
         rows_count_scope: "loaded_rows_limit",
         rows_query_limit: MAX_ROWS,
         selected_universe_has_rows: rawRows.length > 0,
+        selected_universe_mode: isAutoUniverse ? "auto_union" : "explicit",
+        allowed_universes: allowedUniverses,
+        auto_universe_dates: autoUniverseDates,
         universe_availability: {
           core_800: coreStats,
           midcap_1000: midcapStats,

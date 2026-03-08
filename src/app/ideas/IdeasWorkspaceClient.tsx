@@ -72,6 +72,9 @@ type Payload = {
     rows_count_scope?: string | null;
     rows_query_limit?: number | null;
     selected_universe_has_rows?: boolean | null;
+    selected_universe_mode?: string | null;
+    allowed_universes?: string[] | null;
+    auto_universe_dates?: Array<{ universe_slug: string; date_used: string | null; rows: number }> | null;
     universe_availability?: Record<
       string,
       {
@@ -395,8 +398,12 @@ export default function IdeasWorkspaceClient({
   const universeAvailability = data?.meta?.universe_availability ?? {};
   const coreAvailability = universeAvailability["core_800"] ?? null;
   const midcapAvailability = universeAvailability["midcap_1000"] ?? null;
+  const liquidAvailability = universeAvailability["liquid_2000"] ?? null;
+  const growthAvailability = universeAvailability["growth_1500"] ?? null;
   const isCoreEnabled = !coreAvailability ? true : Boolean(coreAvailability.has_scans);
   const isMidcapEnabled = !midcapAvailability ? true : Boolean(midcapAvailability.has_scans);
+  const isLiquidEnabled = !liquidAvailability ? true : Boolean(liquidAvailability.has_scans);
+  const isGrowthEnabled = !growthAvailability ? true : Boolean(growthAvailability.has_scans);
   const emptyStateMessage = useMemo(() => {
     if (loading) return "Loading ideas…";
     if (!data?.ok) return `Failed to load data: ${data?.error ?? "Unknown error"}`;
@@ -782,6 +789,32 @@ export default function IdeasWorkspaceClient({
           >
             Midcap 1000
           </button>
+          <button
+            onClick={() => setUniverseMode("liquid_2000")}
+            disabled={!isLiquidEnabled}
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
+              universeMode === "liquid_2000"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : !isLiquidEnabled
+                ? "cursor-not-allowed border-transparent bg-transparent text-slate-400"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
+            }`}
+          >
+            Liquid 2000
+          </button>
+          <button
+            onClick={() => setUniverseMode("growth_1500")}
+            disabled={!isGrowthEnabled}
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
+              universeMode === "growth_1500"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : !isGrowthEnabled
+                ? "cursor-not-allowed border-transparent bg-transparent text-slate-400"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
+            }`}
+          >
+            Growth 1500
+          </button>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
           <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
@@ -870,6 +903,7 @@ export default function IdeasWorkspaceClient({
           {" • "}resolved_strategy_tab={strategy}
           {" • "}selected_universe={universeMode}
           {" • "}selected_universe_mode={universeMode === "auto" ? "auto_latest_populated" : "explicit"}
+          {" • "}meta_universe_mode={data?.meta?.selected_universe_mode ?? "—"}
           {" • "}strategy_version={data?.meta?.strategy_version ?? strategy}
           {" • "}filter={selectedFilter}
           {" • "}universe={data?.meta?.universe_slug ?? "—"}
@@ -879,6 +913,10 @@ export default function IdeasWorkspaceClient({
           {" • "}core_latest={coreAvailability?.latest_date ?? "—"}
           {" • "}midcap_has_scans={String(Boolean(midcapAvailability?.has_scans))}
           {" • "}midcap_latest={midcapAvailability?.latest_date ?? "—"}
+          {" • "}liquid_has_scans={String(Boolean(liquidAvailability?.has_scans))}
+          {" • "}liquid_latest={liquidAvailability?.latest_date ?? "—"}
+          {" • "}growth_has_scans={String(Boolean(growthAvailability?.has_scans))}
+          {" • "}growth_latest={growthAvailability?.latest_date ?? "—"}
           {" • "}requested_date={data?.meta?.requested_date ?? "—"}
           {" • "}rows={rows.length}
           {" • "}rows_filtered={filteredRows.length}

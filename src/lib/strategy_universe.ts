@@ -15,3 +15,11 @@ export function defaultUniverseForStrategy(strategyVersion: string) {
   if (strategy === CORE_MOMENTUM_DEFAULT_VERSION) return CORE_UNIVERSE_SLUG;
   return CORE_UNIVERSE_SLUG;
 }
+
+export function allowedUniversesForStrategy(strategyVersion: string) {
+  const strategy = String(strategyVersion ?? "").trim();
+  if (strategy === "v1") return [LEGACY_MOMENTUM_UNIVERSE_SLUG, MIDCAP_UNIVERSE_SLUG];
+  if (strategy === TREND_HOLD_DEFAULT_VERSION) return [CORE_UNIVERSE_SLUG, LEGACY_MOMENTUM_UNIVERSE_SLUG];
+  if (strategy === SECTOR_MOMENTUM_STRATEGY_VERSION) return [GROWTH_UNIVERSE_SLUG, MIDCAP_UNIVERSE_SLUG];
+  return [defaultUniverseForStrategy(strategy)];
+}

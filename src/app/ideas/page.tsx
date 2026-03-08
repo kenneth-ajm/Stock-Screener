@@ -29,6 +29,8 @@ export default async function IdeasPage({
     const raw = String(params.universe ?? "").trim().toLowerCase();
     if (raw === "auto" || raw === "") return "auto";
     if (raw === "midcap_1000" || raw === "midcap" || raw === "mid") return "midcap_1000";
+    if (raw === "liquid_2000" || raw === "liquid") return "liquid_2000";
+    if (raw === "growth_1500" || raw === "growth") return "growth_1500";
     if (raw === "core_800" || raw === "core") return "core_800";
     return "auto";
   })();
