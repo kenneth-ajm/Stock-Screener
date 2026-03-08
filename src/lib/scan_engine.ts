@@ -46,11 +46,6 @@ type ScanRowPayload = {
   tp2: number;
   reason_summary: string;
   reason_json: RuleEvaluation["reason_json"];
-  quality_score: number;
-  quality_components: Record<string, number>;
-  risk_grade: "A" | "B" | "C" | "D";
-  quality_summary: string;
-  quality_signal: RuleEvaluation["signal"];
   updated_at: string;
 };
 
@@ -274,84 +269,11 @@ export async function upsertRawDailyScans(opts: {
 }) {
   const supa = opts.supabase as any;
   if (!opts.rows.length) return { ok: true, upserted: 0 };
-  const sample = opts.rows[0];
-  const symbols = Array.from(new Set(opts.rows.map((row) => String(row.symbol ?? "").toUpperCase())));
-
-  const { data: existingRows, error: existingErr } = await supa
-    .from("daily_scans")
-    .select("id,symbol,signal,rank,rank_score")
-    .eq("date", sample.date)
-    .eq("universe_slug", sample.universe_slug)
-    .eq("strategy_version", sample.strategy_version)
-    .in("symbol", symbols);
-  if (existingErr) return { ok: false, upserted: 0, error: existingErr.message };
-
-  const existingBySymbol = new Map<string, any>(
-    (existingRows ?? []).map((row: any) => [String(row.symbol ?? "").toUpperCase(), row])
-  );
-  const finalizedSignals = new Set(["BUY", "WATCH", "AVOID"]);
-  const lockedRows: Array<{
-    id: string | number;
-    confidence: number;
-    entry: number;
-    stop: number;
-    tp1: number;
-    tp2: number;
-    reason_summary: string;
-    reason_json: RuleEvaluation["reason_json"];
-    quality_score: number;
-    quality_components: Record<string, number>;
-    risk_grade: "A" | "B" | "C" | "D";
-    quality_summary: string;
-    quality_signal: RuleEvaluation["signal"];
-    updated_at: string;
-  }> = [];
-  const unlockedRows: ScanRowPayload[] = [];
-
-  for (const row of opts.rows) {
-    const existing = existingBySymbol.get(String(row.symbol ?? "").toUpperCase());
-    const isLocked =
-      !!existing &&
-      existing.rank != null &&
-      existing.rank_score != null &&
-      finalizedSignals.has(String(existing.signal ?? ""));
-    if (isLocked && existing?.id != null) {
-      lockedRows.push({
-        id: existing.id,
-        confidence: row.confidence,
-        entry: row.entry,
-        stop: row.stop,
-        tp1: row.tp1,
-        tp2: row.tp2,
-        reason_summary: row.reason_summary,
-        reason_json: row.reason_json,
-        quality_score: row.quality_score,
-        quality_components: row.quality_components,
-        risk_grade: row.risk_grade,
-        quality_summary: row.quality_summary,
-        quality_signal: row.quality_signal,
-        updated_at: new Date().toISOString(),
-      });
-    } else {
-      unlockedRows.push(row);
-    }
-  }
-
   let totalUpserted = 0;
   const chunkSize = 500;
 
-  for (let i = 0; i < lockedRows.length; i += chunkSize) {
-    const chunk = lockedRows.slice(i, i + chunkSize);
-    const { data, error } = await supa
-      .from("daily_scans")
-      .upsert(chunk as any[], { onConflict: "id" })
-      .select("id");
-    if (error) return { ok: false, upserted: totalUpserted, error: error.message };
-    totalUpserted += data?.length ?? chunk.length;
-  }
-
-  for (let i = 0; i < unlockedRows.length; i += chunkSize) {
-    const chunk = unlockedRows.slice(i, i + chunkSize);
+  for (let i = 0; i < opts.rows.length; i += chunkSize) {
+    const chunk = opts.rows.slice(i, i + chunkSize);
     const { data, error } = await supa
       .from("daily_scans")
       .upsert(chunk as any[], { onConflict: "date,universe_slug,symbol,strategy_version" })
@@ -536,11 +458,6 @@ export async function runScanPipeline(opts: {
         },
         trade_risk_layer: tradeRisk,
       } as RuleEvaluation["reason_json"],
-      quality_score: quality.quality_score,
-      quality_components: quality.components,
-      risk_grade: quality.risk_grade,
-      quality_summary: quality.quality_summary,
-      quality_signal: quality.quality_signal,
       updated_at: new Date().toISOString(),
     });
   }

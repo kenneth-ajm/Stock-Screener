@@ -235,11 +235,6 @@ export async function runPopulate() {
         },
         trade_risk_layer: tradeRisk,
       },
-      quality_score: quality.quality_score,
-      quality_components: quality.components,
-      risk_grade: quality.risk_grade,
-      quality_summary: quality.quality_summary,
-      quality_signal: quality.quality_signal,
       updated_at: new Date().toISOString(),
     };
   });

@@ -296,11 +296,21 @@ export default function IdeasWorkspaceClient({
     const strategyUsed = data?.meta?.strategy_version ?? strategy;
     const universeUsed = data?.meta?.universe_slug ?? defaultUniverseForStrategy(strategy);
     const dateShown = data?.meta?.date_used ?? data?.meta?.requested_date ?? data?.meta?.lctd ?? "latest";
+    const signalCountsRaw = data?.meta?.rows_signal_counts_raw ?? {};
+    const signalCountsValidated = data?.meta?.rows_signal_counts_validated ?? {};
+    const rawActionable = Number(signalCountsRaw.buy ?? 0) + Number(signalCountsRaw.watch ?? 0);
+    const validatedActionable = Number(signalCountsValidated.buy ?? 0) + Number(signalCountsValidated.watch ?? 0);
     if (raw === 0) {
       return `No rows for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
     }
     if (validated === 0) {
       return `Rows were filtered out after validation for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
+    }
+    if (rawActionable === 0 || validatedActionable === 0) {
+      return `Rows exist but none are BUY/WATCH for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
+    }
+    if (validatedActionable > 0 && display === 0) {
+      return `BUY/WATCH rows exist but display filtering removed them for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
     }
     return `No BUY/WATCH candidates after display caps for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
   }, [loading, data, rows.length, strategy]);

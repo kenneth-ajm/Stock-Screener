@@ -438,17 +438,48 @@ export default async function DashboardPage({
           ) : null}
         </div>
 
-        <section className="grid gap-4 md:grid-cols-3">
-          {summaryCards.map((card) => (
-            <div key={card.label} className="surface-panel p-5 sm:p-6">
-              <div className="muted-label">{card.label}</div>
-              <div className="headline-value">{card.value}</div>
-              {card.subtitle ? <div className="mt-1.5 text-xs text-slate-500">{card.subtitle}</div> : null}
-            </div>
-          ))}
+        <section className="surface-panel px-4 py-3">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+            {summaryCards.map((card) => (
+              <div key={card.label} className="surface-card px-3 py-2.5">
+                <div className="muted-label">{card.label}</div>
+                <div className="mt-1 text-xl font-semibold tracking-tight text-slate-900">{card.value}</div>
+                {card.subtitle ? <div className="mt-1 text-[11px] text-slate-500">{card.subtitle}</div> : null}
+              </div>
+            ))}
+          </div>
         </section>
 
-        <TickerCheckClient breadthState={breadth.breadthState} breadthLabel={breadth.breadthLabel} />
+        <section className="grid gap-3 lg:grid-cols-3">
+          <div className="surface-panel p-4 lg:col-span-2">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="section-title">Quick Ticker Check</div>
+              <div className="text-xs text-slate-500">Manual check</div>
+            </div>
+            <TickerCheckClient breadthState={breadth.breadthState} breadthLabel={breadth.breadthLabel} />
+          </div>
+          <div className="surface-panel p-4">
+            <div className="section-title">Top Signals Today</div>
+            <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+              <div className="surface-card px-2 py-2">
+                <div className="muted-label">BUY</div>
+                <div className="mt-1 text-lg font-semibold text-emerald-700">{momentum.buy}</div>
+              </div>
+              <div className="surface-card px-2 py-2">
+                <div className="muted-label">WATCH</div>
+                <div className="mt-1 text-lg font-semibold text-amber-700">{momentum.watch}</div>
+              </div>
+              <div className="surface-card px-2 py-2">
+                <div className="muted-label">AVOID</div>
+                <div className="mt-1 text-lg font-semibold text-rose-700">{momentum.avoid}</div>
+              </div>
+            </div>
+            <div className="mt-3 text-xs text-slate-600">
+              Trend Hold: <span className="font-medium">{trend.buy}</span> BUY /{" "}
+              <span className="font-medium">{trend.watch}</span> WATCH
+            </div>
+          </div>
+        </section>
 
         <section className="surface-panel p-5 sm:p-6">
           <div className="section-title">Portfolio Risk</div>
@@ -484,50 +515,116 @@ export default async function DashboardPage({
           </div>
         </section>
 
-        <section className="surface-panel p-5 sm:p-6">
-          <div className="section-title">Market Context</div>
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-700">
-            <span
-              className={`rounded-full border px-2 py-1 text-xs font-semibold ${
-                regime?.state === "FAVORABLE"
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : "border-amber-200 bg-amber-50 text-amber-700"
-              }`}
-            >
-              {regime?.state ?? "—"}
-            </span>
-            <span className="rounded-full border border-[#e5d9c8] bg-[#fffdf8] px-2 py-1 text-xs font-medium">
-              LCTD: <span className="font-mono">{lctd.lctd ?? "—"}</span>
-            </span>
-            <span className="rounded-full border border-[#e5d9c8] bg-[#fffdf8] px-2 py-1 text-xs font-medium">
-              Close: <span className="font-mono">{regime?.close != null ? Number(regime.close).toFixed(2) : "—"}</span>
-            </span>
-            <span className="rounded-full border border-[#e5d9c8] bg-[#fffdf8] px-2 py-1 text-xs font-medium">
-              SMA200: <span className="font-mono">{regime?.sma200 != null ? Number(regime.sma200).toFixed(2) : "—"}</span>
-            </span>
-            <span className="rounded-full border border-[#e5d9c8] bg-[#fffdf8] px-2 py-1 text-xs font-medium">
-              %&gt;SMA50: <span className="font-mono">{breadth.pctAboveSma50.toFixed(1)}%</span>
-            </span>
-            <span className="rounded-full border border-[#e5d9c8] bg-[#fffdf8] px-2 py-1 text-xs font-medium">
-              %&gt;SMA200: <span className="font-mono">{breadth.pctAboveSma200.toFixed(1)}%</span>
-            </span>
-            <span
-              className={`rounded-full border px-2 py-1 text-xs font-semibold ${
-                breadth.breadthState === "STRONG"
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : breadth.breadthState === "MIXED"
-                    ? "border-amber-200 bg-amber-50 text-amber-700"
-                    : "border-rose-200 bg-rose-50 text-rose-700"
-              }`}
-            >
-              {breadth.breadthState}
-            </span>
-            {breadth.breadthState !== "STRONG" ? (
-              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
-                {breadth.breadthLabel}
-              </span>
-            ) : null}
-          </div>
+        <section className="grid gap-3 lg:grid-cols-3">
+          <section className="surface-panel p-4">
+            <div className="section-title">Market Context</div>
+            <div className="mt-3 space-y-2 text-sm text-slate-700">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={`rounded-full border px-2 py-1 text-xs font-semibold ${
+                    regime?.state === "FAVORABLE"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-amber-200 bg-amber-50 text-amber-700"
+                  }`}
+                >
+                  {regime?.state ?? "—"}
+                </span>
+                <span
+                  className={`rounded-full border px-2 py-1 text-xs font-semibold ${
+                    breadth.breadthState === "STRONG"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : breadth.breadthState === "MIXED"
+                        ? "border-amber-200 bg-amber-50 text-amber-700"
+                        : "border-rose-200 bg-rose-50 text-rose-700"
+                  }`}
+                >
+                  {breadth.breadthState}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="surface-card px-2.5 py-2">LCTD: <span className="font-mono">{lctd.lctd ?? "—"}</span></div>
+                <div className="surface-card px-2.5 py-2">Close: <span className="font-mono">{regime?.close != null ? Number(regime.close).toFixed(2) : "—"}</span></div>
+                <div className="surface-card px-2.5 py-2">SMA200: <span className="font-mono">{regime?.sma200 != null ? Number(regime.sma200).toFixed(2) : "—"}</span></div>
+                <div className="surface-card px-2.5 py-2">%&gt;SMA50: <span className="font-mono">{breadth.pctAboveSma50.toFixed(1)}%</span></div>
+                <div className="surface-card col-span-2 px-2.5 py-2">%&gt;SMA200: <span className="font-mono">{breadth.pctAboveSma200.toFixed(1)}%</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section className="surface-panel p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="section-title">Top Signals</div>
+              <Link
+                href="/ideas?strategy=momentum"
+                className="rounded-lg border border-[#d9ccb5] bg-[#efe6d6] px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-[#e8ddca]"
+              >
+                Open Ideas
+              </Link>
+            </div>
+            <div className="space-y-2.5">
+              {topSignals.slice(0, 4).map((row: any) => (
+                <Link
+                  key={row.symbol}
+                  href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol))}`}
+                  className="surface-card flex items-center justify-between px-3 py-2.5 transition-colors hover:bg-[#fff9f0]"
+                >
+                  <div className="min-w-0 pr-3">
+                    <div className="text-sm font-semibold tracking-tight text-slate-900">{row.symbol}</div>
+                    <div className="truncate text-[11px] text-slate-500">{row.reason_summary ?? "—"}</div>
+                  </div>
+                  <span
+                    className={
+                      row.signal === "BUY"
+                        ? "shrink-0 rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-700"
+                        : row.signal === "WATCH"
+                          ? "shrink-0 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-[10px] font-semibold text-amber-700"
+                          : "shrink-0 rounded-full border border-rose-300 bg-rose-50 px-2.5 py-0.5 text-[10px] font-semibold text-rose-700"
+                    }
+                  >
+                    {row.signal}
+                  </span>
+                </Link>
+              ))}
+              {topSignals.length === 0 ? <div className="text-xs text-slate-500">No ranked signals.</div> : null}
+            </div>
+          </section>
+
+          <section className="surface-panel p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="section-title">Sector Momentum</div>
+              <Link href="/ideas?strategy=sector" className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]">
+                Open
+              </Link>
+            </div>
+            {!sectorMomentum.ok ? (
+              <div className="text-sm text-amber-700">Unavailable: {sectorMomentum.error ?? "unknown"}</div>
+            ) : (
+              <div className="space-y-2.5">
+                {(sectorMomentum.top_groups ?? []).slice(0, 3).map((g) => (
+                  <div key={g.key} className="surface-card flex items-center justify-between px-3 py-2.5 text-sm">
+                    <div className="min-w-0 pr-3">
+                      <div className="truncate font-medium text-slate-900">{g.name}</div>
+                      <div className="truncate text-[11px] text-slate-500">{g.theme}</div>
+                    </div>
+                    <span className="text-xs font-semibold text-slate-700">{g.rank_score.toFixed(1)}</span>
+                  </div>
+                ))}
+                {(sectorMomentum.candidates ?? []).slice(0, 1).map((c) => (
+                  <Link
+                    key={c.symbol}
+                    href={`/ideas?strategy=sector&symbol=${encodeURIComponent(String(c.symbol))}`}
+                    className="surface-card block px-3 py-2.5 text-xs transition-colors hover:bg-[#fff9f0]"
+                  >
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-semibold text-slate-900">{c.symbol}</span>
+                      <span className="font-semibold text-slate-700">{c.signal}</span>
+                    </div>
+                    <div className="mt-1 text-slate-600">{c.industry_group}</div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </section>
         </section>
 
         <section className="surface-panel p-5 sm:p-6">
@@ -574,223 +671,7 @@ export default async function DashboardPage({
         </section>
 
         <section className="grid gap-3 md:grid-cols-2">
-          <div className="surface-panel p-5 sm:p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-semibold tracking-tight">Momentum Swing</div>
-                <div className="mt-1 h-0.5 w-14 rounded-full bg-emerald-200" />
-              </div>
-              <Link href="/ideas?strategy=v2_core_momentum" className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]">
-                Open ideas
-              </Link>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2 text-sm text-slate-700">
-              <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${signalPill("BUY")}`}>BUY <span className="ml-1 text-sm">{momentum.buy}</span></span>
-              <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${signalPill("WATCH")}`}>WATCH <span className="ml-1 text-sm">{momentum.watch}</span></span>
-              <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${signalPill("AVOID")}`}>AVOID <span className="ml-1 text-sm">{momentum.avoid}</span></span>
-            </div>
-          </div>
-          <div className="surface-panel p-5 sm:p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-semibold tracking-tight">Trend Hold</div>
-                <div className="mt-1 h-0.5 w-14 rounded-full bg-sky-200" />
-              </div>
-              <Link href="/ideas?strategy=v1_trend_hold" className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]">
-                Open ideas
-              </Link>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2 text-sm text-slate-700">
-              <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${signalPill("BUY")}`}>BUY <span className="ml-1 text-sm">{trend.buy}</span></span>
-              <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${signalPill("WATCH")}`}>WATCH <span className="ml-1 text-sm">{trend.watch}</span></span>
-              <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${signalPill("AVOID")}`}>AVOID <span className="ml-1 text-sm">{trend.avoid}</span></span>
-            </div>
-          </div>
-        </section>
-
-        <section className="surface-panel p-5 sm:p-6">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="text-base font-semibold tracking-tight">Sector Momentum (Preview)</div>
-            <Link href="/ideas?strategy=sector" className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]">
-              Open ideas
-            </Link>
-          </div>
-          {!sectorMomentum.ok ? (
-            <div className="text-sm text-amber-700">Unavailable: {sectorMomentum.error ?? "unknown"}</div>
-          ) : (
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Top Industry Groups</div>
-                {(sectorMomentum.top_groups ?? []).slice(0, 4).map((g) => (
-                  <div key={g.key} className="flex items-center justify-between rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3 py-2 text-sm">
-                    <div>
-                      <div className="font-medium text-slate-900">{g.name}</div>
-                      <div className="text-xs text-slate-500">{g.theme}</div>
-                    </div>
-                    <span className="text-xs font-semibold text-slate-700">{g.rank_score.toFixed(1)}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="space-y-2">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Top Candidates</div>
-                {(sectorMomentum.candidates ?? []).slice(0, 2).map((c) => (
-                  <Link
-                    key={c.symbol}
-                    href={`/ideas?strategy=sector&symbol=${encodeURIComponent(String(c.symbol))}`}
-                    className="block rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3 py-2 hover:bg-[#fff9f0]"
-                  >
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="font-semibold text-slate-900">{c.symbol}</span>
-                      <span className="text-xs font-semibold text-slate-700">{c.signal}</span>
-                    </div>
-                    <div className="mt-1 text-xs text-slate-600">
-                      {c.industry_group} • Entry {Number(c.entry ?? 0).toFixed(2)} • Stop {Number(c.stop ?? 0).toFixed(2)}
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="grid gap-3 md:grid-cols-2">
-          <section className="surface-panel rounded-[28px] p-6">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-2xl font-semibold text-slate-900">Top Ranked Signals</h2>
-              <Link
-                href="/ideas?strategy=momentum"
-                className="rounded-xl border border-[#d9ccb5] bg-[#efe6d6] px-4 py-2 text-sm font-medium text-slate-800 hover:bg-[#e8ddca]"
-              >
-                View all
-              </Link>
-            </div>
-
-            <div className="space-y-3">
-              {topSignals.map((row: any) => {
-                const symbol = String(row.symbol ?? "").trim().toUpperCase();
-                const quote = topQuoteBySymbol[symbol];
-                const rawLast = typeof quote?.price === "number" && Number.isFinite(quote.price) ? quote.price : null;
-                const entry = typeof row.entry === "number" && Number.isFinite(row.entry) ? row.entry : null;
-                const mismatch =
-                  rawLast !== null &&
-                  entry !== null &&
-                  entry > 0 &&
-                  Math.abs((rawLast - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
-                const last = mismatch ? null : rawLast;
-                const delta = last !== null && entry !== null && entry > 0 ? ((last - entry) / entry) * 100 : null;
-                const atr14 = extractAtr14(row.reason_json);
-                const atrDist =
-                  atr14 !== null && atr14 > 0 && last !== null && entry !== null ? Math.abs(last - entry) / atr14 : null;
-                const sourceBadgeClass =
-                  quote?.source === "snapshot"
-                    ? "border-sky-200 bg-sky-50 text-sky-700"
-                    : "border-slate-200 bg-slate-50 text-slate-700";
-                const sourceLabel = quote?.source === "snapshot" ? "LIVE" : quote?.source === "eod_close" ? "EOD" : null;
-                const status =
-                  mismatch
-                    ? "Price mismatch"
-                    : last !== null && entry !== null && entry > 0
-                      ? getEntryStatus({
-                          price: last,
-                          zone_low: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_low,
-                          zone_high: getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry }).zone_high,
-                        })
-                      : "No live price";
-                const exec = applyBreadthToAction(
-                  applyEarningsRiskToAction(mapExecutionState(status), earningsRiskBySymbol[symbol] ?? null),
-                  breadth
-                );
-
-                return (
-                  <Link
-                    key={row.symbol}
-                    href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol))}`}
-                    legacyBehavior
-                  >
-                    <a className="block w-full cursor-pointer rounded-xl border border-[#eadfce] bg-[#fffdf8] px-4 py-3 transition hover:-translate-y-[1px] hover:border-[#dac9ab] hover:bg-[#fff9f0]">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="text-xl font-semibold tracking-tight text-slate-900">{symbol}</div>
-                            {sourceLabel ? (
-                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${sourceBadgeClass}`}>
-                                {sourceLabel}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-                            <div className="rounded-lg border border-[#e7dccb] bg-[#fffaf2] px-2.5 py-1.5">
-                              <div className="text-[10px] uppercase tracking-wide text-slate-500">Last</div>
-                              <div className="font-semibold text-slate-800">{fmtPrice(last)}</div>
-                            </div>
-                            <div className="rounded-lg border border-[#e7dccb] bg-[#fffaf2] px-2.5 py-1.5">
-                              <div className="text-[10px] uppercase tracking-wide text-slate-500">Entry</div>
-                              <div className="font-semibold text-slate-800">{fmtPrice(entry)}</div>
-                            </div>
-                            <div className="rounded-lg border border-[#e7dccb] bg-[#fffaf2] px-2.5 py-1.5">
-                              <div className="text-[10px] uppercase tracking-wide text-slate-500">Delta</div>
-                              <div
-                                className={`font-semibold ${
-                                  typeof delta === "number" && Number.isFinite(delta)
-                                    ? delta >= 0
-                                      ? "text-emerald-700"
-                                      : "text-rose-700"
-                                    : "text-slate-800"
-                                }`}
-                              >
-                                {fmtSignedPct(delta)}
-                              </div>
-                            </div>
-                            <div className="rounded-lg border border-[#e7dccb] bg-[#fffaf2] px-2.5 py-1.5">
-                              <div className="text-[10px] uppercase tracking-wide text-slate-500">ATR Dist</div>
-                              <div className="font-semibold text-slate-800">
-                                {atrDist !== null && Number.isFinite(atrDist) ? `${atrDist.toFixed(1)} ATR` : "—"}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
-                              {exec.action}
-                            </span>
-                            <span className="rounded-full border border-[#e4d7c3] bg-[#fff8ee] px-2 py-0.5 text-[11px] text-slate-600">
-                              {exec.reasonLabel}
-                            </span>
-                            {mismatch ? (
-                              <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">
-                                MISMATCH
-                              </span>
-                            ) : null}
-                            {earningsRiskBySymbol[symbol]?.earningsLabel ? (
-                              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
-                                {earningsRiskBySymbol[symbol]?.earningsLabel}
-                              </span>
-                            ) : null}
-                            {exec.breadthLabel ? (
-                              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
-                                {exec.breadthLabel}
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                        <span
-                          className={
-                            row.signal === "BUY"
-                              ? "shrink-0 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
-                              : row.signal === "WATCH"
-                                ? "shrink-0 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700"
-                                : "shrink-0 rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
-                          }
-                        >
-                          {row.signal}
-                        </span>
-                      </div>
-                    </a>
-                  </Link>
-                );
-              })}
-            </div>
-          </section>
-          <div className="surface-panel p-5 sm:p-6">
+          <div className="surface-panel p-4 sm:p-5">
             <div className="mb-3 flex items-center justify-between">
               <div className="text-base font-semibold tracking-tight">Open Positions Snapshot</div>
               <Link href="/positions" className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]">
@@ -813,6 +694,26 @@ export default async function DashboardPage({
                   </span>
                 </div>
               ))}
+            </div>
+          </div>
+          <div className="surface-panel p-4 sm:p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-base font-semibold tracking-tight">Strategy Pulse</div>
+              <div className="text-xs text-slate-500">Current scan date</div>
+            </div>
+            <div className="space-y-2.5">
+              <div className="surface-card flex items-center justify-between px-3 py-2.5 text-sm">
+                <span className="font-medium text-slate-900">Momentum Swing</span>
+                <span className="text-slate-700">BUY {momentum.buy} / WATCH {momentum.watch}</span>
+              </div>
+              <div className="surface-card flex items-center justify-between px-3 py-2.5 text-sm">
+                <span className="font-medium text-slate-900">Trend Hold</span>
+                <span className="text-slate-700">BUY {trend.buy} / WATCH {trend.watch}</span>
+              </div>
+              <div className="surface-card flex items-center justify-between px-3 py-2.5 text-sm">
+                <span className="font-medium text-slate-900">Sector Momentum</span>
+                <span className="text-slate-700">{sectorMomentum.ok ? `${sectorMomentum.candidates.length} candidates` : "Unavailable"}</span>
+              </div>
             </div>
           </div>
         </section>
