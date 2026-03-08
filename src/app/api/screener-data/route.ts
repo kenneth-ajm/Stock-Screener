@@ -440,6 +440,9 @@ const loadScreenerDataCached = unstable_cache(
         rows_signal_counts_raw: rawSignalCounts,
         rows_signal_counts_validated: validatedSignalCounts,
         rows_signal_counts_display: displaySignalCounts,
+        rows_count_scope: "loaded_rows_limit",
+        rows_query_limit: MAX_ROWS,
+        selected_universe_has_rows: rawRows.length > 0,
         response_shape: {
           raw_rows_is_array: Array.isArray(rawRows),
           validated_rows_is_array: Array.isArray(entryValidatedRows),

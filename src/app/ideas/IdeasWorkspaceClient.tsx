@@ -69,6 +69,9 @@ type Payload = {
     rows_signal_counts_raw?: { buy?: number; watch?: number; avoid?: number } | null;
     rows_signal_counts_validated?: { buy?: number; watch?: number; avoid?: number } | null;
     rows_signal_counts_display?: { buy?: number; watch?: number; avoid?: number } | null;
+    rows_count_scope?: string | null;
+    rows_query_limit?: number | null;
+    selected_universe_has_rows?: boolean | null;
     response_shape?: {
       raw_rows_is_array?: boolean;
       validated_rows_is_array?: boolean;
@@ -373,6 +376,8 @@ export default function IdeasWorkspaceClient({
       buyNotSkipped: runtime.buyNotSkipped,
       finalActionable: runtime.finalActionable,
       buyRowsObserved: runtime.buyRows,
+      scope: String(data?.meta?.rows_count_scope ?? "loaded_rows_limit"),
+      queryLimit: Number(data?.meta?.rows_query_limit ?? allRows.length ?? 0),
     };
   }, [allRows, breadth, data?.meta, earningsBySymbol, quoteBySymbol, strategy]);
   const emptyStateMessage = useMemo(() => {
@@ -391,7 +396,7 @@ export default function IdeasWorkspaceClient({
     const validatedActionable = Number(signalCountsValidated.buy ?? 0) + Number(signalCountsValidated.watch ?? 0);
     if (selectedFilter === "all") {
       if (raw === 0) {
-        return `No rows for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
+        return `No scans available yet for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
       }
       if (filteredRows.length === 0) {
         return `No rows available for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
@@ -399,7 +404,7 @@ export default function IdeasWorkspaceClient({
       return null;
     }
     if (raw === 0) {
-      return `No rows for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
+      return `No scans available yet for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
     }
     if (validated === 0) {
       return `Rows were filtered out after validation for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
@@ -729,7 +734,7 @@ export default function IdeasWorkspaceClient({
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Auto
+            Auto (latest populated)
           </button>
           <button
             onClick={() => setUniverseMode("core_800")}
@@ -795,7 +800,7 @@ export default function IdeasWorkspaceClient({
         <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Signal Funnel</div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
           <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
-            <div className="text-[10px] text-slate-500">Total scanned</div>
+            <div className="text-[10px] text-slate-500">Rows loaded</div>
             <div className="text-sm font-semibold text-slate-900">{funnel.rowsRaw}</div>
           </div>
           <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
@@ -803,11 +808,11 @@ export default function IdeasWorkspaceClient({
             <div className="text-sm font-semibold text-slate-900">{funnel.rowsValidated}</div>
           </div>
           <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
-            <div className="text-[10px] text-slate-500">BUY</div>
+            <div className="text-[10px] text-slate-500">BUY in loaded set</div>
             <div className="text-sm font-semibold text-slate-900">{funnel.buyCount}</div>
           </div>
           <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
-            <div className="text-[10px] text-slate-500">WATCH</div>
+            <div className="text-[10px] text-slate-500">WATCH in loaded set</div>
             <div className="text-sm font-semibold text-slate-900">{funnel.watchCount}</div>
           </div>
           <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
@@ -824,7 +829,7 @@ export default function IdeasWorkspaceClient({
           </div>
         </div>
         <div className="mt-2 text-[11px] text-slate-500">
-          Displayed rows after ranking caps: {funnel.rowsDisplay}. Execution-stage counts are computed from loaded rows ({allRows.length}).
+          Counts scope: {funnel.scope}. Query limit: {funnel.queryLimit || allRows.length}. Displayed rows after ranking caps: {funnel.rowsDisplay}. Execution-stage counts are computed from loaded rows ({allRows.length}).
         </div>
       </div>
 
@@ -835,10 +840,12 @@ export default function IdeasWorkspaceClient({
           {" • "}strategy_param={strategyParamRaw ?? "—"}
           {" • "}resolved_strategy_tab={strategy}
           {" • "}selected_universe={universeMode}
+          {" • "}selected_universe_mode={universeMode === "auto" ? "auto_latest_populated" : "explicit"}
           {" • "}strategy_version={data?.meta?.strategy_version ?? strategy}
           {" • "}filter={selectedFilter}
           {" • "}universe={data?.meta?.universe_slug ?? "—"}
           {" • "}requested_universe={data?.meta?.requested_universe_slug ?? "—"}
+          {" • "}selected_universe_has_rows={String(Boolean(data?.meta?.selected_universe_has_rows))}
           {" • "}requested_date={data?.meta?.requested_date ?? "—"}
           {" • "}rows={rows.length}
           {" • "}rows_filtered={filteredRows.length}
@@ -849,6 +856,8 @@ export default function IdeasWorkspaceClient({
           {" • "}raw={Number(data?.meta?.rows_raw_count ?? 0)}
           {" • "}validated={Number(data?.meta?.rows_after_validation_count ?? 0)}
           {" • "}display={Number(data?.meta?.rows_display_count ?? 0)}
+          {" • "}count_scope={data?.meta?.rows_count_scope ?? "—"}
+          {" • "}query_limit={Number(data?.meta?.rows_query_limit ?? 0)}
           {" • "}signals_raw={JSON.stringify(data?.meta?.rows_signal_counts_raw ?? {})}
           {" • "}signals_validated={JSON.stringify(data?.meta?.rows_signal_counts_validated ?? {})}
           {" • "}signals_display={JSON.stringify(data?.meta?.rows_signal_counts_display ?? {})}
