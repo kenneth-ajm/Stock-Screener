@@ -38,7 +38,17 @@ type IdeaRow = {
   industry_group?: string | null;
   theme?: string | null;
   action?: "BUY_NOW" | "WAIT" | "SKIP";
-  sizing?: { shares: number; est_cost: number; risk_per_share: number; risk_budget: number };
+  sizing?: {
+    shares: number;
+    est_cost: number;
+    risk_per_share: number;
+    risk_budget: number;
+    shares_by_risk?: number;
+    shares_by_cash?: number;
+    shares_by_portfolio_cap?: number | null;
+    limiting_factor?: "risk" | "cash" | "portfolio_cap" | "none";
+    sizing_mode?: "cash_only";
+  };
 };
 
 type Payload = {
@@ -318,8 +328,25 @@ export default function IdeasWorkspaceClient({
   const stopNum = Number(selected?.stop ?? 0);
   const riskPerShare = fillNum > 0 && stopNum > 0 ? fillNum - stopNum : 0;
   const riskBudget = Number(selected?.sizing?.risk_budget ?? 0);
-  const suggestedShares =
+  const cashAvailableForSizing = Number(data?.capacity?.cash_available ?? 0);
+  const sharesByRisk =
     riskPerShare > 0 && Number.isFinite(riskBudget) ? Math.max(0, Math.floor(riskBudget / riskPerShare)) : 0;
+  const sharesByCash =
+    fillNum > 0 && Number.isFinite(cashAvailableForSizing) ? Math.max(0, Math.floor(cashAvailableForSizing / fillNum)) : 0;
+  const sharesByPortfolioCap =
+    typeof selected?.sizing?.shares_by_portfolio_cap === "number" && Number.isFinite(selected.sizing.shares_by_portfolio_cap)
+      ? Math.max(0, Math.floor(selected.sizing.shares_by_portfolio_cap))
+      : null;
+  const sizeCandidates = [sharesByRisk, sharesByCash, ...(sharesByPortfolioCap != null ? [sharesByPortfolioCap] : [])];
+  const suggestedShares = sizeCandidates.length > 0 ? Math.max(0, Math.min(...sizeCandidates)) : 0;
+  const limitingFactor =
+    sharesByPortfolioCap != null && suggestedShares === sharesByPortfolioCap
+      ? "Limited by portfolio cap"
+      : suggestedShares === sharesByCash
+      ? "Limited by available cash"
+      : suggestedShares === sharesByRisk
+      ? "Limited by risk budget"
+      : "Sizing unavailable";
   const sharesNum = Number(shares);
   const positionCost = Number.isFinite(sharesNum) && Number.isFinite(fillNum) ? sharesNum * fillNum : 0;
   const riskUsed = Number.isFinite(sharesNum) && Number.isFinite(riskPerShare) ? sharesNum * riskPerShare : 0;
@@ -843,7 +870,18 @@ export default function IdeasWorkspaceClient({
                     const n = Number(next);
                     if (Number.isFinite(n) && n > 0 && selected.stop > 0 && riskBudget > 0) {
                       const nextRisk = n - selected.stop;
-                      if (nextRisk > 0) setShares(String(Math.floor(riskBudget / nextRisk)));
+                      if (nextRisk > 0) {
+                        const nextByRisk = Math.max(0, Math.floor(riskBudget / nextRisk));
+                        const nextByCash =
+                          Number.isFinite(cashAvailableForSizing) && n > 0 ? Math.max(0, Math.floor(cashAvailableForSizing / n)) : 0;
+                        const nextCap =
+                          typeof selected?.sizing?.shares_by_portfolio_cap === "number" &&
+                          Number.isFinite(selected.sizing.shares_by_portfolio_cap)
+                            ? Math.max(0, Math.floor(selected.sizing.shares_by_portfolio_cap))
+                            : null;
+                        const nextCandidates = [nextByRisk, nextByCash, ...(nextCap != null ? [nextCap] : [])];
+                        setShares(String(Math.max(0, Math.min(...nextCandidates))));
+                      }
                     }
                   }}
                   className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
@@ -859,6 +897,7 @@ export default function IdeasWorkspaceClient({
                 <div className="text-xs text-slate-600">
                   Suggested shares (fill-aware): <span className="font-semibold">{suggestedShares}</span>
                 </div>
+                <div className="text-xs text-slate-500">Cash-only sizing. {limitingFactor}.</div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-xs text-slate-500">Entry fee</label>
@@ -886,6 +925,9 @@ export default function IdeasWorkspaceClient({
               <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3 text-xs text-slate-600">
                 <div>Risk/share: {Number.isFinite(riskPerShare) ? riskPerShare.toFixed(2) : "—"}</div>
                 <div>Risk budget: {Number.isFinite(riskBudget) ? riskBudget.toFixed(2) : "—"}</div>
+                <div>Shares by risk: {sharesByRisk}</div>
+                <div>Shares by cash: {sharesByCash}</div>
+                {sharesByPortfolioCap != null ? <div>Shares by portfolio cap: {sharesByPortfolioCap}</div> : null}
                 <div>Risk used: {Number.isFinite(riskUsed) ? riskUsed.toFixed(2) : "—"}</div>
                 <div>Position cost: {Number.isFinite(positionCost) ? positionCost.toFixed(2) : "—"}</div>
                 <div>Total cost (incl. fees): {Number.isFinite(totalCostWithFees) ? totalCostWithFees.toFixed(2) : "—"}</div>
