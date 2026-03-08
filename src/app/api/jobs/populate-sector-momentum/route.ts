@@ -133,6 +133,27 @@ async function ensureGrowthUniverseFromExistingBars(supabase: any, scanDate: str
   return { universe_id: universeId, active_count: finalSymbols.length, derived_refresh: true };
 }
 
+async function ensureExistingUniverseMembers(supabase: any, universeSlug: string) {
+  const { data: universe } = await supabase
+    .from("universes")
+    .select("id,slug")
+    .eq("slug", universeSlug)
+    .maybeSingle();
+  if (!universe?.id) {
+    throw new Error(`Universe not found: ${universeSlug}`);
+  }
+  const { count } = await supabase
+    .from("universe_members")
+    .select("symbol", { count: "exact", head: true })
+    .eq("universe_id", universe.id)
+    .eq("active", true);
+  const activeCount = Number(count ?? 0);
+  if (activeCount <= 0) {
+    throw new Error(`Universe has no active members: ${universeSlug}`);
+  }
+  return { universe_id: universe.id, active_count: activeCount, derived_refresh: false };
+}
+
 function summarizeBreadthFromCandidates(candidates: SectorMomentumCandidate[]) {
   let sample = 0;
   let above50 = 0;
@@ -153,7 +174,7 @@ function summarizeBreadthFromCandidates(candidates: SectorMomentumCandidate[]) {
   };
 }
 
-export async function runPopulate() {
+export async function runPopulate(opts?: { universe_slug?: string }) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceKey) {
@@ -169,14 +190,19 @@ export async function runPopulate() {
     );
   }
   const scanDate = lctd.scan_date;
+  const universeSlug =
+    String(opts?.universe_slug ?? GROWTH_UNIVERSE_SLUG).trim() || GROWTH_UNIVERSE_SLUG;
 
-  const universe = await ensureGrowthUniverseFromExistingBars(supabase, scanDate);
+  const universe =
+    universeSlug === GROWTH_UNIVERSE_SLUG
+      ? await ensureGrowthUniverseFromExistingBars(supabase, scanDate)
+      : await ensureExistingUniverseMembers(supabase, universeSlug);
 
   const sector = await computeSectorMomentumCandidates({
     supabase,
     scan_date: scanDate,
     lctd_source: lctd.lctd_source,
-    universe_slug: GROWTH_UNIVERSE_SLUG,
+    universe_slug: universeSlug,
     top_group_count: 4,
     max_candidates: 12,
   });
@@ -212,7 +238,7 @@ export async function runPopulate() {
     });
     return {
       date: scanDate,
-      universe_slug: GROWTH_UNIVERSE_SLUG,
+      universe_slug: universeSlug,
       strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
       symbol: c.symbol,
       signal: c.signal,
@@ -254,7 +280,7 @@ export async function runPopulate() {
       .from("daily_scans")
       .select("id,symbol")
       .eq("date", scanDate)
-      .eq("universe_slug", GROWTH_UNIVERSE_SLUG)
+      .eq("universe_slug", universeSlug)
       .eq("strategy_version", SECTOR_MOMENTUM_STRATEGY_VERSION);
     const removeIds = (existing ?? [])
       .filter((r: any) => !keep.has(String(r?.symbol ?? "").trim().toUpperCase()))
@@ -274,7 +300,7 @@ export async function runPopulate() {
   console.info("[sector_momentum][populate]", {
     scan_date_used: scanDate,
     strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
-    universe_slug: GROWTH_UNIVERSE_SLUG,
+    universe_slug: universeSlug,
     top_groups: (sector.top_groups ?? []).length,
     candidates_count: sector.candidates.length,
     persisted_rows: rows.length,
@@ -285,7 +311,7 @@ export async function runPopulate() {
   const payload = {
     ok: true,
     scan_date_used: scanDate,
-    universe_slug: GROWTH_UNIVERSE_SLUG,
+    universe_slug: universeSlug,
     strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
     top_groups: (sector.top_groups ?? []).map((g) => ({
       key: g.key,
@@ -308,7 +334,7 @@ export async function runPopulate() {
       ok: true,
       scan_date_used: scanDate,
       strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
-      universe_slug: GROWTH_UNIVERSE_SLUG,
+      universe_slug: universeSlug,
       candidates_count: payload.candidates_count,
       persisted_rows: payload.persisted_rows,
       pruned_rows: payload.pruned_rows,
@@ -320,9 +346,10 @@ export async function runPopulate() {
   return NextResponse.json(payload);
 }
 
-export async function POST() {
+export async function POST(req: Request) {
   try {
-    return await runPopulate();
+    const body = (await req.json().catch(() => ({}))) as { universe_slug?: string };
+    return await runPopulate({ universe_slug: body?.universe_slug });
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
     const detail = e instanceof Error ? e.stack ?? null : null;

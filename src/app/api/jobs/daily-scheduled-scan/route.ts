@@ -152,7 +152,7 @@ async function runWorkflow(opts: { dry_run?: boolean }) {
       const momentum = await runScanPipeline({
         supabase: supa,
         universe_slug: MIDCAP_UNIVERSE_SLUG,
-        strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
+        strategy_version: "v1",
         scan_date: scan_date_used,
         finalize: true,
       });
@@ -168,8 +168,27 @@ async function runWorkflow(opts: { dry_run?: boolean }) {
       return {
         scan_date_used,
         universe_slug: MIDCAP_UNIVERSE_SLUG,
+        momentum_strategy_version: "v1",
         momentum_scored: momentum.scored ?? 0,
         trend_scored: trend.scored ?? 0,
+      };
+    });
+    stages.push(stage);
+  }
+
+  if (!dry_run) {
+    const stage = await runStage("midcap_sector_scan", async () => {
+      const res = await runPopulate({ universe_slug: MIDCAP_UNIVERSE_SLUG });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        throw new Error(String(json?.error ?? "midcap sector populate failed"));
+      }
+      return {
+        scan_date_used: json.scan_date_used ?? scan_date_used ?? null,
+        universe_slug: MIDCAP_UNIVERSE_SLUG,
+        strategy_version: json.strategy_version ?? SECTOR_MOMENTUM_STRATEGY_VERSION,
+        candidates_count: json.candidates_count ?? 0,
+        persisted_rows: json.persisted_rows ?? 0,
       };
     });
     stages.push(stage);

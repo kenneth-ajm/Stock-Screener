@@ -89,16 +89,22 @@ async function runAllStrategies(req: Request) {
     strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
     universe_slug: SECTOR_MOMENTUM_UNIVERSE_SLUG,
   });
-  const beforeMomentumMidcap = await countRowsForDate({
+const beforeMomentumMidcap = await countRowsForDate({
     supabase,
     date: targetDate,
-    strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
+    strategy_version: "v1",
     universe_slug: MIDCAP_UNIVERSE_SLUG,
   });
   const beforeTrendMidcap = await countRowsForDate({
     supabase,
     date: targetDate,
     strategy_version: TREND_HOLD_DEFAULT_VERSION,
+    universe_slug: MIDCAP_UNIVERSE_SLUG,
+  });
+  const beforeSectorMidcap = await countRowsForDate({
+    supabase,
+    date: targetDate,
+    strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
     universe_slug: MIDCAP_UNIVERSE_SLUG,
   });
 
@@ -137,10 +143,25 @@ async function runAllStrategies(req: Request) {
     );
   }
 
+  const sectorMidcapRes = await runPopulate({ universe_slug: MIDCAP_UNIVERSE_SLUG });
+  const sectorMidcapJson = await sectorMidcapRes.json().catch(() => null);
+  if (!sectorMidcapRes.ok || !sectorMidcapJson?.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "sector-momentum populate failed for midcap_1000",
+        detail: sectorMidcapJson ?? null,
+        scan_date_used: scanDate,
+        autopilot,
+      },
+      { status: 500 }
+    );
+  }
+
   const midcapMomentum = await runScanPipeline({
     supabase,
     universe_slug: MIDCAP_UNIVERSE_SLUG,
-    strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
+    strategy_version: "v1",
     scan_date: scanDate,
     finalize: true,
   });
@@ -198,7 +219,7 @@ async function runAllStrategies(req: Request) {
   const afterMomentumMidcap = await countRowsForDate({
     supabase,
     date: scanDate,
-    strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
+    strategy_version: "v1",
     universe_slug: MIDCAP_UNIVERSE_SLUG,
   });
   const afterTrendMidcap = await countRowsForDate({
@@ -231,7 +252,7 @@ async function runAllStrategies(req: Request) {
       inserted_count: Math.max(0, afterSector - beforeSector),
     },
     {
-      strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
+      strategy_version: "v1",
       universe_slug: MIDCAP_UNIVERSE_SLUG,
       before_count: beforeMomentumMidcap,
       after_count: afterMomentumMidcap,
@@ -244,6 +265,13 @@ async function runAllStrategies(req: Request) {
       after_count: afterTrendMidcap,
       inserted_count: Math.max(0, afterTrendMidcap - beforeTrendMidcap),
     },
+    {
+      strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
+      universe_slug: MIDCAP_UNIVERSE_SLUG,
+      before_count: beforeSectorMidcap,
+      after_count: Number(sectorMidcapJson?.persisted_rows ?? 0),
+      inserted_count: Math.max(0, Number(sectorMidcapJson?.persisted_rows ?? 0) - beforeSectorMidcap),
+    },
   ];
 
   return NextResponse.json({
@@ -253,8 +281,9 @@ async function runAllStrategies(req: Request) {
       CORE_MOMENTUM_DEFAULT_VERSION,
       TREND_HOLD_DEFAULT_VERSION,
       SECTOR_MOMENTUM_STRATEGY_VERSION,
-      `${CORE_MOMENTUM_DEFAULT_VERSION}@${MIDCAP_UNIVERSE_SLUG}`,
+      `v1@${MIDCAP_UNIVERSE_SLUG}`,
       `${TREND_HOLD_DEFAULT_VERSION}@${MIDCAP_UNIVERSE_SLUG}`,
+      `${SECTOR_MOMENTUM_STRATEGY_VERSION}@${MIDCAP_UNIVERSE_SLUG}`,
     ],
     strategy_counts,
     autopilot_summary: {
