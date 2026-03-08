@@ -219,6 +219,28 @@ const loadScreenerDataCached = unstable_cache(
       }
     }
 
+    if (!isSectorMomentum && !requestedDate) {
+      const actionableCount = rawRows.filter((r) => r.signal === "BUY" || r.signal === "WATCH").length;
+      if (actionableCount === 0) {
+        const { data: latestActionableDateRow } = await (supabase as any)
+          .from("daily_scans")
+          .select("date")
+          .eq("strategy_version", strategyVersion)
+          .eq("universe_slug", mappedUniverse)
+          .in("signal", ["BUY", "WATCH"])
+          .order("date", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const fallbackActionableDate = latestActionableDateRow?.date ? String(latestActionableDateRow.date) : null;
+        if (fallbackActionableDate && fallbackActionableDate !== resolvedDateUsed) {
+          resolvedDateUsed = fallbackActionableDate;
+          rawRows = await fetchRowsFor(mappedUniverse, resolvedDateUsed);
+          dataSource = "daily_scans_cache_fallback_latest_actionable_date";
+          fallbackDecisions.push(`date->${resolvedDateUsed} (latest BUY/WATCH for strategy+universe)`);
+        }
+      }
+    }
+
     let sectorGroups: Array<{ key: string; name: string; theme: string; rank_score: number; state: string }> = [];
     if (isSectorMomentum) {
       const groupMap = new Map<string, { key: string; name: string; theme: string; rank_score: number; state: string }>();
@@ -382,6 +404,21 @@ const loadScreenerDataCached = unstable_cache(
         ? { ...row, action: "WAIT" as const, action_reason: "Prioritize top 3 actionable today" }
         : row
     );
+    const rawSignalCounts = {
+      buy: rawRows.filter((r) => r.signal === "BUY").length,
+      watch: rawRows.filter((r) => r.signal === "WATCH").length,
+      avoid: rawRows.filter((r) => r.signal === "AVOID").length,
+    };
+    const validatedSignalCounts = {
+      buy: entryValidatedRows.filter((r) => r.signal === "BUY").length,
+      watch: entryValidatedRows.filter((r) => r.signal === "WATCH").length,
+      avoid: entryValidatedRows.filter((r) => r.signal === "AVOID").length,
+    };
+    const displaySignalCounts = {
+      buy: rowsFinal.filter((r) => r.signal === "BUY").length,
+      watch: rowsFinal.filter((r) => r.signal === "WATCH").length,
+      avoid: rowsFinal.filter((r) => r.signal === "AVOID").length,
+    };
 
     return {
       ok: true,
@@ -398,6 +435,9 @@ const loadScreenerDataCached = unstable_cache(
         rows_raw_count: rawRows.length,
         rows_after_validation_count: entryValidatedRows.length,
         rows_display_count: rowsFinal.length,
+        rows_signal_counts_raw: rawSignalCounts,
+        rows_signal_counts_validated: validatedSignalCounts,
+        rows_signal_counts_display: displaySignalCounts,
         response_shape: {
           raw_rows_is_array: Array.isArray(rawRows),
           validated_rows_is_array: Array.isArray(entryValidatedRows),

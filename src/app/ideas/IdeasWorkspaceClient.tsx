@@ -55,6 +55,9 @@ type Payload = {
     rows_raw_count?: number | null;
     rows_after_validation_count?: number | null;
     rows_display_count?: number | null;
+    rows_signal_counts_raw?: { buy?: number; watch?: number; avoid?: number } | null;
+    rows_signal_counts_validated?: { buy?: number; watch?: number; avoid?: number } | null;
+    rows_signal_counts_display?: { buy?: number; watch?: number; avoid?: number } | null;
     response_shape?: {
       raw_rows_is_array?: boolean;
       validated_rows_is_array?: boolean;
@@ -159,8 +162,7 @@ export default function IdeasWorkspaceClient({
   useEffect(() => {
     let mounted = true;
     setLoading(true);
-    const universeSlug = defaultUniverseForStrategy(strategy);
-    const apiUrl = `/api/screener-data?strategy_version=${strategy}&universe_slug=${encodeURIComponent(universeSlug)}`;
+    const apiUrl = `/api/screener-data?strategy_version=${strategy}`;
     setLastApiUrl(apiUrl);
     setLastLoadOk(null);
     fetch(apiUrl, {
@@ -592,6 +594,9 @@ export default function IdeasWorkspaceClient({
           {" • "}raw={Number(data?.meta?.rows_raw_count ?? 0)}
           {" • "}validated={Number(data?.meta?.rows_after_validation_count ?? 0)}
           {" • "}display={Number(data?.meta?.rows_display_count ?? 0)}
+          {" • "}signals_raw={JSON.stringify(data?.meta?.rows_signal_counts_raw ?? {})}
+          {" • "}signals_validated={JSON.stringify(data?.meta?.rows_signal_counts_validated ?? {})}
+          {" • "}signals_display={JSON.stringify(data?.meta?.rows_signal_counts_display ?? {})}
           {" • "}shape_raw={String(Boolean(data?.meta?.response_shape?.raw_rows_is_array))}
           {" • "}shape_validated={String(Boolean(data?.meta?.response_shape?.validated_rows_is_array))}
           {" • "}shape_final={String(Boolean(data?.meta?.response_shape?.final_rows_is_array))}
