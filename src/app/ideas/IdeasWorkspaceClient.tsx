@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
 import { mapExecutionState } from "@/lib/execution_state";
 import { applyEarningsRiskToAction, type EarningsRisk } from "@/lib/earnings_risk";
@@ -186,6 +186,8 @@ export default function IdeasWorkspaceClient({
   const [tp2Price, setTp2Price] = useState("");
   const [tp2SizePct, setTp2SizePct] = useState("50");
   const [selectedFilter, setSelectedFilter] = useState<IdeasFilter>("all");
+  const tradeTicketRef = useRef<HTMLDivElement | null>(null);
+  const entryInputRef = useRef<HTMLInputElement | null>(null);
   const breadth = {
     breadthState: data?.meta?.breadth_state ?? "STRONG",
     breadthLabel: data?.meta?.breadth_label ?? "Breadth strong",
@@ -481,6 +483,17 @@ export default function IdeasWorkspaceClient({
     zone_low: zone.zone_low,
     zone_high: zone.zone_high,
   });
+
+  function openTradeTicket(row: IdeaRow) {
+    setSelected(row);
+    requestAnimationFrame(() => {
+      tradeTicketRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      requestAnimationFrame(() => {
+        entryInputRef.current?.focus();
+        entryInputRef.current?.select();
+      });
+    });
+  }
   const modelTp1Pct =
     selected && selected.entry > 0 ? (((selected.tp1 ?? selected.entry) / selected.entry - 1) * 100) : 0;
   const modelTp2Pct =
@@ -989,12 +1002,13 @@ export default function IdeasWorkspaceClient({
                   <th className="px-4 py-3.5">Zone</th>
                   <th className="px-4 py-3.5">Action</th>
                   <th className="px-4 py-3.5">Position Cost</th>
+                  <th className="px-4 py-3.5">Quick</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-5 text-sm text-slate-600" colSpan={12}>
+                    <td className="px-4 py-5 text-sm text-slate-600" colSpan={13}>
                       {emptyStateMessage ?? "No rows available."}
                     </td>
                   </tr>
@@ -1038,7 +1052,7 @@ export default function IdeasWorkspaceClient({
                   <tr
                     key={row.symbol}
                     className="cursor-pointer border-b border-[#efe5d6] transition-colors hover:bg-[#fff9f0]"
-                    onClick={() => setSelected(row)}
+                    onClick={() => openTradeTicket(row)}
                   >
                     <td className="px-4 py-3.5 font-semibold tracking-tight">
                       <div>{row.symbol}</div>
@@ -1104,6 +1118,22 @@ export default function IdeasWorkspaceClient({
                       </div>
                     </td>
                     <td className="px-4 py-3.5">{Number(row.sizing?.est_cost ?? 0).toFixed(2)}</td>
+                    <td className="px-4 py-3.5">
+                      {row.signal === "BUY" || row.signal === "WATCH" ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openTradeTicket(row);
+                          }}
+                          className="rounded-lg border border-[#dcc9aa] bg-[#f8f0e2] px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-[#f2e6d4]"
+                        >
+                          Paper Trade
+                        </button>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -1114,6 +1144,7 @@ export default function IdeasWorkspaceClient({
       </div>
 
       <div
+        ref={tradeTicketRef}
         className={`fixed right-0 top-0 z-50 h-full w-full max-w-xl transform border-l border-[#decdae] bg-[#fff8ee] shadow-[0_18px_40px_rgba(60,42,20,0.18)] transition ${
           selected ? "translate-x-0" : "translate-x-full"
         }`}
@@ -1222,6 +1253,7 @@ export default function IdeasWorkspaceClient({
               <div className="space-y-2 rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                 <label className="block text-xs text-slate-500">Your entry</label>
                 <input
+                  ref={entryInputRef}
                   value={fill}
                   onChange={(e) => {
                     const next = e.target.value;
