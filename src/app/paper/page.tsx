@@ -14,6 +14,58 @@ function money(v: number | null | undefined) {
   return `$${v.toFixed(2)}`;
 }
 
+const CLOSED_STATUSES = new Set(["CLOSED", "STOPPED", "TP1_HIT", "TP2_HIT"]);
+
+function buildPerformanceRows(items: Array<any>, keyField: string) {
+  const grouped = Object.values(
+    items.reduce((acc: Record<string, any>, r: any) => {
+      const key = String(r?.[keyField] ?? "unknown");
+      if (!acc[key]) {
+        acc[key] = {
+          key,
+          trade_count: 0,
+          closed_count: 0,
+          wins: 0,
+          losses: 0,
+          realized_pnl: 0,
+          _win_sum: 0,
+          _loss_sum: 0,
+        };
+      }
+      acc[key].trade_count += 1;
+
+      const status = String(r?.status ?? "");
+      if (!CLOSED_STATUSES.has(status)) return acc;
+
+      const entry = toNum(r?.entry_price);
+      const exit = toNum(r?.exit_price);
+      const shares = toNum(r?.shares) ?? 0;
+      if (entry == null || exit == null || shares <= 0) return acc;
+
+      const pnl = (exit - entry) * shares;
+      acc[key].closed_count += 1;
+      acc[key].realized_pnl += pnl;
+      if (pnl > 0) {
+        acc[key].wins += 1;
+        acc[key]._win_sum += pnl;
+      } else if (pnl < 0) {
+        acc[key].losses += 1;
+        acc[key]._loss_sum += pnl;
+      }
+      return acc;
+    }, {})
+  );
+
+  return grouped.map((g: any) => ({
+    key: g.key,
+    trade_count: g.trade_count,
+    win_rate: g.closed_count > 0 ? g.wins / g.closed_count : 0,
+    realized_pnl: g.realized_pnl,
+    avg_win: g.wins > 0 ? g._win_sum / g.wins : 0,
+    avg_loss: g.losses > 0 ? g._loss_sum / g.losses : 0,
+  }));
+}
+
 export default async function PaperPage() {
   const { supabase, user, portfolios, defaultPortfolio } = await getWorkspaceContext("/paper");
   const portfolioId = defaultPortfolio?.id ? String(defaultPortfolio.id) : null;
@@ -55,8 +107,8 @@ export default async function PaperPage() {
     }
   }
 
-  const openRows = rows.filter((r: any) => !["CLOSED", "STOPPED", "TP1_HIT", "TP2_HIT"].includes(String(r.status ?? "")));
-  const closedRows = rows.filter((r: any) => ["CLOSED", "STOPPED", "TP1_HIT", "TP2_HIT"].includes(String(r.status ?? "")));
+  const openRows = rows.filter((r: any) => !CLOSED_STATUSES.has(String(r.status ?? "")));
+  const closedRows = rows.filter((r: any) => CLOSED_STATUSES.has(String(r.status ?? "")));
 
   const unrealizedPnl = openRows.reduce((sum: number, r: any) => {
     const last = toNum(latestPriceBySymbol[String(r.symbol ?? "").trim().toUpperCase()]);
@@ -101,50 +153,13 @@ export default async function PaperPage() {
       : 0;
   const expectancy = closedCount > 0 ? realizedPnl / closedCount : 0;
 
-  const strategyAnalyticsMap = Object.values(
-    rows.reduce((acc: Record<string, any>, r: any) => {
-      const strategy = String(r.strategy_version ?? "unknown");
-      if (!acc[strategy]) {
-        acc[strategy] = {
-          strategy,
-          trade_count: 0,
-          closed_count: 0,
-          wins: 0,
-          losses: 0,
-          realized_pnl: 0,
-          avg_win: 0,
-          avg_loss: 0,
-          _win_sum: 0,
-          _loss_sum: 0,
-        };
-      }
-      acc[strategy].trade_count += 1;
-      const status = String(r.status ?? "");
-      const isClosed = ["CLOSED", "STOPPED", "TP1_HIT", "TP2_HIT"].includes(status);
-      if (!isClosed) return acc;
-      const entry = toNum(r.entry_price);
-      const exit = toNum(r.exit_price);
-      const shares = toNum(r.shares) ?? 0;
-      if (entry == null || exit == null || shares <= 0) return acc;
-      const pnl = (exit - entry) * shares;
-      acc[strategy].closed_count += 1;
-      acc[strategy].realized_pnl += pnl;
-      if (pnl > 0) {
-        acc[strategy].wins += 1;
-        acc[strategy]._win_sum += pnl;
-      } else if (pnl < 0) {
-        acc[strategy].losses += 1;
-        acc[strategy]._loss_sum += pnl;
-      }
-      return acc;
-    }, {})
-  ).map((s: any) => ({
-    strategy: s.strategy,
+  const strategyAnalyticsMap = buildPerformanceRows(rows, "strategy_version").map((s: any) => ({
+    strategy: s.key,
     trade_count: s.trade_count,
-    win_rate: s.closed_count > 0 ? s.wins / s.closed_count : 0,
+    win_rate: s.win_rate,
     realized_pnl: s.realized_pnl,
-    avg_win: s.wins > 0 ? s._win_sum / s.wins : 0,
-    avg_loss: s.losses > 0 ? s._loss_sum / s.losses : 0,
+    avg_win: s.avg_win,
+    avg_loss: s.avg_loss,
   }));
   const strategyOrder = ["v1", "v1_trend_hold", "v1_sector_momentum"];
   const strategyAnalytics = strategyOrder.map((strategy) => {
@@ -160,6 +175,74 @@ export default async function PaperPage() {
       }
     );
   });
+
+  const universeBySymbolStrategy: Record<string, string> = {};
+  if (rows.length > 0) {
+    const scanSymbols = Array.from(
+      new Set(rows.map((r: any) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean))
+    );
+    const scanStrategies = Array.from(
+      new Set(rows.map((r: any) => String(r.strategy_version ?? "").trim()).filter(Boolean))
+    );
+    if (scanSymbols.length > 0 && scanStrategies.length > 0) {
+      const { data: scanRows } = await supabase
+        .from("daily_scans")
+        .select("symbol,strategy_version,universe_slug,date")
+        .in("symbol", scanSymbols)
+        .in("strategy_version", scanStrategies)
+        .order("date", { ascending: false })
+        .limit(5000);
+      for (const s of scanRows ?? []) {
+        const sym = String((s as any)?.symbol ?? "").trim().toUpperCase();
+        const strat = String((s as any)?.strategy_version ?? "").trim();
+        const universe = String((s as any)?.universe_slug ?? "").trim();
+        if (!sym || !strat || !universe) continue;
+        const key = `${sym}::${strat}`;
+        if (!universeBySymbolStrategy[key]) universeBySymbolStrategy[key] = universe;
+      }
+    }
+  }
+
+  const rowsWithUniverse = rows.map((r: any) => {
+    const sym = String(r.symbol ?? "").trim().toUpperCase();
+    const strat = String(r.strategy_version ?? "").trim();
+    const key = `${sym}::${strat}`;
+    return {
+      ...r,
+      universe_slug: universeBySymbolStrategy[key] ?? "unknown",
+    };
+  });
+
+  const universeAnalyticsMap = buildPerformanceRows(rowsWithUniverse, "universe_slug").map((u: any) => ({
+    universe: u.key,
+    trade_count: u.trade_count,
+    win_rate: u.win_rate,
+    realized_pnl: u.realized_pnl,
+    avg_win: u.avg_win,
+    avg_loss: u.avg_loss,
+  }));
+  const universeOrder = ["liquid_2000", "midcap_1000", "core_800", "growth_1500", "unknown"];
+  const orderedUniverse = [
+    ...universeOrder,
+    ...universeAnalyticsMap
+      .map((u: any) => String(u.universe))
+      .filter((u: string) => !universeOrder.includes(u)),
+  ];
+  const universeAnalytics = orderedUniverse
+    .filter((u, idx) => orderedUniverse.indexOf(u) === idx)
+    .map((universe) => {
+      const existing = universeAnalyticsMap.find((u: any) => u.universe === universe);
+      return (
+        existing ?? {
+          universe,
+          trade_count: 0,
+          win_rate: 0,
+          realized_pnl: 0,
+          avg_win: 0,
+          avg_loss: 0,
+        }
+      );
+    });
 
   return (
     <AppShell currentPath="/paper" userEmail={user.email ?? ""} portfolios={portfolios}>
@@ -268,6 +351,39 @@ export default async function PaperPage() {
                     <td className="px-2 py-2">{money(Number(s.realized_pnl ?? 0))}</td>
                     <td className="px-2 py-2">{money(Number(s.avg_win ?? 0))}</td>
                     <td className="px-2 py-2">{money(Number(s.avg_loss ?? 0))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-[#eadfce] bg-[#fffdf8] p-4">
+          <div className="mb-1 text-sm font-semibold text-slate-800">Performance by universe</div>
+          <div className="mb-3 text-xs text-slate-500">
+            Inferred from latest matching scan context in <code>daily_scans</code> for each paper position.
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="text-xs text-slate-500">
+                <tr className="border-b border-[#eadfce]">
+                  <th className="px-2 py-2">Universe</th>
+                  <th className="px-2 py-2">Trade count</th>
+                  <th className="px-2 py-2">Win rate</th>
+                  <th className="px-2 py-2">Realized P/L</th>
+                  <th className="px-2 py-2">Average win</th>
+                  <th className="px-2 py-2">Average loss</th>
+                </tr>
+              </thead>
+              <tbody>
+                {universeAnalytics.map((u: any) => (
+                  <tr key={u.universe} className="border-b border-[#f1e9dc]">
+                    <td className="px-2 py-2 font-semibold">{u.universe}</td>
+                    <td className="px-2 py-2">{u.trade_count}</td>
+                    <td className="px-2 py-2">{(Number(u.win_rate ?? 0) * 100).toFixed(0)}%</td>
+                    <td className="px-2 py-2">{money(Number(u.realized_pnl ?? 0))}</td>
+                    <td className="px-2 py-2">{money(Number(u.avg_win ?? 0))}</td>
+                    <td className="px-2 py-2">{money(Number(u.avg_loss ?? 0))}</td>
                   </tr>
                 ))}
               </tbody>
