@@ -145,6 +145,7 @@ export default function IdeasWorkspaceClient({
   const [details, setDetails] = useState<any>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [paperSaving, setPaperSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [lastApiUrl, setLastApiUrl] = useState<string>("");
@@ -531,6 +532,57 @@ export default function IdeasWorkspaceClient({
       setError(e?.message ?? "Add position failed");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function openPaperPosition() {
+    if (!selected) return;
+    const entry = Number(fill);
+    const stop = Number(selected.stop);
+    const qty = Math.floor(Number(shares));
+    if (!(entry > 0) || !(stop > 0) || !(qty > 0) || !(entry > stop)) {
+      setError("Enter valid entry, stop, and shares.");
+      return;
+    }
+
+    let tp1Out: number | null = null;
+    let tp2Out: number | null = null;
+    if (tpPlan !== "none") {
+      const parsedTp1 = parseNullableNumber(tp1Price);
+      const parsedTp2 = parseNullableNumber(tp2Price);
+      tp1Out = parsedTp1 != null && parsedTp1 > 0 ? round2(parsedTp1) : Number(selected.tp1) > 0 ? round2(Number(selected.tp1)) : null;
+      if (tpPlan === "tp1_tp2") {
+        tp2Out =
+          parsedTp2 != null && parsedTp2 > 0 ? round2(parsedTp2) : Number(selected.tp2) > 0 ? round2(Number(selected.tp2)) : null;
+      }
+    }
+
+    setPaperSaving(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/paper-positions/open", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          symbol: selected.symbol,
+          strategy_version: strategy,
+          entry_price: entry,
+          stop_price: stop,
+          tp1: tp1Out,
+          tp2: tp2Out,
+          shares: qty,
+          reason_summary: selected.reason_summary ?? null,
+          status: "OPEN",
+        }),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) throw new Error(payload?.error ?? "Open paper position failed");
+      setToast(`Paper position opened: ${selected.symbol}`);
+      setTimeout(() => setToast(null), 1800);
+    } catch (e: any) {
+      setError(e?.message ?? "Open paper position failed");
+    } finally {
+      setPaperSaving(false);
     }
   }
 
@@ -1184,13 +1236,25 @@ export default function IdeasWorkspaceClient({
               {error ? <div className="text-sm text-rose-600">{error}</div> : null}
             </div>
             <div className="border-t border-[#e3d2b6] p-4">
-              <button
-                onClick={addPosition}
-                disabled={saving}
-                className="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-              >
-                {saving ? "Adding..." : "Add Position"}
-              </button>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  onClick={openPaperPosition}
+                  disabled={paperSaving}
+                  className="w-full rounded-xl border border-[#dcc9aa] bg-[#f3e7d3] px-4 py-2 text-sm font-medium text-slate-900 hover:bg-[#eadcbf] disabled:opacity-50"
+                >
+                  {paperSaving ? "Opening..." : "Open Paper Position"}
+                </button>
+                <button
+                  onClick={addPosition}
+                  disabled={saving}
+                  className="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                >
+                  {saving ? "Adding..." : "Add Position"}
+                </button>
+              </div>
+              <div className="mt-2 text-[11px] text-slate-500">
+                Paper execution is simulated only and kept separate from broker positions.
+              </div>
             </div>
           </div>
         ) : null}

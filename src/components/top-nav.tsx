@@ -23,6 +23,7 @@ export default function TopNav({
   const nav = [
     { href: "/dashboard", label: "Dashboard" },
     { href: "/ideas", label: "Ideas" },
+    { href: "/paper", label: "Paper" },
     { href: "/positions", label: "Positions" },
     { href: "/review", label: "Review" },
     { href: "/broker", label: "Broker" },
