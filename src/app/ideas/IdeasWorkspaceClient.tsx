@@ -319,6 +319,15 @@ export default function IdeasWorkspaceClient({
     const signalCountsValidated = data?.meta?.rows_signal_counts_validated ?? {};
     const rawActionable = Number(signalCountsRaw.buy ?? 0) + Number(signalCountsRaw.watch ?? 0);
     const validatedActionable = Number(signalCountsValidated.buy ?? 0) + Number(signalCountsValidated.watch ?? 0);
+    if (selectedFilter === "all") {
+      if (raw === 0) {
+        return `No rows for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
+      }
+      if (filteredRows.length === 0) {
+        return `No rows available for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
+      }
+      return null;
+    }
     if (raw === 0) {
       return `No rows for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
     }
@@ -332,7 +341,7 @@ export default function IdeasWorkspaceClient({
       return `BUY/WATCH rows exist but display filtering removed them for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
     }
     return `No BUY/WATCH candidates after display caps for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
-  }, [loading, data, filteredRows.length, strategy]);
+  }, [loading, data, filteredRows.length, strategy, selectedFilter]);
   const fillNum = Number(fill);
   const stopNum = Number(selected?.stop ?? 0);
   const riskPerShare = fillNum > 0 && stopNum > 0 ? fillNum - stopNum : 0;
