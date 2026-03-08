@@ -11,12 +11,9 @@ import { applyBreadthToAction, computeMarketBreadth } from "@/lib/market_breadth
 import TickerCheckClient from "./TickerCheckClient";
 import { GROWTH_UNIVERSE_SLUG } from "@/lib/strategy_universe";
 import { getBuildMarker, getEnvironmentLabel } from "@/lib/build_marker";
+import PrivacyMoney from "@/components/privacy-money";
+import PrivacyToggle from "./PrivacyToggle";
 const DASHBOARD_PAGE_MARKER = "dashboard-canonical-20260308-a";
-
-function money(v: number | null | undefined) {
-  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
-  return `$${v.toFixed(2)}`;
-}
 
 function signalPill(signal: "BUY" | "WATCH" | "AVOID") {
   if (signal === "BUY") return "border-emerald-200 bg-emerald-50 text-emerald-700";
@@ -321,17 +318,17 @@ export default async function DashboardPage({
       : null;
   const summaryCards = isBrokerLinked
     ? [
-        { label: "Broker Equity", value: money(brokerAccount?.equity ?? null), subtitle: null, sourceField: "broker.account.equity" },
+        { label: "Broker Equity", value: <PrivacyMoney value={brokerAccount?.equity ?? null} />, subtitle: null, sourceField: "broker.account.equity" },
         {
           label: "Broker Cash Available",
-          value: money(brokerAccount?.cash_available ?? null),
+          value: <PrivacyMoney value={brokerAccount?.cash_available ?? null} />,
           subtitle: null,
           sourceField: "broker.account.cash_available",
         },
-        { label: "Buying Power", value: money(brokerAccount?.buying_power ?? null), subtitle: null, sourceField: "broker.account.buying_power" },
+        { label: "Buying Power", value: <PrivacyMoney value={brokerAccount?.buying_power ?? null} />, subtitle: null, sourceField: "broker.account.buying_power" },
         {
           label: "Broker Market Value",
-          value: money(totalExposure),
+          value: <PrivacyMoney value={totalExposure} />,
           subtitle: "From broker snapshot positions",
           sourceField: "sum(broker.positions.market_value)",
         },
@@ -349,20 +346,24 @@ export default async function DashboardPage({
         },
       ]
     : [
-        { label: "Account size", value: money(snapshot?.account_size ?? null), subtitle: null, sourceField: "internal.snapshot.account_size" },
+        { label: "Account size", value: <PrivacyMoney value={snapshot?.account_size ?? null} />, subtitle: null, sourceField: "internal.snapshot.account_size" },
         {
           label: "Capital deployed",
-          value: money(snapshot?.deployed_cost_basis ?? null),
+          value: <PrivacyMoney value={snapshot?.deployed_cost_basis ?? null} />,
           subtitle: "Cost basis",
           sourceField: "internal.snapshot.deployed_cost_basis",
         },
         {
           label: "Cash available",
-          value: `${money(snapshot?.cash_available ?? null)} (${snapshot?.cash_source === "manual" ? "Exact" : "Estimated"})`,
+          value: (
+            <>
+              <PrivacyMoney value={snapshot?.cash_available ?? null} /> ({snapshot?.cash_source === "manual" ? "Exact" : "Estimated"})
+            </>
+          ),
           subtitle: null,
           sourceField: "internal.snapshot.cash_available",
         },
-        { label: "Market value", value: money(snapshot?.market_value_optional ?? null), subtitle: null, sourceField: "internal.snapshot.market_value_optional" },
+        { label: "Market value", value: <PrivacyMoney value={snapshot?.market_value_optional ?? null} />, subtitle: null, sourceField: "internal.snapshot.market_value_optional" },
         { label: "Open positions", value: String(snapshot?.open_count ?? 0), subtitle: null, sourceField: "internal.snapshot.open_count" },
         { label: "Risk deployed", value: "—", subtitle: null, sourceField: "n/a" },
       ];
@@ -415,7 +416,10 @@ export default async function DashboardPage({
     <AppShell currentPath="/dashboard" userEmail={user.email ?? ""} portfolios={portfolios}>
       <div className="space-y-8">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-900 sm:text-[2.15rem]">Dashboard</h1>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h1 className="text-3xl font-semibold tracking-tight text-slate-900 sm:text-[2.15rem]">Dashboard</h1>
+            <PrivacyToggle />
+          </div>
           <p className="mt-1.5 text-sm leading-6 text-slate-600">Morning briefing for portfolio, market, and ideas.</p>
           <p className="surface-chip mt-3 inline-flex px-2.5 py-1 text-xs font-medium text-slate-700">
             {portfolioSourceLabel}
@@ -486,12 +490,12 @@ export default async function DashboardPage({
           <div className="mt-4 grid gap-3.5 md:grid-cols-3">
             <div className="surface-card p-3.5">
               <div className="muted-label">Total Exposure</div>
-              <div className="mt-1 text-xl font-semibold text-slate-900">{money(totalExposure)}</div>
+              <div className="mt-1 text-xl font-semibold text-slate-900"><PrivacyMoney value={totalExposure} /></div>
               {isBrokerLinked ? <div className="mt-1 text-[11px] text-slate-500">Broker snapshot market value</div> : null}
             </div>
             <div className="surface-card p-3.5">
               <div className="muted-label">Cash Available</div>
-              <div className="mt-1 text-xl font-semibold text-slate-900">{money(cashAvailable)}</div>
+              <div className="mt-1 text-xl font-semibold text-slate-900"><PrivacyMoney value={cashAvailable} /></div>
             </div>
             <div className="surface-card p-3.5">
               <div className="muted-label">Risk / Trade</div>
@@ -499,12 +503,12 @@ export default async function DashboardPage({
             </div>
             <div className="surface-card p-3.5">
               <div className="muted-label">Risk Deployed</div>
-              <div className="mt-1 text-xl font-semibold text-slate-900">{money(totalRiskDeployed)}</div>
+              <div className="mt-1 text-xl font-semibold text-slate-900"><PrivacyMoney value={totalRiskDeployed} /></div>
               {isBrokerLinked ? <div className="mt-1 text-[11px] text-slate-500">From internal tracked stops</div> : null}
             </div>
             <div className="surface-card p-3.5">
               <div className="muted-label">Max Stop Loss Risk</div>
-              <div className="mt-1 text-xl font-semibold text-slate-900">{money(maxLossIfAllStopsHit)}</div>
+              <div className="mt-1 text-xl font-semibold text-slate-900"><PrivacyMoney value={maxLossIfAllStopsHit} /></div>
             </div>
             <div className="surface-card p-3.5">
               <div className="muted-label">Account Risk %</div>
@@ -653,15 +657,15 @@ export default async function DashboardPage({
             </div>
             <div className="surface-card p-3.5">
               <div className="muted-label">Cash Available</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{money(brokerAccount?.cash_available)}</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900"><PrivacyMoney value={brokerAccount?.cash_available} /></div>
             </div>
             <div className="surface-card p-3.5">
               <div className="muted-label">Equity</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{money(brokerAccount?.equity)}</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900"><PrivacyMoney value={brokerAccount?.equity} /></div>
             </div>
             <div className="surface-card p-3.5">
               <div className="muted-label">Buying Power</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{money(brokerAccount?.buying_power)}</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900"><PrivacyMoney value={brokerAccount?.buying_power} /></div>
             </div>
             <div className="surface-card p-3.5">
               <div className="muted-label">Positions</div>
