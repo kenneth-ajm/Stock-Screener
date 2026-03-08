@@ -73,7 +73,7 @@ export default async function PaperPage() {
   let query = supabase
     .from("paper_positions")
     .select(
-      "id,symbol,strategy_version,entry_price,stop_price,tp1,tp2,shares,status,reason_summary,notes,opened_at,closed_at,exit_price,created_at,updated_at"
+      "id,symbol,strategy_version,universe_slug,source_scan_date,entry_price,stop_price,tp1,tp2,shares,status,reason_summary,notes,opened_at,closed_at,exit_price,created_at,updated_at"
     )
     .eq("user_id", user.id)
     .order("opened_at", { ascending: false })
@@ -176,8 +176,9 @@ export default async function PaperPage() {
     );
   });
 
+  const needsUniverseFallback = rows.some((r: any) => !String(r?.universe_slug ?? "").trim());
   const universeBySymbolStrategy: Record<string, string> = {};
-  if (rows.length > 0) {
+  if (needsUniverseFallback && rows.length > 0) {
     const scanSymbols = Array.from(
       new Set(rows.map((r: any) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean))
     );
@@ -207,9 +208,10 @@ export default async function PaperPage() {
     const sym = String(r.symbol ?? "").trim().toUpperCase();
     const strat = String(r.strategy_version ?? "").trim();
     const key = `${sym}::${strat}`;
+    const persistedUniverse = String(r.universe_slug ?? "").trim();
     return {
       ...r,
-      universe_slug: universeBySymbolStrategy[key] ?? "unknown",
+      universe_slug: persistedUniverse || universeBySymbolStrategy[key] || "unknown",
     };
   });
 

@@ -33,6 +33,8 @@ function normalizeStrategyVersion(input: string | null | undefined) {
 
 type ScanRow = {
   symbol: string;
+  universe_slug?: string | null;
+  source_scan_date?: string | null;
   signal: "BUY" | "WATCH" | "AVOID";
   confidence: number;
   rank_score?: number | null;
@@ -212,7 +214,7 @@ const loadScreenerDataCached = unstable_cache(
       const { data } = await (supabase as any)
         .from("daily_scans")
         .select(
-          "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json"
+          "symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,reason_summary,reason_json,universe_slug,date"
         )
         .eq("universe_slug", universe)
         .eq("strategy_version", strategyVersion)
@@ -410,6 +412,8 @@ const loadScreenerDataCached = unstable_cache(
           : undefined;
       return {
         symbol: row.symbol,
+        universe_slug: String((row as any).universe_slug ?? mappedUniverse ?? "").trim() || null,
+        source_scan_date: String((row as any).date ?? resolvedDateUsed ?? "").trim() || null,
         signal: row.signal,
         confidence: Number(row.confidence ?? 0),
         entry: Number(row.entry ?? 0),

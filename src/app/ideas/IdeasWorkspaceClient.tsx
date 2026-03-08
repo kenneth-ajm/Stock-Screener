@@ -12,6 +12,8 @@ type IdeasFilter = "all" | "buy" | "watch" | "actionable";
 
 type IdeaRow = {
   symbol: string;
+  universe_slug?: string | null;
+  source_scan_date?: string | null;
   signal: "BUY" | "WATCH" | "AVOID";
   confidence: number;
   rank?: number | null;
@@ -677,6 +679,9 @@ export default function IdeasWorkspaceClient({
         body: JSON.stringify({
           symbol: selected.symbol,
           strategy_version: strategy,
+          universe_slug:
+            selected.universe_slug ?? data?.meta?.universe_slug ?? null,
+          source_scan_date: selected.source_scan_date ?? data?.meta?.date_used ?? null,
           entry_price: entry,
           stop_price: stop,
           tp1: tp1Out,

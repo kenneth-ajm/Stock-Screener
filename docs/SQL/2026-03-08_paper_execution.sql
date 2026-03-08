@@ -8,6 +8,8 @@ create table if not exists public.paper_positions (
   portfolio_id uuid null references public.portfolios(id) on delete set null,
   symbol text not null,
   strategy_version text not null,
+  universe_slug text null,
+  source_scan_date date null,
   entry_price numeric not null,
   stop_price numeric not null,
   tp1 numeric null,

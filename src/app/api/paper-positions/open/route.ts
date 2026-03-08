@@ -29,6 +29,11 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const symbol = String(body?.symbol ?? "").trim().toUpperCase();
   const strategyVersion = String(body?.strategy_version ?? "v1").trim() || "v1";
+  const universeSlugRaw = String(body?.universe_slug ?? "").trim().toLowerCase();
+  const universeSlug = universeSlugRaw || null;
+  const sourceScanDateRaw = String(body?.source_scan_date ?? "").trim();
+  const sourceScanDate =
+    /^\d{4}-\d{2}-\d{2}$/.test(sourceScanDateRaw) ? sourceScanDateRaw : null;
   const entryPrice = Number(body?.entry_price);
   const stopPrice = Number(body?.stop_price ?? body?.stop);
   const tp1 = body?.tp1 == null || body?.tp1 === "" ? null : Number(body.tp1);
@@ -82,6 +87,8 @@ export async function POST(req: Request) {
     portfolio_id: defaultPortfolio?.id ?? null,
     symbol,
     strategy_version: strategyVersion,
+    universe_slug: universeSlug,
+    source_scan_date: sourceScanDate,
     entry_price: entryPrice,
     stop_price: stopPrice,
     tp1,
