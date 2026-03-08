@@ -1,6 +1,7 @@
 -- Paper execution positions table (platform-only simulation).
 -- Read-only broker integration remains separate.
--- Run in Supabase SQL editor.
+
+create extension if not exists pgcrypto;
 
 create table if not exists public.paper_positions (
   id uuid primary key default gen_random_uuid(),

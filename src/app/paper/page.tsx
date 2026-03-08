@@ -28,6 +28,9 @@ export default async function PaperPage() {
     ...r,
     symbol: String(r?.symbol ?? "").trim().toUpperCase(),
   }));
+  const missingPaperTable =
+    String(paperError?.code ?? "") === "PGRST205" ||
+    /paper_positions/i.test(String(paperError?.message ?? ""));
 
   const symbols = Array.from(
     new Set(rows.map((r: any) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean))
@@ -78,7 +81,19 @@ export default async function PaperPage() {
 
         {paperError ? (
           <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-            Failed to load paper positions: {paperError.message}
+            <div className="font-semibold">Failed to load paper positions: {paperError.message}</div>
+            {missingPaperTable ? (
+              <div className="mt-2 text-rose-800">
+                Missing table `public.paper_positions`. Apply
+                {" "}
+                <code>docs/SQL/2026-03-08_paper_execution.sql</code>
+                {" "}
+                (or
+                {" "}
+                <code>supabase/migrations/20260308100000_paper_positions.sql</code>
+                ).
+              </div>
+            ) : null}
           </div>
         ) : null}
 

@@ -580,7 +580,10 @@ export default function IdeasWorkspaceClient({
       setToast(`Paper position opened: ${selected.symbol}`);
       setTimeout(() => setToast(null), 1800);
     } catch (e: any) {
-      setError(e?.message ?? "Open paper position failed");
+      const msg = e?.message ?? "Open paper position failed";
+      setError(msg);
+      setToast(`Paper open failed: ${msg}`);
+      setTimeout(() => setToast(null), 2600);
     } finally {
       setPaperSaving(false);
     }

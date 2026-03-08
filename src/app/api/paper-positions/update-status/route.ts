@@ -61,12 +61,16 @@ export async function POST(req: Request) {
     .single();
 
   if (error) {
+    const missingTable =
+      error.code === "PGRST205" || /paper_positions/i.test(error.message ?? "");
     return NextResponse.json(
       {
         ok: false,
         error: error.message,
-        hint: /paper_positions/i.test(error.message)
-          ? "Run docs/SQL/2026-03-08_paper_execution.sql in Supabase."
+        code: error.code ?? null,
+        write_step: "update_paper_position_status",
+        hint: missingTable
+          ? "Missing table: public.paper_positions. Apply docs/SQL/2026-03-08_paper_execution.sql (or supabase/migrations/20260308100000_paper_positions.sql)."
           : null,
       },
       { status: 500 }
@@ -75,4 +79,3 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok: true, position: data });
 }
-
