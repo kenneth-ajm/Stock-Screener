@@ -153,36 +153,30 @@ export default function TickerCheckClient(props: {
   }
 
   return (
-    <section className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-5 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold tracking-tight text-slate-900">Manual Ticker Check</h2>
-          <p className="mt-1 text-xs text-slate-600">Quick check for actionability now, then open normal Ideas flow.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            value={symbolInput}
-            onChange={(e) => setSymbolInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") runCheck();
-            }}
-            placeholder="Ticker (e.g. TSLA)"
-            className="w-[180px] rounded-xl border border-[#e6d8c1] bg-[#fffdf8] px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#d4c1a2]"
-          />
-          <button
-            onClick={runCheck}
-            disabled={busy}
-            className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-2 text-sm font-medium text-slate-800 hover:bg-[#ecdcbf] disabled:opacity-60"
-          >
-            {busy ? "Checking..." : "Check"}
-          </button>
-        </div>
+    <section className="rounded-xl border border-[#dfcfb2] bg-[#fff7ec] p-2.5 shadow-[0_4px_12px_rgba(88,63,36,0.05)]">
+      <div className="flex items-center gap-2">
+        <input
+          value={symbolInput}
+          onChange={(e) => setSymbolInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") runCheck();
+          }}
+          placeholder="Ticker"
+          className="w-[112px] rounded-lg border border-[#e6d8c1] bg-[#fffdf8] px-2.5 py-1.5 text-sm text-slate-900 outline-none focus:border-[#d4c1a2]"
+        />
+        <button
+          onClick={runCheck}
+          disabled={busy}
+          className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-[#ecdcbf] disabled:opacity-60"
+        >
+          {busy ? "Checking..." : "Check"}
+        </button>
       </div>
 
-      {error ? <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">{error}</div> : null}
 
       {score?.ok ? (
-        <div className="mt-4 rounded-xl border border-[#eadfce] bg-[#fffdf8] p-4">
+        <div className="mt-2 rounded-lg border border-[#eadfce] bg-[#fffdf8] p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-xl font-semibold text-slate-900">{symbol}</div>
             <div className="flex flex-wrap items-center gap-2">

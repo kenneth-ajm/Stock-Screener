@@ -406,7 +406,10 @@ export default async function DashboardPage({
         <div className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-3xl font-semibold tracking-tight text-slate-900 sm:text-[2.15rem]">Dashboard</h1>
-            <PrivacyToggle />
+            <div className="flex items-center gap-2">
+              <TickerCheckClient breadthState={breadth.breadthState} breadthLabel={breadth.breadthLabel} />
+              <PrivacyToggle />
+            </div>
           </div>
           <p className="text-sm leading-6 text-slate-600">Morning briefing for portfolio, market, and ideas.</p>
           <p className="surface-chip inline-flex px-2.5 py-1 text-xs font-medium text-slate-700">
@@ -658,13 +661,6 @@ export default async function DashboardPage({
           </div>
         </section>
 
-        <section className="surface-panel p-3.5">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="section-title">Quick Ticker Check</div>
-            <div className="text-xs text-slate-500">Manual check</div>
-          </div>
-          <TickerCheckClient breadthState={breadth.breadthState} breadthLabel={breadth.breadthLabel} />
-        </section>
       </div>
     </AppShell>
   );
