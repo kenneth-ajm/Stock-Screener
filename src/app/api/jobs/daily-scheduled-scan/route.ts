@@ -5,6 +5,8 @@ import { runPopulate } from "@/app/api/jobs/populate-sector-momentum/route";
 import { CORE_MOMENTUM_DEFAULT_UNIVERSE, CORE_MOMENTUM_DEFAULT_VERSION } from "@/lib/strategy/coreMomentumSwing";
 import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
 import { SECTOR_MOMENTUM_STRATEGY_VERSION, SECTOR_MOMENTUM_UNIVERSE_SLUG } from "@/lib/sector_momentum";
+import { runScanPipeline } from "@/lib/scan_engine";
+import { MIDCAP_UNIVERSE_SLUG } from "@/lib/strategy_universe";
 import { computeMarketBreadth } from "@/lib/market_breadth";
 import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 import { OBS_KEYS, writeObservabilityStatus } from "@/lib/observability";
@@ -129,6 +131,45 @@ async function runWorkflow(opts: { dry_run?: boolean }) {
         candidates_count: json.candidates_count ?? 0,
         persisted_rows: json.persisted_rows ?? 0,
         pruned_rows: json.pruned_rows ?? 0,
+      };
+    });
+    stages.push(stage);
+  }
+
+  if (dry_run) {
+    stages.push({
+      stage: "midcap_scan",
+      ok: true,
+      duration_ms: 0,
+      detail: {
+        skipped: true,
+        reason: "dry_run=true",
+      },
+    });
+  } else {
+    const stage = await runStage("midcap_scan", async () => {
+      if (!scan_date_used) throw new Error("scan_date_used unavailable for midcap scan");
+      const momentum = await runScanPipeline({
+        supabase: supa,
+        universe_slug: MIDCAP_UNIVERSE_SLUG,
+        strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
+        scan_date: scan_date_used,
+        finalize: true,
+      });
+      if (!momentum?.ok) throw new Error(String(momentum?.error ?? "midcap momentum failed"));
+      const trend = await runScanPipeline({
+        supabase: supa,
+        universe_slug: MIDCAP_UNIVERSE_SLUG,
+        strategy_version: TREND_HOLD_DEFAULT_VERSION,
+        scan_date: scan_date_used,
+        finalize: true,
+      });
+      if (!trend?.ok) throw new Error(String(trend?.error ?? "midcap trend failed"));
+      return {
+        scan_date_used,
+        universe_slug: MIDCAP_UNIVERSE_SLUG,
+        momentum_scored: momentum.scored ?? 0,
+        trend_scored: trend.scored ?? 0,
       };
     });
     stages.push(stage);

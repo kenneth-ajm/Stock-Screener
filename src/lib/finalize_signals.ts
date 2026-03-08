@@ -38,7 +38,10 @@ function sortByRankScore(rows: ScanRow[]) {
 
 export async function finalizeSignals(opts: FinalizeArgs) {
   const supa = opts.supabase as any;
-  const universe_slug = "core_800";
+  const universe_slug = String(opts.universe_slug ?? "").trim();
+  if (!universe_slug) {
+    return { ok: false, error: "Missing universe_slug for finalizeSignals" };
+  }
   console.log("finalizeSignals filters", {
     date: opts.date,
     universe_slug,

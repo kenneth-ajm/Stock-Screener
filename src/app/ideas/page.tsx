@@ -18,13 +18,18 @@ function normalizeIdeasStrategy(input: string | null | undefined) {
 export default async function IdeasPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ strategy?: string; symbol?: string; diag?: string }>;
+  searchParams?: Promise<{ strategy?: string; symbol?: string; diag?: string; universe?: string }>;
 }) {
   const { user, portfolios } = await getWorkspaceContext("/ideas");
   const params = (await searchParams) ?? {};
   const initialStrategy = normalizeIdeasStrategy(params.strategy ?? "v1");
   const strategyParamRaw = String(params.strategy ?? "").trim() || null;
   const initialSymbol = String(params.symbol ?? "").trim().toUpperCase() || null;
+  const initialUniverse = (() => {
+    const raw = String(params.universe ?? "").trim().toLowerCase();
+    if (raw === "midcap_1000" || raw === "midcap" || raw === "mid") return "midcap_1000";
+    return "core_800";
+  })();
   const diagRaw = String(params.diag ?? "").trim().toLowerCase();
   const showDiagnostics = diagRaw === "1" || diagRaw === "true";
   const buildMarker = getBuildMarker();
@@ -38,6 +43,7 @@ export default async function IdeasPage({
       <div className="mt-4">
         <IdeasWorkspaceClient
           initialStrategy={initialStrategy}
+          initialUniverse={initialUniverse}
           initialSymbol={initialSymbol}
           strategyParamRaw={strategyParamRaw}
           showDiagnostics={showDiagnostics}

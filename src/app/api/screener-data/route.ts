@@ -196,7 +196,7 @@ const loadScreenerDataCached = unstable_cache(
       }
     }
 
-    if (rawRows.length === 0) {
+    if (rawRows.length === 0 && !requestedUniverse) {
       const { data: latestAnyUniverse } = await (supabase as any)
         .from("daily_scans")
         .select("date,universe_slug")

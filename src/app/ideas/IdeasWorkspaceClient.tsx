@@ -123,6 +123,7 @@ function fmtSignedPct(v: number | null) {
 
 export default function IdeasWorkspaceClient({
   initialStrategy = "v1",
+  initialUniverse = "core_800",
   initialSymbol = null,
   strategyParamRaw = null,
   showDiagnostics = false,
@@ -130,6 +131,7 @@ export default function IdeasWorkspaceClient({
   pageMarker = "ideas-page-marker-missing",
 }: {
   initialStrategy?: StrategyVersion;
+  initialUniverse?: string;
   initialSymbol?: string | null;
   strategyParamRaw?: string | null;
   showDiagnostics?: boolean;
@@ -137,6 +139,7 @@ export default function IdeasWorkspaceClient({
   pageMarker?: string;
 }) {
   const [strategy, setStrategy] = useState<StrategyVersion>(initialStrategy);
+  const [universeSlug, setUniverseSlug] = useState<string>(initialUniverse);
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<IdeaRow | null>(null);
@@ -173,9 +176,13 @@ export default function IdeasWorkspaceClient({
   }, [initialStrategy]);
 
   useEffect(() => {
+    setUniverseSlug(initialUniverse);
+  }, [initialUniverse]);
+
+  useEffect(() => {
     let mounted = true;
     setLoading(true);
-    const apiUrl = `/api/screener-data?strategy_version=${strategy}`;
+    const apiUrl = `/api/screener-data?strategy_version=${strategy}&universe_slug=${encodeURIComponent(universeSlug)}`;
     setLastApiUrl(apiUrl);
     setLastLoadOk(null);
     fetch(apiUrl, {
@@ -205,7 +212,7 @@ export default function IdeasWorkspaceClient({
     return () => {
       mounted = false;
     };
-  }, [strategy]);
+  }, [strategy, universeSlug]);
 
   useEffect(() => {
     const symbols = (data?.rows ?? []).slice(0, 100).map((r) => r.symbol).filter(Boolean);
@@ -458,7 +465,7 @@ export default function IdeasWorkspaceClient({
       const query = new URLSearchParams({
         symbol: selected.symbol,
         strategy_version: strategy,
-        universe_slug: defaultUniverseForStrategy(strategy),
+        universe_slug: universeSlug,
         date: data?.meta?.lctd ?? "",
       });
       const res = await fetch(`/api/scan-row-detail?${query.toString()}`, { cache: "no-store" });
@@ -711,6 +718,28 @@ export default function IdeasWorkspaceClient({
             Trend Hold
           </button>
         </div>
+        <div className="flex items-center gap-2 rounded-xl border border-[#e3d5bf] bg-[#fcf8f1] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
+          <button
+            onClick={() => setUniverseSlug("core_800")}
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
+              universeSlug === "core_800"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
+            }`}
+          >
+            Core 800
+          </button>
+          <button
+            onClick={() => setUniverseSlug("midcap_1000")}
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
+              universeSlug === "midcap_1000"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
+            }`}
+          >
+            Midcap 1000
+          </button>
+        </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
           <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
           <span className="surface-chip px-2.5 py-1">Latest scan: {data?.meta?.date_used ?? "—"}</span>
@@ -789,6 +818,7 @@ export default function IdeasWorkspaceClient({
           {" • "}page_marker={pageMarker}
           {" • "}strategy_param={strategyParamRaw ?? "—"}
           {" • "}resolved_strategy_tab={strategy}
+          {" • "}selected_universe={universeSlug}
           {" • "}strategy_version={data?.meta?.strategy_version ?? strategy}
           {" • "}filter={selectedFilter}
           {" • "}universe={data?.meta?.universe_slug ?? "—"}
