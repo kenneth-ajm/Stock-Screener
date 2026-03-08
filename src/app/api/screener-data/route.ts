@@ -18,6 +18,7 @@ const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY = "v1";
 const BUY_CAP = 5;
 const WATCH_CAP = 10;
+const MAX_ROWS = 200;
 const ENTRY_MISMATCH_THRESHOLD_PCT = 0.6;
 
 function normalizeStrategyVersion(input: string | null | undefined) {
@@ -63,7 +64,8 @@ function rankRows(rows: ScanRow[]) {
 function applyDisplayCaps(rows: ScanRow[]) {
   const buyRanked = rankRows(rows.filter((r) => r.signal === "BUY")).slice(0, BUY_CAP);
   const watchRanked = rankRows(rows.filter((r) => r.signal === "WATCH")).slice(0, WATCH_CAP);
-  return rankRows([...buyRanked, ...watchRanked]);
+  const avoidRanked = rankRows(rows.filter((r) => r.signal !== "BUY" && r.signal !== "WATCH"));
+  return rankRows([...buyRanked, ...watchRanked, ...avoidRanked]).slice(0, MAX_ROWS);
 }
 
 function getCheckOk(reasonJson: any, key: string): boolean | null {
