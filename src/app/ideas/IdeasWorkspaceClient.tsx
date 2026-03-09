@@ -149,6 +149,8 @@ export default function IdeasWorkspaceClient({
   showDiagnostics = false,
   buildMarker = "local",
   pageMarker = "ideas-page-marker-missing",
+  openTicketOnLoad = false,
+  initialManualContext = null,
 }: {
   initialStrategy?: StrategyVersion;
   initialUniverse?: string;
@@ -157,6 +159,19 @@ export default function IdeasWorkspaceClient({
   showDiagnostics?: boolean;
   buildMarker?: string;
   pageMarker?: string;
+  openTicketOnLoad?: boolean;
+  initialManualContext?: {
+    symbol: string;
+    signal: "BUY" | "WATCH" | "AVOID" | null;
+    confidence: number | null;
+    entry: number | null;
+    stop: number | null;
+    tp1: number | null;
+    tp2: number | null;
+    reason_summary: string | null;
+    source_scan_date: string | null;
+    universe_slug: string | null;
+  } | null;
 }) {
   const [strategy, setStrategy] = useState<StrategyVersion>(initialStrategy);
   const [universeMode, setUniverseMode] = useState<string>(initialUniverse);
@@ -323,11 +338,47 @@ export default function IdeasWorkspaceClient({
     const target = String(initialSymbol).trim().toUpperCase();
     const found = (data.rows ?? []).find((r) => String(r.symbol ?? "").trim().toUpperCase() === target);
     if (found) {
-      setSelected(found);
+      if (openTicketOnLoad) {
+        openTradeTicket(found);
+      } else {
+        setSelected(found);
+      }
+      return;
+    }
+    if (initialManualContext && initialManualContext.symbol === target) {
+      const fallbackRow: IdeaRow = {
+        symbol: target,
+        signal: (initialManualContext.signal ?? "WATCH") as "BUY" | "WATCH" | "AVOID",
+        confidence: Number.isFinite(Number(initialManualContext.confidence)) ? Number(initialManualContext.confidence) : 60,
+        entry: Number.isFinite(Number(initialManualContext.entry)) ? Number(initialManualContext.entry) : 0,
+        stop: Number.isFinite(Number(initialManualContext.stop)) ? Number(initialManualContext.stop) : 0,
+        tp1: Number.isFinite(Number(initialManualContext.tp1)) ? Number(initialManualContext.tp1) : 0,
+        tp2: Number.isFinite(Number(initialManualContext.tp2)) ? Number(initialManualContext.tp2) : 0,
+        reason_summary: initialManualContext.reason_summary ?? "Loaded from manual ticker check context.",
+        universe_slug: initialManualContext.universe_slug ?? data?.meta?.universe_slug ?? null,
+        source_scan_date: initialManualContext.source_scan_date ?? data?.meta?.date_used ?? null,
+        reason_json: null,
+        sizing: {
+          shares: 0,
+          est_cost: 0,
+          risk_per_share: 0,
+          risk_budget: 0,
+          shares_by_risk: 0,
+          shares_by_cash: 0,
+          shares_by_portfolio_cap: null,
+          limiting_factor: "none",
+          sizing_mode: "cash_only",
+        },
+      };
+      if (openTicketOnLoad) {
+        openTradeTicket(fallbackRow);
+      } else {
+        setSelected(fallbackRow);
+      }
       return;
     }
     setSelected(null);
-  }, [initialSymbol, data?.rows]);
+  }, [initialSymbol, initialManualContext, openTicketOnLoad, data?.rows]);
 
   const allRows = useMemo(() => data?.rows ?? [], [data]);
   const rows = useMemo(() => allRows.slice(0, 10), [allRows]);

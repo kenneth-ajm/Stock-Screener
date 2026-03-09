@@ -10,6 +10,7 @@ import { mapExecutionState } from "@/lib/execution_state";
 type ScorePayload = {
   ok: boolean;
   symbol?: string;
+  scanDate?: string;
   signal?: "BUY" | "WATCH" | "AVOID";
   confidence?: number;
   entry?: number;
@@ -152,6 +153,23 @@ export default function TickerCheckClient(props: {
     }
   }
 
+  const ideasParams = new URLSearchParams();
+  ideasParams.set("strategy", "momentum");
+  if (symbol) ideasParams.set("symbol", symbol);
+  ideasParams.set("open_ticket", "1");
+  if (score?.signal) ideasParams.set("manual_signal", score.signal);
+  if (typeof score?.confidence === "number" && Number.isFinite(score.confidence)) {
+    ideasParams.set("manual_confidence", String(score.confidence));
+  }
+  if (typeof score?.entry === "number" && Number.isFinite(score.entry)) ideasParams.set("manual_entry", String(score.entry));
+  if (typeof score?.stop === "number" && Number.isFinite(score.stop)) ideasParams.set("manual_stop", String(score.stop));
+  if (typeof score?.tp1 === "number" && Number.isFinite(score.tp1)) ideasParams.set("manual_tp1", String(score.tp1));
+  if (typeof score?.tp2 === "number" && Number.isFinite(score.tp2)) ideasParams.set("manual_tp2", String(score.tp2));
+  if (score?.reason_summary) ideasParams.set("manual_reason_summary", score.reason_summary);
+  if (score?.scanDate) ideasParams.set("manual_scan_date", String(score.scanDate));
+  ideasParams.set("manual_universe_slug", "liquid_2000");
+  const ideasHref = `/ideas?${ideasParams.toString()}`;
+
   return (
     <section className="rounded-xl border border-[#dfcfb2] bg-[#fff7ec] p-2.5 shadow-[0_4px_12px_rgba(88,63,36,0.05)]">
       <div className="flex items-center gap-2">
@@ -223,14 +241,14 @@ export default function TickerCheckClient(props: {
 
           <div className="mt-4 flex items-center gap-2">
             <Link
-              href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(symbol)}`}
+              href={ideasHref}
               className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-2 text-xs font-medium text-slate-800 hover:bg-[#ecdcbf]"
             >
               Open in Ideas
             </Link>
             {isBuySignal ? (
               <Link
-                href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(symbol)}`}
+                href={ideasHref}
                 className="rounded-xl border border-[#e4d7c3] bg-[#fffaf2] px-3 py-2 text-xs font-medium text-slate-700 hover:bg-[#fff6ea]"
               >
                 Open Trade Ticket

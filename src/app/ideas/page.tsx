@@ -18,7 +18,22 @@ function normalizeIdeasStrategy(input: string | null | undefined) {
 export default async function IdeasPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ strategy?: string; symbol?: string; diag?: string; universe?: string }>;
+  searchParams?: Promise<{
+    strategy?: string;
+    symbol?: string;
+    diag?: string;
+    universe?: string;
+    open_ticket?: string;
+    manual_signal?: string;
+    manual_confidence?: string;
+    manual_entry?: string;
+    manual_stop?: string;
+    manual_tp1?: string;
+    manual_tp2?: string;
+    manual_reason_summary?: string;
+    manual_scan_date?: string;
+    manual_universe_slug?: string;
+  }>;
 }) {
   const { user, portfolios } = await getWorkspaceContext("/ideas");
   const params = (await searchParams) ?? {};
@@ -37,6 +52,31 @@ export default async function IdeasPage({
   const diagRaw = String(params.diag ?? "").trim().toLowerCase();
   const showDiagnostics = diagRaw === "1" || diagRaw === "true";
   const buildMarker = getBuildMarker();
+  const openTicketRaw = String(params.open_ticket ?? "").trim().toLowerCase();
+  const openTicketOnLoad = openTicketRaw === "1" || openTicketRaw === "true";
+  const manualContext = (() => {
+    if (!initialSymbol) return null;
+    const signalRaw = String(params.manual_signal ?? "").trim().toUpperCase();
+    const signal: "BUY" | "WATCH" | "AVOID" | null =
+      signalRaw === "BUY" || signalRaw === "WATCH" || signalRaw === "AVOID" ? signalRaw : null;
+    const confidence = Number(params.manual_confidence ?? "");
+    const entry = Number(params.manual_entry ?? "");
+    const stop = Number(params.manual_stop ?? "");
+    const tp1 = Number(params.manual_tp1 ?? "");
+    const tp2 = Number(params.manual_tp2 ?? "");
+    return {
+      symbol: initialSymbol,
+      signal,
+      confidence: Number.isFinite(confidence) ? confidence : null,
+      entry: Number.isFinite(entry) ? entry : null,
+      stop: Number.isFinite(stop) ? stop : null,
+      tp1: Number.isFinite(tp1) ? tp1 : null,
+      tp2: Number.isFinite(tp2) ? tp2 : null,
+      reason_summary: String(params.manual_reason_summary ?? "").trim() || null,
+      source_scan_date: String(params.manual_scan_date ?? "").trim() || null,
+      universe_slug: String(params.manual_universe_slug ?? "").trim() || null,
+    };
+  })();
 
   return (
     <AppShell currentPath="/ideas" userEmail={user.email ?? ""} portfolios={portfolios}>
@@ -53,6 +93,8 @@ export default async function IdeasPage({
           showDiagnostics={showDiagnostics}
           buildMarker={buildMarker}
           pageMarker={IDEAS_PAGE_MARKER}
+          openTicketOnLoad={openTicketOnLoad}
+          initialManualContext={manualContext}
         />
       </div>
     </AppShell>
