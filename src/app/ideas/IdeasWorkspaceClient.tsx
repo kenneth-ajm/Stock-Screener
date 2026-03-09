@@ -203,6 +203,7 @@ export default function IdeasWorkspaceClient({
   const [selectedFilter, setSelectedFilter] = useState<IdeasFilter>("all");
   const [runScanBusy, setRunScanBusy] = useState(false);
   const [runScanMessage, setRunScanMessage] = useState<string | null>(null);
+  const [runScanActiveLabel, setRunScanActiveLabel] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const tradeTicketRef = useRef<HTMLDivElement | null>(null);
   const entryInputRef = useRef<HTMLInputElement | null>(null);
@@ -265,6 +266,7 @@ export default function IdeasWorkspaceClient({
     const timer = setTimeout(() => {
       setRunScanBusy(false);
       setRunScanMessage("Run scan failed: timed out while waiting for scan completion.");
+      setRunScanActiveLabel(null);
     }, 180000);
     return () => clearTimeout(timer);
   }, [runScanBusy]);
@@ -785,19 +787,11 @@ export default function IdeasWorkspaceClient({
     }
   }
 
-  async function runScanNow() {
+  async function runStrategyScan(strategyToRun: StrategyVersion, label: string) {
     setRunScanBusy(true);
+    setRunScanActiveLabel(label);
     setRunScanMessage(null);
     try {
-      const steps: Array<{ strategy_version: StrategyVersion; universe_slug: string }> = [
-        { strategy_version: "v1", universe_slug: "liquid_2000" },
-        { strategy_version: "v1", universe_slug: "midcap_1000" },
-        { strategy_version: "v1_trend_hold", universe_slug: "liquid_2000" },
-        { strategy_version: "v1_trend_hold", universe_slug: "core_800" },
-        { strategy_version: "v1_sector_momentum", universe_slug: "growth_1500" },
-        { strategy_version: "v1_sector_momentum", universe_slug: "midcap_1000" },
-      ];
-
       const postWithTimeout = async (body: Record<string, unknown>, timeoutMs = 60000) => {
         const controller = new AbortController();
         let timer: any = null;
@@ -822,26 +816,23 @@ export default function IdeasWorkspaceClient({
         }
       };
 
-      let totalRowsWritten = 0;
-      let finalScanDate = "";
-      for (let i = 0; i < steps.length; i += 1) {
-        const step = steps[i];
-        setRunScanMessage(`Running ${i + 1}/${steps.length}: ${step.strategy_version} @ ${step.universe_slug}...`);
-        const { res, payload } = await postWithTimeout({
-          mode: "single",
-          strategy_version: step.strategy_version,
-          universe_slug: step.universe_slug,
-        });
-        if (!res.ok || !payload?.ok) {
-          throw new Error(
-            `${step.strategy_version}@${step.universe_slug}: ${String(
-              payload?.error ?? `HTTP ${res.status}`
-            )}`
-          );
-        }
-        totalRowsWritten += Number(payload?.rows_written ?? 0);
-        finalScanDate = String(payload?.scan_date_used ?? finalScanDate);
+      setRunScanMessage(`Running ${label}...`);
+      const { res, payload } = await postWithTimeout({
+        mode: "strategy",
+        strategy_version: strategyToRun,
+      });
+      if (!res.ok || !payload?.ok) {
+        const step = payload?.failed_step;
+        const failedLabel = step
+          ? `${String(step.strategy_version)} @ ${String(step.universe_slug)}`
+          : label;
+        throw new Error(
+          `${failedLabel}: ${String(payload?.error ?? payload?.status ?? `HTTP ${res.status}`)}`
+        );
       }
+
+      const totalRowsWritten = Number(payload?.rows_written ?? 0);
+      const finalScanDate = String(payload?.scan_date_used ?? "");
 
       setRunScanMessage(
         `Scan complete${finalScanDate ? ` (${finalScanDate})` : ""}. Rows written: ${
@@ -857,6 +848,7 @@ export default function IdeasWorkspaceClient({
       setRunScanMessage(msg);
     } finally {
       setRunScanBusy(false);
+      setRunScanActiveLabel(null);
     }
   }
 
@@ -976,14 +968,32 @@ export default function IdeasWorkspaceClient({
             Growth 1500
           </button>
         </div>
-        <button
-          type="button"
-          onClick={runScanNow}
-          disabled={runScanBusy}
-          className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3.5 py-1.5 text-sm font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {runScanBusy ? "Running..." : "Run Scan"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => runStrategyScan("v1", "Momentum Scan")}
+            disabled={runScanBusy}
+            className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {runScanBusy && runScanActiveLabel === "Momentum Scan" ? "Running..." : "Run Momentum Scan"}
+          </button>
+          <button
+            type="button"
+            onClick={() => runStrategyScan("v1_trend_hold", "Trend Scan")}
+            disabled={runScanBusy}
+            className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {runScanBusy && runScanActiveLabel === "Trend Scan" ? "Running..." : "Run Trend Scan"}
+          </button>
+          <button
+            type="button"
+            onClick={() => runStrategyScan("v1_sector_momentum", "Sector Scan")}
+            disabled={runScanBusy}
+            className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {runScanBusy && runScanActiveLabel === "Sector Scan" ? "Running..." : "Run Sector Scan"}
+          </button>
+        </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
           <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
           <span className="surface-chip px-2.5 py-1">Latest scan: {data?.meta?.date_used ?? "—"}</span>

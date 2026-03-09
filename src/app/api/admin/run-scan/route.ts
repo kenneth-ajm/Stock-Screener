@@ -13,14 +13,22 @@ const UNIVERSES = ["liquid_2000", "core_800", "growth_1500", "midcap_1000"] as c
 type StrategyVersion = (typeof STRATEGIES)[number];
 type UniverseSlug = (typeof UNIVERSES)[number];
 
+const STRATEGY_UNIVERSES: Record<StrategyVersion, UniverseSlug[]> = {
+  v1: ["liquid_2000", "midcap_1000"],
+  v1_trend_hold: ["core_800", "liquid_2000"],
+  v1_sector_momentum: ["growth_1500", "midcap_1000"],
+};
+
 type StepResult = {
   strategy_version: StrategyVersion;
   universe_slug: UniverseSlug;
   ok: boolean;
+  timed_out: boolean;
   scan_date_used: string;
   before_count: number;
   after_count: number;
   inserted_count: number;
+  duration_ms: number;
   error?: string | null;
 };
 
@@ -127,6 +135,7 @@ async function runSingle(opts: {
   scanDate: string;
   strategy: StrategyVersion;
   universe: UniverseSlug;
+  timeoutMs?: number;
 }): Promise<StepResult> {
   const before = await countRowsForDate({
     supabase: opts.supabase,
@@ -135,7 +144,9 @@ async function runSingle(opts: {
     universe_slug: opts.universe,
   });
 
+  const startedAt = Date.now();
   let ok = true;
+  let timedOut = false;
   let error: string | null = null;
 
   try {
@@ -143,7 +154,7 @@ async function runSingle(opts: {
       const res = await withTimeout(
         `sector populate ${opts.universe}`,
         runPopulate({ universe_slug: opts.universe }),
-        55_000
+        opts.timeoutMs ?? 55_000
       );
       const payload = await (res as Response).json().catch(() => null);
       if (!(res as Response).ok || !payload?.ok) {
@@ -159,7 +170,7 @@ async function runSingle(opts: {
           scan_date: opts.scanDate,
           finalize: true,
         }),
-        55_000
+        opts.timeoutMs ?? 55_000
       );
       if (!(out as any)?.ok) {
         throw new Error(String((out as any)?.error ?? "scan pipeline failed"));
@@ -167,7 +178,9 @@ async function runSingle(opts: {
     }
   } catch (e: any) {
     ok = false;
-    error = e?.message ?? "unknown scan error";
+    const msg = e?.message ?? "unknown scan error";
+    timedOut = /timed out/i.test(String(msg));
+    error = msg;
   }
 
   const after = await countRowsForDate({
@@ -181,116 +194,54 @@ async function runSingle(opts: {
     strategy_version: opts.strategy,
     universe_slug: opts.universe,
     ok,
+    timed_out: timedOut,
     scan_date_used: opts.scanDate,
     before_count: before,
     after_count: after,
     inserted_count: Math.max(0, after - before),
+    duration_ms: Date.now() - startedAt,
     error,
   };
 }
 
-async function runAll(req: Request) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json(
-      { ok: false, error: "Unauthorized: invalid x-admin-key" },
-      { status: 401 }
-    );
-  }
-
-  const supabase = makeServiceClient();
-  const resolvedDate = await resolveScanDate(supabase);
-  if (!resolvedDate.scan_date) {
-    return NextResponse.json(
-      { ok: false, error: "Unable to resolve scan date from today or LCTD" },
-      { status: 500 }
-    );
-  }
-
-  const scanDate = resolvedDate.scan_date;
-  console.info("[admin/run-scan] run-all start", { scanDate, source: resolvedDate.source });
-
+async function runPlan(opts: {
+  req: Request;
+  supabase: any;
+  scanDate: string;
+  strategies: StrategyVersion[];
+  explicitUniverse?: UniverseSlug | null;
+}) {
   const runResults: StepResult[] = [];
-  for (const strategy of STRATEGIES) {
-    for (const universe of UNIVERSES) {
+
+  for (const strategy of opts.strategies) {
+    const universes = opts.explicitUniverse ? [opts.explicitUniverse] : STRATEGY_UNIVERSES[strategy];
+    for (const universe of universes) {
+      if (!STRATEGY_UNIVERSES[strategy].includes(universe)) {
+        continue;
+      }
       const result = await runSingle({
-        supabase,
-        scanDate,
+        supabase: opts.supabase,
+        scanDate: opts.scanDate,
         strategy,
         universe,
       });
       runResults.push(result);
       console.info("[admin/run-scan] step", result);
+      if (!result.ok) {
+        return {
+          ok: false,
+          runResults,
+          failedStep: result,
+        };
+      }
     }
   }
 
-  const rowsWritten = runResults.reduce((sum, r) => sum + Number(r.inserted_count ?? 0), 0);
-  const failed = runResults.filter((r) => !r.ok);
-
-  return NextResponse.json({
-    ok: failed.length === 0,
-    status: failed.length === 0 ? "scan complete" : "scan complete (with errors)",
-    scan_date_used: scanDate,
-    scan_date_source: resolvedDate.source,
-    strategies_run: [...STRATEGIES],
-    universes_run: [...UNIVERSES],
-    rows_written: rowsWritten,
-    run_results: runResults,
-    errors: failed.map((f) => ({
-      strategy_version: f.strategy_version,
-      universe_slug: f.universe_slug,
-      error: f.error ?? "unknown",
-    })),
-  });
-}
-
-async function runSingleFromBody(req: Request, body: any) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json(
-      { ok: false, error: "Unauthorized: invalid x-admin-key" },
-      { status: 401 }
-    );
-  }
-
-  const strategyRaw = String(body?.strategy_version ?? "").trim();
-  const universeRaw = String(body?.universe_slug ?? "").trim();
-
-  if (!isStrategyVersion(strategyRaw) || !isUniverseSlug(universeRaw)) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Invalid strategy_version or universe_slug",
-        allowed: { strategies: STRATEGIES, universes: UNIVERSES },
-      },
-      { status: 400 }
-    );
-  }
-
-  const supabase = makeServiceClient();
-  const resolvedDate = await resolveScanDate(supabase);
-  if (!resolvedDate.scan_date) {
-    return NextResponse.json(
-      { ok: false, error: "Unable to resolve scan date from today or LCTD" },
-      { status: 500 }
-    );
-  }
-
-  const result = await runSingle({
-    supabase,
-    scanDate: resolvedDate.scan_date,
-    strategy: strategyRaw,
-    universe: universeRaw,
-  });
-
-  return NextResponse.json({
-    ok: result.ok,
-    status: result.ok ? "scan complete" : "scan failed",
-    scan_date_used: result.scan_date_used,
-    strategies_run: [result.strategy_version],
-    universes_run: [result.universe_slug],
-    rows_written: result.inserted_count,
-    run_result: result,
-    error: result.error ?? null,
-  });
+  return {
+    ok: true,
+    runResults,
+    failedStep: null as StepResult | null,
+  };
 }
 
 async function runRefreshBars(req: Request) {
@@ -301,12 +252,15 @@ async function runRefreshBars(req: Request) {
     );
   }
 
+  const startedAt = Date.now();
   try {
     const autopilot = await withTimeout("daily-autopilot", runAutopilot(), 55_000);
     if (!(autopilot as any)?.ok) {
       return NextResponse.json(
         {
           ok: false,
+          status: "scan failed",
+          duration_ms: Date.now() - startedAt,
           error: "daily-autopilot failed",
           detail: autopilot ?? null,
         },
@@ -316,6 +270,7 @@ async function runRefreshBars(req: Request) {
     return NextResponse.json({
       ok: true,
       status: "bars refreshed",
+      duration_ms: Date.now() - startedAt,
       scan_date_used: String((autopilot as any)?.scan_date_used ?? (autopilot as any)?.scan_date ?? "") || null,
       autopilot_summary: {
         bars_upserted: (autopilot as any)?.bars_upserted ?? 0,
@@ -328,6 +283,8 @@ async function runRefreshBars(req: Request) {
     return NextResponse.json(
       {
         ok: false,
+        status: "scan failed",
+        duration_ms: Date.now() - startedAt,
         error: e?.message ?? "daily-autopilot timeout or failure",
       },
       { status: 500 }
@@ -335,25 +292,142 @@ async function runRefreshBars(req: Request) {
   }
 }
 
+async function runByMode(req: Request, body: any) {
+  if (!isAuthorized(req)) {
+    return NextResponse.json(
+      { ok: false, error: "Unauthorized: invalid x-admin-key" },
+      { status: 401 }
+    );
+  }
+
+  const mode = String(body?.mode ?? "strategy").trim().toLowerCase();
+  if (mode === "refresh_bars") return await runRefreshBars(req);
+
+  const supabase = makeServiceClient();
+  const resolvedDate = await resolveScanDate(supabase);
+  if (!resolvedDate.scan_date) {
+    return NextResponse.json(
+      { ok: false, status: "scan failed", error: "Unable to resolve scan date from today or LCTD" },
+      { status: 500 }
+    );
+  }
+  const scanDate = resolvedDate.scan_date;
+
+  let strategies: StrategyVersion[] = [];
+  let explicitUniverse: UniverseSlug | null = null;
+
+  if (mode === "single") {
+    const strategyRaw = String(body?.strategy_version ?? "").trim();
+    const universeRaw = String(body?.universe_slug ?? "").trim();
+    if (!isStrategyVersion(strategyRaw) || !isUniverseSlug(universeRaw)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          status: "scan failed",
+          error: "Invalid strategy_version or universe_slug",
+          allowed: { strategies: STRATEGIES, universes: UNIVERSES },
+        },
+        { status: 400 }
+      );
+    }
+    if (!STRATEGY_UNIVERSES[strategyRaw].includes(universeRaw)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          status: "scan failed",
+          error: `Universe ${universeRaw} not allowed for strategy ${strategyRaw}`,
+          allowed_universes: STRATEGY_UNIVERSES[strategyRaw],
+        },
+        { status: 400 }
+      );
+    }
+    strategies = [strategyRaw];
+    explicitUniverse = universeRaw;
+  } else if (mode === "strategy") {
+    const strategyRaw = String(body?.strategy_version ?? "").trim();
+    if (!isStrategyVersion(strategyRaw)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          status: "scan failed",
+          error: "Invalid strategy_version",
+          allowed: { strategies: STRATEGIES },
+        },
+        { status: 400 }
+      );
+    }
+    strategies = [strategyRaw];
+    explicitUniverse = null;
+  } else {
+    // Deprecated all-in-one path.
+    strategies = [...STRATEGIES];
+    explicitUniverse = null;
+  }
+
+  const startedAt = Date.now();
+  const plan = await runPlan({
+    req,
+    supabase,
+    scanDate,
+    strategies,
+    explicitUniverse,
+  });
+
+  const rowsWritten = plan.runResults.reduce((sum, r) => sum + Number(r.inserted_count ?? 0), 0);
+  const completedSteps = plan.runResults.length;
+  const totalSteps = strategies.reduce((sum, s) => {
+    const universeCount = explicitUniverse ? 1 : STRATEGY_UNIVERSES[s].length;
+    return sum + universeCount;
+  }, 0);
+
+  return NextResponse.json(
+    {
+      ok: plan.ok,
+      status: plan.ok ? "scan complete" : "scan failed",
+      scan_date_used: scanDate,
+      scan_date_source: resolvedDate.source,
+      mode,
+      strategy: strategies.length === 1 ? strategies[0] : null,
+      universe: explicitUniverse,
+      strategies_run: strategies,
+      universes_run: explicitUniverse
+        ? [explicitUniverse]
+        : Array.from(new Set(strategies.flatMap((s) => STRATEGY_UNIVERSES[s]))),
+      rows_written: rowsWritten,
+      duration_ms: Date.now() - startedAt,
+      completed_steps: completedSteps,
+      total_steps: totalSteps,
+      failed_step: plan.failedStep,
+      run_results: plan.runResults,
+      error: plan.failedStep?.error ?? null,
+    },
+    { status: plan.ok ? 200 : 500 }
+  );
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({} as any));
-    const mode = String(body?.mode ?? "all").trim().toLowerCase();
-
-    if (mode === "single") return await runSingleFromBody(req, body);
-    if (mode === "refresh_bars") return await runRefreshBars(req);
-    return await runAll(req);
+    return await runByMode(req, body);
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error }, { status: 500 });
+    return NextResponse.json({ ok: false, status: "scan failed", error }, { status: 500 });
   }
 }
 
 export async function GET(req: Request) {
   try {
-    return await runAll(req);
+    const url = new URL(req.url);
+    const mode = String(url.searchParams.get("mode") ?? "").trim().toLowerCase() || "strategy";
+    const strategy_version = String(url.searchParams.get("strategy") ?? url.searchParams.get("strategy_version") ?? "").trim();
+    const universe_slug = String(url.searchParams.get("universe") ?? url.searchParams.get("universe_slug") ?? "").trim();
+    return await runByMode(req, {
+      mode,
+      strategy_version,
+      universe_slug,
+    });
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error }, { status: 500 });
+    return NextResponse.json({ ok: false, status: "scan failed", error }, { status: 500 });
   }
 }
