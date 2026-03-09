@@ -776,22 +776,71 @@ export default function IdeasWorkspaceClient({
     setRunScanBusy(true);
     setRunScanMessage(null);
     try {
-      const res = await fetch("/api/admin/run-scan", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-      });
-      const payload = await res.json().catch(() => null);
-      if (!res.ok || !payload?.ok) {
-        throw new Error(String(payload?.error ?? `Run scan failed (HTTP ${res.status})`));
+      const steps: Array<{ strategy_version: StrategyVersion; universe_slug: string }> = [
+        { strategy_version: "v1", universe_slug: "liquid_2000" },
+        { strategy_version: "v1", universe_slug: "core_800" },
+        { strategy_version: "v1", universe_slug: "growth_1500" },
+        { strategy_version: "v1", universe_slug: "midcap_1000" },
+        { strategy_version: "v1_trend_hold", universe_slug: "liquid_2000" },
+        { strategy_version: "v1_trend_hold", universe_slug: "core_800" },
+        { strategy_version: "v1_trend_hold", universe_slug: "growth_1500" },
+        { strategy_version: "v1_trend_hold", universe_slug: "midcap_1000" },
+        { strategy_version: "v1_sector_momentum", universe_slug: "liquid_2000" },
+        { strategy_version: "v1_sector_momentum", universe_slug: "core_800" },
+        { strategy_version: "v1_sector_momentum", universe_slug: "growth_1500" },
+        { strategy_version: "v1_sector_momentum", universe_slug: "midcap_1000" },
+      ];
+
+      const postWithTimeout = async (body: Record<string, unknown>, timeoutMs = 60000) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const res = await fetch("/api/admin/run-scan", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+          const payload = await res.json().catch(() => null);
+          return { res, payload };
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+
+      let totalRowsWritten = 0;
+      let finalScanDate = "";
+      for (let i = 0; i < steps.length; i += 1) {
+        const step = steps[i];
+        setRunScanMessage(`Running ${i + 1}/${steps.length}: ${step.strategy_version} @ ${step.universe_slug}...`);
+        const { res, payload } = await postWithTimeout({
+          mode: "single",
+          strategy_version: step.strategy_version,
+          universe_slug: step.universe_slug,
+        });
+        if (!res.ok || !payload?.ok) {
+          throw new Error(
+            `${step.strategy_version}@${step.universe_slug}: ${String(
+              payload?.error ?? `HTTP ${res.status}`
+            )}`
+          );
+        }
+        totalRowsWritten += Number(payload?.rows_written ?? 0);
+        finalScanDate = String(payload?.scan_date_used ?? finalScanDate);
       }
-      const rowsWritten = Number(payload?.rows_written ?? 0);
-      const scanDate = String(payload?.scan_date_used ?? "");
+
       setRunScanMessage(
-        `Scan complete${scanDate ? ` (${scanDate})` : ""}. Rows written: ${Number.isFinite(rowsWritten) ? rowsWritten : 0}.`
+        `Scan complete${finalScanDate ? ` (${finalScanDate})` : ""}. Rows written: ${
+          Number.isFinite(totalRowsWritten) ? totalRowsWritten : 0
+        }.`
       );
       setRefreshNonce((n) => n + 1);
     } catch (e: any) {
-      setRunScanMessage(`Run scan failed: ${e?.message ?? "Unknown error"}`);
+      const msg =
+        e?.name === "AbortError"
+          ? "Run scan failed: request timed out. Try again or reduce run scope."
+          : `Run scan failed: ${e?.message ?? "Unknown error"}`;
+      setRunScanMessage(msg);
     } finally {
       setRunScanBusy(false);
     }
