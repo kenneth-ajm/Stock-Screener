@@ -224,6 +224,10 @@ export default function IdeasWorkspaceClient({
     setLoading(true);
     const qs = new URLSearchParams({ strategy_version: strategy });
     if (universeMode !== "auto") qs.set("universe_slug", universeMode);
+    if (refreshNonce > 0) {
+      // Bust the cached screener-data key after manual scan runs.
+      qs.set("date", `refresh_${refreshNonce}_${Date.now()}`);
+    }
     const apiUrl = `/api/screener-data?${qs.toString()}`;
     setLastApiUrl(apiUrl);
     setLastLoadOk(null);
@@ -255,6 +259,15 @@ export default function IdeasWorkspaceClient({
       mounted = false;
     };
   }, [strategy, universeMode, refreshNonce]);
+
+  useEffect(() => {
+    if (!runScanBusy) return;
+    const timer = setTimeout(() => {
+      setRunScanBusy(false);
+      setRunScanMessage("Run scan failed: timed out while waiting for scan completion.");
+    }, 180000);
+    return () => clearTimeout(timer);
+  }, [runScanBusy]);
 
   useEffect(() => {
     const symbols = (data?.rows ?? []).slice(0, 100).map((r) => r.symbol).filter(Boolean);
@@ -778,33 +791,34 @@ export default function IdeasWorkspaceClient({
     try {
       const steps: Array<{ strategy_version: StrategyVersion; universe_slug: string }> = [
         { strategy_version: "v1", universe_slug: "liquid_2000" },
-        { strategy_version: "v1", universe_slug: "core_800" },
-        { strategy_version: "v1", universe_slug: "growth_1500" },
         { strategy_version: "v1", universe_slug: "midcap_1000" },
         { strategy_version: "v1_trend_hold", universe_slug: "liquid_2000" },
         { strategy_version: "v1_trend_hold", universe_slug: "core_800" },
-        { strategy_version: "v1_trend_hold", universe_slug: "growth_1500" },
-        { strategy_version: "v1_trend_hold", universe_slug: "midcap_1000" },
-        { strategy_version: "v1_sector_momentum", universe_slug: "liquid_2000" },
-        { strategy_version: "v1_sector_momentum", universe_slug: "core_800" },
         { strategy_version: "v1_sector_momentum", universe_slug: "growth_1500" },
         { strategy_version: "v1_sector_momentum", universe_slug: "midcap_1000" },
       ];
 
       const postWithTimeout = async (body: Record<string, unknown>, timeoutMs = 60000) => {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        let timer: any = null;
         try {
-          const res = await fetch("/api/admin/run-scan", {
+          const fetchPromise = fetch("/api/admin/run-scan", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
             signal: controller.signal,
           });
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              controller.abort();
+              reject(new Error(`request timed out after ${timeoutMs}ms`));
+            }, timeoutMs);
+          });
+          const res = await Promise.race([fetchPromise, timeoutPromise]);
           const payload = await res.json().catch(() => null);
           return { res, payload };
         } finally {
-          clearTimeout(timer);
+          if (timer) clearTimeout(timer);
         }
       };
 
