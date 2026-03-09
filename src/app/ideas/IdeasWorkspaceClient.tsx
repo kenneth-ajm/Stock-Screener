@@ -823,15 +823,7 @@ export default function IdeasWorkspaceClient({
         }
       };
 
-      setRunScanMessage("Refreshing bars before scan...");
-      const barsRefresh = await postWithTimeout({ mode: "refresh_bars" }, 60000);
-      if (!barsRefresh.res.ok || !barsRefresh.payload?.ok) {
-        throw new Error(
-          `refresh_bars: ${String(
-            barsRefresh.payload?.error ?? barsRefresh.payload?.status ?? `HTTP ${barsRefresh.res.status}`
-          )}`
-        );
-      }
+      setRunScanMessage("Using latest cached bars for manual scan...");
 
       let totalRowsWritten = 0;
       let finalScanDate = "";
