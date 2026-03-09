@@ -201,6 +201,9 @@ export default function IdeasWorkspaceClient({
   const [tp2Price, setTp2Price] = useState("");
   const [tp2SizePct, setTp2SizePct] = useState("50");
   const [selectedFilter, setSelectedFilter] = useState<IdeasFilter>("all");
+  const [runScanBusy, setRunScanBusy] = useState(false);
+  const [runScanMessage, setRunScanMessage] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const tradeTicketRef = useRef<HTMLDivElement | null>(null);
   const entryInputRef = useRef<HTMLInputElement | null>(null);
   const breadth = {
@@ -251,7 +254,7 @@ export default function IdeasWorkspaceClient({
     return () => {
       mounted = false;
     };
-  }, [strategy, universeMode]);
+  }, [strategy, universeMode, refreshNonce]);
 
   useEffect(() => {
     const symbols = (data?.rows ?? []).slice(0, 100).map((r) => r.symbol).filter(Boolean);
@@ -769,6 +772,31 @@ export default function IdeasWorkspaceClient({
     }
   }
 
+  async function runScanNow() {
+    setRunScanBusy(true);
+    setRunScanMessage(null);
+    try {
+      const res = await fetch("/api/admin/run-scan", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) {
+        throw new Error(String(payload?.error ?? `Run scan failed (HTTP ${res.status})`));
+      }
+      const rowsWritten = Number(payload?.rows_written ?? 0);
+      const scanDate = String(payload?.scan_date_used ?? "");
+      setRunScanMessage(
+        `Scan complete${scanDate ? ` (${scanDate})` : ""}. Rows written: ${Number.isFinite(rowsWritten) ? rowsWritten : 0}.`
+      );
+      setRefreshNonce((n) => n + 1);
+    } catch (e: any) {
+      setRunScanMessage(`Run scan failed: ${e?.message ?? "Unknown error"}`);
+    } finally {
+      setRunScanBusy(false);
+    }
+  }
+
   function signalPill(signal: "BUY" | "WATCH" | "AVOID") {
     if (signal === "BUY") return "border-emerald-200 bg-emerald-50 text-emerald-700";
     if (signal === "WATCH") return "border-amber-200 bg-amber-50 text-amber-700";
@@ -885,6 +913,14 @@ export default function IdeasWorkspaceClient({
             Growth 1500
           </button>
         </div>
+        <button
+          type="button"
+          onClick={runScanNow}
+          disabled={runScanBusy}
+          className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3.5 py-1.5 text-sm font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {runScanBusy ? "Running..." : "Run Scan"}
+        </button>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
           <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
           <span className="surface-chip px-2.5 py-1">Latest scan: {data?.meta?.date_used ?? "—"}</span>
@@ -923,6 +959,17 @@ export default function IdeasWorkspaceClient({
           </span>
         </div>
       </div>
+      {runScanMessage ? (
+        <div
+          className={`mt-[-8px] rounded-xl border px-3 py-2 text-xs ${
+            runScanMessage.startsWith("Run scan failed")
+              ? "border-rose-200 bg-rose-50 text-rose-700"
+              : "border-emerald-200 bg-emerald-50 text-emerald-700"
+          }`}
+        >
+          {runScanMessage}
+        </div>
+      ) : null}
       <div className="mt-[-8px] text-[11px] text-slate-500">
         Auto selects the latest populated universe for each strategy. Unavailable explicit universes are marked as not scanned yet.
       </div>
