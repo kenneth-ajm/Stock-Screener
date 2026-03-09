@@ -2,26 +2,13 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { runAutopilot } from "@/app/api/jobs/daily-autopilot/route";
 import { runPopulate } from "@/app/api/jobs/populate-sector-momentum/route";
-import { CORE_MOMENTUM_DEFAULT_VERSION } from "@/lib/strategy/coreMomentumSwing";
-import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
-import {
-  SECTOR_MOMENTUM_STRATEGY_VERSION,
-  SECTOR_MOMENTUM_UNIVERSE_SLUG,
-} from "@/lib/sector_momentum";
-import { CORE_MOMENTUM_DEFAULT_UNIVERSE } from "@/lib/strategy/coreMomentumSwing";
 import { runScanPipeline } from "@/lib/scan_engine";
 import { getLCTD } from "@/lib/scan_date";
-import { MIDCAP_UNIVERSE_SLUG } from "@/lib/strategy_universe";
 
 export const dynamic = "force-dynamic";
 
-type StrategyCount = {
-  strategy_version: string;
-  universe_slug: string;
-  before_count: number;
-  after_count: number;
-  inserted_count: number;
-};
+const STRATEGIES = ["v1", "v1_trend_hold", "v1_sector_momentum"] as const;
+const UNIVERSES = ["liquid_2000", "core_800", "growth_1500", "midcap_1000"] as const;
 
 function makeServiceClient() {
   return createClient(
@@ -35,6 +22,16 @@ function isAuthorized(req: Request) {
   if (!expected) return true;
   const provided = req.headers.get("x-admin-key");
   return Boolean(provided && provided === expected);
+}
+
+function usTodayDate() {
+  const now = new Date();
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
 }
 
 async function countRowsForDate(opts: {
@@ -53,6 +50,29 @@ async function countRowsForDate(opts: {
   return Number(count ?? 0);
 }
 
+async function resolveScanDate(supabase: any) {
+  const preferredToday = usTodayDate();
+  const { data: hasSpyToday } = await supabase
+    .from("price_bars")
+    .select("symbol")
+    .eq("symbol", "SPY")
+    .eq("date", preferredToday)
+    .limit(1)
+    .maybeSingle();
+
+  if (hasSpyToday) {
+    return { scan_date: preferredToday, source: "today" as const };
+  }
+
+  const lctd = await getLCTD(supabase as any);
+  const fallback = String(lctd?.scan_date ?? "").trim();
+  if (fallback) {
+    return { scan_date: fallback, source: "lctd" as const };
+  }
+
+  return { scan_date: null, source: "missing" as const };
+}
+
 async function runAllStrategies(req: Request) {
   if (!isAuthorized(req)) {
     return NextResponse.json(
@@ -62,52 +82,32 @@ async function runAllStrategies(req: Request) {
   }
 
   const supabase = makeServiceClient();
-  const lctd = await getLCTD(supabase as any);
-  const targetDate = String(lctd?.scan_date ?? "").trim();
-  if (!targetDate) {
+
+  const resolvedDate = await resolveScanDate(supabase);
+  if (!resolvedDate.scan_date) {
     return NextResponse.json(
-      { ok: false, error: "Unable to resolve target scan date" },
+      { ok: false, error: "Unable to resolve scan date from today or LCTD" },
       { status: 500 }
     );
   }
 
-  const beforeMomentum = await countRowsForDate({
-    supabase,
-    date: targetDate,
-    strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
-    universe_slug: CORE_MOMENTUM_DEFAULT_UNIVERSE,
-  });
-  const beforeTrend = await countRowsForDate({
-    supabase,
-    date: targetDate,
-    strategy_version: TREND_HOLD_DEFAULT_VERSION,
-    universe_slug: CORE_MOMENTUM_DEFAULT_UNIVERSE,
-  });
-  const beforeSector = await countRowsForDate({
-    supabase,
-    date: targetDate,
-    strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
-    universe_slug: SECTOR_MOMENTUM_UNIVERSE_SLUG,
-  });
-const beforeMomentumMidcap = await countRowsForDate({
-    supabase,
-    date: targetDate,
-    strategy_version: "v1",
-    universe_slug: MIDCAP_UNIVERSE_SLUG,
-  });
-  const beforeTrendMidcap = await countRowsForDate({
-    supabase,
-    date: targetDate,
-    strategy_version: TREND_HOLD_DEFAULT_VERSION,
-    universe_slug: MIDCAP_UNIVERSE_SLUG,
-  });
-  const beforeSectorMidcap = await countRowsForDate({
-    supabase,
-    date: targetDate,
-    strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
-    universe_slug: MIDCAP_UNIVERSE_SLUG,
-  });
+  const scanDate = resolvedDate.scan_date;
 
+  const beforeCounts = new Map<string, number>();
+  for (const strategy of STRATEGIES) {
+    for (const universe of UNIVERSES) {
+      const key = `${strategy}::${universe}`;
+      const before = await countRowsForDate({
+        supabase,
+        date: scanDate,
+        strategy_version: strategy,
+        universe_slug: universe,
+      });
+      beforeCounts.set(key, before);
+    }
+  }
+
+  // Keep existing pre-scan refresh behavior.
   const autopilot = await runAutopilot();
   if (!autopilot?.ok) {
     return NextResponse.json(
@@ -120,182 +120,94 @@ const beforeMomentumMidcap = await countRowsForDate({
     );
   }
 
-  const scanDate = String(autopilot.scan_date_used ?? autopilot.scan_date ?? "").trim();
-  if (!scanDate) {
-    return NextResponse.json(
-      { ok: false, error: "Unable to determine scan_date_used from autopilot result" },
-      { status: 500 }
-    );
+  const runResults: Array<{
+    strategy_version: string;
+    universe_slug: string;
+    ok: boolean;
+    error?: string | null;
+  }> = [];
+
+  for (const strategy of STRATEGIES) {
+    for (const universe of UNIVERSES) {
+      if (strategy === "v1_sector_momentum") {
+        const res = await runPopulate({ universe_slug: universe });
+        const payload = await res.json().catch(() => null);
+        runResults.push({
+          strategy_version: strategy,
+          universe_slug: universe,
+          ok: Boolean(res.ok && payload?.ok),
+          error: res.ok && payload?.ok ? null : String(payload?.error ?? "sector populate failed"),
+        });
+        continue;
+      }
+
+      const out = await runScanPipeline({
+        supabase,
+        universe_slug: universe,
+        strategy_version: strategy,
+        scan_date: scanDate,
+        finalize: true,
+      });
+
+      runResults.push({
+        strategy_version: strategy,
+        universe_slug: universe,
+        ok: Boolean(out?.ok),
+        error: out?.ok ? null : String(out?.error ?? "scan pipeline failed"),
+      });
+    }
   }
 
-  const sectorRes = await runPopulate();
-  const sectorJson = await sectorRes.json().catch(() => null);
-  if (!sectorRes.ok || !sectorJson?.ok) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "sector-momentum populate failed",
-        detail: sectorJson ?? null,
-        scan_date_used: scanDate,
-        autopilot,
-      },
-      { status: 500 }
-    );
+  const failed = runResults.filter((r) => !r.ok);
+
+  const counts = [] as Array<{
+    strategy_version: string;
+    universe_slug: string;
+    before_count: number;
+    after_count: number;
+    inserted_count: number;
+  }>;
+
+  let rowsWritten = 0;
+  for (const strategy of STRATEGIES) {
+    for (const universe of UNIVERSES) {
+      const key = `${strategy}::${universe}`;
+      const before = Number(beforeCounts.get(key) ?? 0);
+      const after = await countRowsForDate({
+        supabase,
+        date: scanDate,
+        strategy_version: strategy,
+        universe_slug: universe,
+      });
+      const inserted = Math.max(0, after - before);
+      rowsWritten += inserted;
+      counts.push({
+        strategy_version: strategy,
+        universe_slug: universe,
+        before_count: before,
+        after_count: after,
+        inserted_count: inserted,
+      });
+    }
   }
 
-  const sectorMidcapRes = await runPopulate({ universe_slug: MIDCAP_UNIVERSE_SLUG });
-  const sectorMidcapJson = await sectorMidcapRes.json().catch(() => null);
-  if (!sectorMidcapRes.ok || !sectorMidcapJson?.ok) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "sector-momentum populate failed for midcap_1000",
-        detail: sectorMidcapJson ?? null,
-        scan_date_used: scanDate,
-        autopilot,
-      },
-      { status: 500 }
-    );
-  }
-
-  const midcapMomentum = await runScanPipeline({
-    supabase,
-    universe_slug: MIDCAP_UNIVERSE_SLUG,
-    strategy_version: "v1",
-    scan_date: scanDate,
-    finalize: true,
-  });
-  if (!midcapMomentum?.ok) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "midcap momentum scan failed",
-        detail: midcapMomentum ?? null,
-        scan_date_used: scanDate,
-        autopilot,
-      },
-      { status: 500 }
-    );
-  }
-
-  const midcapTrend = await runScanPipeline({
-    supabase,
-    universe_slug: MIDCAP_UNIVERSE_SLUG,
-    strategy_version: TREND_HOLD_DEFAULT_VERSION,
-    scan_date: scanDate,
-    finalize: true,
-  });
-  if (!midcapTrend?.ok) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "midcap trend scan failed",
-        detail: midcapTrend ?? null,
-        scan_date_used: scanDate,
-        autopilot,
-      },
-      { status: 500 }
-    );
-  }
-
-  const afterMomentum = await countRowsForDate({
-    supabase,
-    date: scanDate,
-    strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
-    universe_slug: CORE_MOMENTUM_DEFAULT_UNIVERSE,
-  });
-  const afterTrend = await countRowsForDate({
-    supabase,
-    date: scanDate,
-    strategy_version: TREND_HOLD_DEFAULT_VERSION,
-    universe_slug: CORE_MOMENTUM_DEFAULT_UNIVERSE,
-  });
-  const afterSector = await countRowsForDate({
-    supabase,
-    date: scanDate,
-    strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
-    universe_slug: SECTOR_MOMENTUM_UNIVERSE_SLUG,
-  });
-  const afterMomentumMidcap = await countRowsForDate({
-    supabase,
-    date: scanDate,
-    strategy_version: "v1",
-    universe_slug: MIDCAP_UNIVERSE_SLUG,
-  });
-  const afterTrendMidcap = await countRowsForDate({
-    supabase,
-    date: scanDate,
-    strategy_version: TREND_HOLD_DEFAULT_VERSION,
-    universe_slug: MIDCAP_UNIVERSE_SLUG,
-  });
-
-  const strategy_counts: StrategyCount[] = [
-    {
-      strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
-      universe_slug: CORE_MOMENTUM_DEFAULT_UNIVERSE,
-      before_count: beforeMomentum,
-      after_count: afterMomentum,
-      inserted_count: Math.max(0, afterMomentum - beforeMomentum),
-    },
-    {
-      strategy_version: TREND_HOLD_DEFAULT_VERSION,
-      universe_slug: CORE_MOMENTUM_DEFAULT_UNIVERSE,
-      before_count: beforeTrend,
-      after_count: afterTrend,
-      inserted_count: Math.max(0, afterTrend - beforeTrend),
-    },
-    {
-      strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
-      universe_slug: SECTOR_MOMENTUM_UNIVERSE_SLUG,
-      before_count: beforeSector,
-      after_count: afterSector,
-      inserted_count: Math.max(0, afterSector - beforeSector),
-    },
-    {
-      strategy_version: "v1",
-      universe_slug: MIDCAP_UNIVERSE_SLUG,
-      before_count: beforeMomentumMidcap,
-      after_count: afterMomentumMidcap,
-      inserted_count: Math.max(0, afterMomentumMidcap - beforeMomentumMidcap),
-    },
-    {
-      strategy_version: TREND_HOLD_DEFAULT_VERSION,
-      universe_slug: MIDCAP_UNIVERSE_SLUG,
-      before_count: beforeTrendMidcap,
-      after_count: afterTrendMidcap,
-      inserted_count: Math.max(0, afterTrendMidcap - beforeTrendMidcap),
-    },
-    {
-      strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
-      universe_slug: MIDCAP_UNIVERSE_SLUG,
-      before_count: beforeSectorMidcap,
-      after_count: Number(sectorMidcapJson?.persisted_rows ?? 0),
-      inserted_count: Math.max(0, Number(sectorMidcapJson?.persisted_rows ?? 0) - beforeSectorMidcap),
-    },
-  ];
+  const status = failed.length === 0 ? "scan complete" : "scan complete (with errors)";
 
   return NextResponse.json({
-    ok: true,
+    ok: failed.length === 0,
+    status,
     scan_date_used: scanDate,
-    strategies_ran: [
-      CORE_MOMENTUM_DEFAULT_VERSION,
-      TREND_HOLD_DEFAULT_VERSION,
-      SECTOR_MOMENTUM_STRATEGY_VERSION,
-      `v1@${MIDCAP_UNIVERSE_SLUG}`,
-      `${TREND_HOLD_DEFAULT_VERSION}@${MIDCAP_UNIVERSE_SLUG}`,
-      `${SECTOR_MOMENTUM_STRATEGY_VERSION}@${MIDCAP_UNIVERSE_SLUG}`,
-    ],
-    strategy_counts,
+    scan_date_source: resolvedDate.source,
+    strategies_run: [...STRATEGIES],
+    universes_run: [...UNIVERSES],
+    rows_written: rowsWritten,
+    strategy_counts: counts,
+    run_results: runResults,
     autopilot_summary: {
       bars_upserted: autopilot.bars_upserted ?? 0,
       momentum: autopilot.momentum ?? null,
       trend: autopilot.trend ?? null,
       regime_state: autopilot.regime_state ?? null,
-    },
-    sector_summary: {
-      candidates_count: sectorJson.candidates_count ?? 0,
-      persisted_rows: sectorJson.persisted_rows ?? 0,
-      pruned_rows: sectorJson.pruned_rows ?? 0,
     },
   });
 }
