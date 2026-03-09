@@ -4,6 +4,7 @@ import { runAutopilot } from "@/app/api/jobs/daily-autopilot/route";
 import { runPopulate } from "@/app/api/jobs/populate-sector-momentum/route";
 import { runScanPipeline } from "@/lib/scan_engine";
 import { getLCTD } from "@/lib/scan_date";
+import { finalizeSignals } from "@/lib/finalize_signals";
 
 export const dynamic = "force-dynamic";
 
@@ -17,19 +18,6 @@ const STRATEGY_UNIVERSES: Record<StrategyVersion, UniverseSlug[]> = {
   v1: ["liquid_2000", "midcap_1000"],
   v1_trend_hold: ["core_800", "liquid_2000"],
   v1_sector_momentum: ["growth_1500", "midcap_1000"],
-};
-
-type StepResult = {
-  strategy_version: StrategyVersion;
-  universe_slug: UniverseSlug;
-  ok: boolean;
-  timed_out: boolean;
-  scan_date_used: string;
-  before_count: number;
-  after_count: number;
-  inserted_count: number;
-  duration_ms: number;
-  error?: string | null;
 };
 
 function makeServiceClient() {
@@ -64,6 +52,15 @@ function usTodayDate() {
   }).format(now);
 }
 
+async function withTimeout<T>(label: string, p: Promise<T>, timeoutMs: number): Promise<T> {
+  return await Promise.race([
+    p,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    }),
+  ]);
+}
+
 async function countRowsForDate(opts: {
   supabase: any;
   date: string;
@@ -80,6 +77,27 @@ async function countRowsForDate(opts: {
   return Number(count ?? 0);
 }
 
+async function countUniverseSymbols(opts: {
+  supabase: any;
+  universe_slug: UniverseSlug;
+}) {
+  const { data: universe, error: uErr } = await opts.supabase
+    .from("universes")
+    .select("id")
+    .eq("slug", opts.universe_slug)
+    .single();
+  if (uErr || !universe?.id) {
+    throw new Error(`Universe not found: ${opts.universe_slug}`);
+  }
+  const { count, error } = await opts.supabase
+    .from("universe_members")
+    .select("symbol", { head: true, count: "exact" })
+    .eq("universe_id", universe.id)
+    .eq("active", true);
+  if (error) throw new Error(error.message);
+  return Number(count ?? 0);
+}
+
 async function resolveScanDate(supabase: any) {
   const preferredToday = usTodayDate();
   const { data: hasSpyToday, error: spyTodayError } = await supabase
@@ -92,7 +110,6 @@ async function resolveScanDate(supabase: any) {
   if (spyTodayError) {
     throw new Error(`resolveScanDate(today): ${spyTodayError.message}`);
   }
-
   if (hasSpyToday) {
     return { scan_date: preferredToday, source: "today" as const };
   }
@@ -121,135 +138,9 @@ async function resolveScanDate(supabase: any) {
   return { scan_date: null, source: "missing" as const };
 }
 
-async function withTimeout<T>(label: string, p: Promise<T>, timeoutMs: number): Promise<T> {
-  return await Promise.race([
-    p,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
-    }),
-  ]);
-}
-
-async function runSingle(opts: {
-  supabase: any;
-  scanDate: string;
-  strategy: StrategyVersion;
-  universe: UniverseSlug;
-  timeoutMs?: number;
-}): Promise<StepResult> {
-  const before = await countRowsForDate({
-    supabase: opts.supabase,
-    date: opts.scanDate,
-    strategy_version: opts.strategy,
-    universe_slug: opts.universe,
-  });
-
-  const startedAt = Date.now();
-  let ok = true;
-  let timedOut = false;
-  let error: string | null = null;
-
-  try {
-    if (opts.strategy === "v1_sector_momentum") {
-      const res = await withTimeout(
-        `sector populate ${opts.universe}`,
-        runPopulate({ universe_slug: opts.universe }),
-        opts.timeoutMs ?? 55_000
-      );
-      const payload = await (res as Response).json().catch(() => null);
-      if (!(res as Response).ok || !payload?.ok) {
-        throw new Error(String(payload?.error ?? `sector populate failed for ${opts.universe}`));
-      }
-    } else {
-      const out = await withTimeout(
-        `scan pipeline ${opts.strategy}@${opts.universe}`,
-        runScanPipeline({
-          supabase: opts.supabase,
-          universe_slug: opts.universe,
-          strategy_version: opts.strategy,
-          scan_date: opts.scanDate,
-          finalize: true,
-        }),
-        opts.timeoutMs ?? 55_000
-      );
-      if (!(out as any)?.ok) {
-        throw new Error(String((out as any)?.error ?? "scan pipeline failed"));
-      }
-    }
-  } catch (e: any) {
-    ok = false;
-    const msg = e?.message ?? "unknown scan error";
-    timedOut = /timed out/i.test(String(msg));
-    error = msg;
-  }
-
-  const after = await countRowsForDate({
-    supabase: opts.supabase,
-    date: opts.scanDate,
-    strategy_version: opts.strategy,
-    universe_slug: opts.universe,
-  });
-
-  return {
-    strategy_version: opts.strategy,
-    universe_slug: opts.universe,
-    ok,
-    timed_out: timedOut,
-    scan_date_used: opts.scanDate,
-    before_count: before,
-    after_count: after,
-    inserted_count: Math.max(0, after - before),
-    duration_ms: Date.now() - startedAt,
-    error,
-  };
-}
-
-async function runPlan(opts: {
-  req: Request;
-  supabase: any;
-  scanDate: string;
-  strategies: StrategyVersion[];
-  explicitUniverse?: UniverseSlug | null;
-}) {
-  const runResults: StepResult[] = [];
-
-  for (const strategy of opts.strategies) {
-    const universes = opts.explicitUniverse ? [opts.explicitUniverse] : STRATEGY_UNIVERSES[strategy];
-    for (const universe of universes) {
-      if (!STRATEGY_UNIVERSES[strategy].includes(universe)) {
-        continue;
-      }
-      const result = await runSingle({
-        supabase: opts.supabase,
-        scanDate: opts.scanDate,
-        strategy,
-        universe,
-      });
-      runResults.push(result);
-      console.info("[admin/run-scan] step", result);
-      if (!result.ok) {
-        return {
-          ok: false,
-          runResults,
-          failedStep: result,
-        };
-      }
-    }
-  }
-
-  return {
-    ok: true,
-    runResults,
-    failedStep: null as StepResult | null,
-  };
-}
-
 async function runRefreshBars(req: Request) {
   if (!isAuthorized(req)) {
-    return NextResponse.json(
-      { ok: false, error: "Unauthorized: invalid x-admin-key" },
-      { status: 401 }
-    );
+    return NextResponse.json({ ok: false, status: "scan failed", error: "Unauthorized: invalid x-admin-key" }, { status: 401 });
   }
 
   const startedAt = Date.now();
@@ -267,6 +158,7 @@ async function runRefreshBars(req: Request) {
         { status: 500 }
       );
     }
+
     return NextResponse.json({
       ok: true,
       status: "bars refreshed",
@@ -292,116 +184,396 @@ async function runRefreshBars(req: Request) {
   }
 }
 
+async function runSectorSingle(opts: {
+  supabase: any;
+  strategy: StrategyVersion;
+  universe: UniverseSlug;
+  scanDate: string;
+  timeoutMs?: number;
+}) {
+  const startedAt = Date.now();
+  const before = await countRowsForDate({
+    supabase: opts.supabase,
+    date: opts.scanDate,
+    strategy_version: opts.strategy,
+    universe_slug: opts.universe,
+  });
+
+  try {
+    const res = await withTimeout(
+      `sector populate ${opts.universe}`,
+      runPopulate({ universe_slug: opts.universe }),
+      opts.timeoutMs ?? 55_000
+    );
+    const payload = await (res as Response).json().catch(() => null);
+    if (!(res as Response).ok || !payload?.ok) {
+      throw new Error(String(payload?.error ?? `sector populate failed for ${opts.universe}`));
+    }
+
+    const after = await countRowsForDate({
+      supabase: opts.supabase,
+      date: opts.scanDate,
+      strategy_version: opts.strategy,
+      universe_slug: opts.universe,
+    });
+
+    return {
+      ok: true,
+      status: "scan complete",
+      strategy: opts.strategy,
+      universe: opts.universe,
+      scan_date_used: opts.scanDate,
+      rows_written: Math.max(0, after - before),
+      duration_ms: Date.now() - startedAt,
+      before_count: before,
+      after_count: after,
+      batch_index: 1,
+      total_batches: 1,
+      has_more: false,
+      next_offset: null,
+      completed_steps: 1,
+      total_steps: 1,
+      failed_step: null,
+      error: null,
+    };
+  } catch (e: any) {
+    const msg = e?.message ?? "sector scan failed";
+    return {
+      ok: false,
+      status: "scan failed",
+      strategy: opts.strategy,
+      universe: opts.universe,
+      scan_date_used: opts.scanDate,
+      rows_written: 0,
+      duration_ms: Date.now() - startedAt,
+      before_count: before,
+      after_count: before,
+      batch_index: 1,
+      total_batches: 1,
+      has_more: false,
+      next_offset: null,
+      completed_steps: 0,
+      total_steps: 1,
+      failed_step: {
+        strategy_version: opts.strategy,
+        universe_slug: opts.universe,
+        batch_index: 1,
+        error: msg,
+      },
+      error: msg,
+    };
+  }
+}
+
+async function runChunkedBatch(opts: {
+  supabase: any;
+  strategy: StrategyVersion;
+  universe: UniverseSlug;
+  scanDate: string;
+  offset: number;
+  batchSize: number;
+  timeoutMs?: number;
+}) {
+  const startedAt = Date.now();
+
+  if (opts.strategy === "v1_sector_momentum") {
+    const sectorResult = await runSectorSingle({
+      supabase: opts.supabase,
+      strategy: opts.strategy,
+      universe: opts.universe,
+      scanDate: opts.scanDate,
+      timeoutMs: opts.timeoutMs,
+    });
+    return sectorResult;
+  }
+
+  const totalSymbols = await countUniverseSymbols({
+    supabase: opts.supabase,
+    universe_slug: opts.universe,
+  });
+  const totalBatches = Math.max(1, Math.ceil(totalSymbols / opts.batchSize));
+  const batchIndex = Math.floor(opts.offset / opts.batchSize) + 1;
+
+  const before = await countRowsForDate({
+    supabase: opts.supabase,
+    date: opts.scanDate,
+    strategy_version: opts.strategy,
+    universe_slug: opts.universe,
+  });
+
+  try {
+    const out = await withTimeout(
+      `scan pipeline ${opts.strategy}@${opts.universe} batch ${batchIndex}/${totalBatches}`,
+      runScanPipeline({
+        supabase: opts.supabase,
+        universe_slug: opts.universe,
+        strategy_version: opts.strategy,
+        scan_date: opts.scanDate,
+        offset: opts.offset,
+        limit: opts.batchSize,
+        finalize: false,
+      }),
+      opts.timeoutMs ?? 55_000
+    );
+
+    if (!(out as any)?.ok) {
+      throw new Error(String((out as any)?.error ?? "scan pipeline failed"));
+    }
+
+    const after = await countRowsForDate({
+      supabase: opts.supabase,
+      date: opts.scanDate,
+      strategy_version: opts.strategy,
+      universe_slug: opts.universe,
+    });
+
+    const nextOffset = opts.offset + opts.batchSize;
+    const hasMore = nextOffset < totalSymbols;
+
+    return {
+      ok: true,
+      status: "scan complete",
+      strategy: opts.strategy,
+      universe: opts.universe,
+      scan_date_used: opts.scanDate,
+      rows_written: Math.max(0, after - before),
+      duration_ms: Date.now() - startedAt,
+      before_count: before,
+      after_count: after,
+      batch_index: batchIndex,
+      total_batches: totalBatches,
+      has_more: hasMore,
+      next_offset: hasMore ? nextOffset : null,
+      completed_steps: batchIndex,
+      total_steps: totalBatches,
+      failed_step: null,
+      error: null,
+    };
+  } catch (e: any) {
+    const msg = e?.message ?? "scan batch failed";
+    return {
+      ok: false,
+      status: "scan failed",
+      strategy: opts.strategy,
+      universe: opts.universe,
+      scan_date_used: opts.scanDate,
+      rows_written: 0,
+      duration_ms: Date.now() - startedAt,
+      before_count: before,
+      after_count: before,
+      batch_index: batchIndex,
+      total_batches: totalBatches,
+      has_more: false,
+      next_offset: null,
+      completed_steps: Math.max(0, batchIndex - 1),
+      total_steps: totalBatches,
+      failed_step: {
+        strategy_version: opts.strategy,
+        universe_slug: opts.universe,
+        batch_index: batchIndex,
+        error: msg,
+      },
+      error: msg,
+    };
+  }
+}
+
+async function runFinalize(opts: {
+  supabase: any;
+  strategy: StrategyVersion;
+  universe: UniverseSlug;
+  scanDate: string;
+}) {
+  const startedAt = Date.now();
+  try {
+    if (opts.strategy === "v1_sector_momentum") {
+      return {
+        ok: true,
+        status: "scan complete",
+        strategy: opts.strategy,
+        universe: opts.universe,
+        scan_date_used: opts.scanDate,
+        rows_written: 0,
+        duration_ms: Date.now() - startedAt,
+        finalization: { skipped: true, reason: "sector_momentum_uses_populate" },
+        error: null,
+      };
+    }
+
+    const before = await countRowsForDate({
+      supabase: opts.supabase,
+      date: opts.scanDate,
+      strategy_version: opts.strategy,
+      universe_slug: opts.universe,
+    });
+
+    const finalization = await withTimeout(
+      `finalize ${opts.strategy}@${opts.universe}`,
+      finalizeSignals({
+        supabase: opts.supabase,
+        date: opts.scanDate,
+        universe_slug: opts.universe,
+        strategy_version: opts.strategy,
+      }),
+      55_000
+    );
+
+    const after = await countRowsForDate({
+      supabase: opts.supabase,
+      date: opts.scanDate,
+      strategy_version: opts.strategy,
+      universe_slug: opts.universe,
+    });
+
+    return {
+      ok: true,
+      status: "scan complete",
+      strategy: opts.strategy,
+      universe: opts.universe,
+      scan_date_used: opts.scanDate,
+      rows_written: Math.max(0, after - before),
+      duration_ms: Date.now() - startedAt,
+      finalization,
+      error: null,
+    };
+  } catch (e: any) {
+    return {
+      ok: false,
+      status: "scan failed",
+      strategy: opts.strategy,
+      universe: opts.universe,
+      scan_date_used: opts.scanDate,
+      rows_written: 0,
+      duration_ms: Date.now() - startedAt,
+      finalization: null,
+      error: e?.message ?? "finalize failed",
+    };
+  }
+}
+
 async function runByMode(req: Request, body: any) {
   if (!isAuthorized(req)) {
-    return NextResponse.json(
-      { ok: false, error: "Unauthorized: invalid x-admin-key" },
-      { status: 401 }
-    );
+    return NextResponse.json({ ok: false, status: "scan failed", error: "Unauthorized: invalid x-admin-key" }, { status: 401 });
   }
 
   const mode = String(body?.mode ?? "strategy").trim().toLowerCase();
   if (mode === "refresh_bars") return await runRefreshBars(req);
 
+  const strategyRaw = String(body?.strategy ?? body?.strategy_version ?? "").trim();
+  const universeRaw = String(body?.universe ?? body?.universe_slug ?? "").trim();
+
+  if (!isStrategyVersion(strategyRaw)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        status: "scan failed",
+        error: "Invalid strategy_version",
+        allowed: { strategies: STRATEGIES },
+      },
+      { status: 400 }
+    );
+  }
+
+  const strategy = strategyRaw;
+
+  if (mode === "strategy") {
+    return NextResponse.json({
+      ok: false,
+      status: "scan failed",
+      error: "mode=strategy is deprecated for long-running scans; use mode=batch + mode=finalize",
+      strategy,
+      allowed_universes: STRATEGY_UNIVERSES[strategy],
+    }, { status: 400 });
+  }
+
+  if (!isUniverseSlug(universeRaw)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        status: "scan failed",
+        error: "Invalid universe_slug",
+        allowed: { universes: UNIVERSES },
+      },
+      { status: 400 }
+    );
+  }
+
+  const universe = universeRaw;
+  if (!STRATEGY_UNIVERSES[strategy].includes(universe)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        status: "scan failed",
+        error: `Universe ${universe} not allowed for strategy ${strategy}`,
+        strategy,
+        allowed_universes: STRATEGY_UNIVERSES[strategy],
+      },
+      { status: 400 }
+    );
+  }
+
   const supabase = makeServiceClient();
   const resolvedDate = await resolveScanDate(supabase);
   if (!resolvedDate.scan_date) {
     return NextResponse.json(
-      { ok: false, status: "scan failed", error: "Unable to resolve scan date from today or LCTD" },
+      {
+        ok: false,
+        status: "scan failed",
+        error: "Unable to resolve scan date from today or LCTD",
+      },
       { status: 500 }
     );
   }
+
   const scanDate = resolvedDate.scan_date;
 
-  let strategies: StrategyVersion[] = [];
-  let explicitUniverse: UniverseSlug | null = null;
-
   if (mode === "single") {
-    const strategyRaw = String(body?.strategy_version ?? "").trim();
-    const universeRaw = String(body?.universe_slug ?? "").trim();
-    if (!isStrategyVersion(strategyRaw) || !isUniverseSlug(universeRaw)) {
-      return NextResponse.json(
-        {
-          ok: false,
-          status: "scan failed",
-          error: "Invalid strategy_version or universe_slug",
-          allowed: { strategies: STRATEGIES, universes: UNIVERSES },
-        },
-        { status: 400 }
-      );
-    }
-    if (!STRATEGY_UNIVERSES[strategyRaw].includes(universeRaw)) {
-      return NextResponse.json(
-        {
-          ok: false,
-          status: "scan failed",
-          error: `Universe ${universeRaw} not allowed for strategy ${strategyRaw}`,
-          allowed_universes: STRATEGY_UNIVERSES[strategyRaw],
-        },
-        { status: 400 }
-      );
-    }
-    strategies = [strategyRaw];
-    explicitUniverse = universeRaw;
-  } else if (mode === "strategy") {
-    const strategyRaw = String(body?.strategy_version ?? "").trim();
-    if (!isStrategyVersion(strategyRaw)) {
-      return NextResponse.json(
-        {
-          ok: false,
-          status: "scan failed",
-          error: "Invalid strategy_version",
-          allowed: { strategies: STRATEGIES },
-        },
-        { status: 400 }
-      );
-    }
-    strategies = [strategyRaw];
-    explicitUniverse = null;
-  } else {
-    // Deprecated all-in-one path.
-    strategies = [...STRATEGIES];
-    explicitUniverse = null;
+    const single = await runChunkedBatch({
+      supabase,
+      strategy,
+      universe,
+      scanDate,
+      offset: 0,
+      batchSize: 40,
+      timeoutMs: 55_000,
+    });
+    return NextResponse.json(single, { status: single.ok ? 200 : 500 });
   }
 
-  const startedAt = Date.now();
-  const plan = await runPlan({
-    req,
-    supabase,
-    scanDate,
-    strategies,
-    explicitUniverse,
-  });
+  if (mode === "batch") {
+    const offset = Math.max(0, Number(body?.offset ?? 0) || 0);
+    const batchSizeRaw = Number(body?.batch_size ?? 40) || 40;
+    const batchSize = Math.min(100, Math.max(20, batchSizeRaw));
+    const out = await runChunkedBatch({
+      supabase,
+      strategy,
+      universe,
+      scanDate,
+      offset,
+      batchSize,
+      timeoutMs: 55_000,
+    });
+    return NextResponse.json(out, { status: out.ok ? 200 : 500 });
+  }
 
-  const rowsWritten = plan.runResults.reduce((sum, r) => sum + Number(r.inserted_count ?? 0), 0);
-  const completedSteps = plan.runResults.length;
-  const totalSteps = strategies.reduce((sum, s) => {
-    const universeCount = explicitUniverse ? 1 : STRATEGY_UNIVERSES[s].length;
-    return sum + universeCount;
-  }, 0);
+  if (mode === "finalize") {
+    const out = await runFinalize({
+      supabase,
+      strategy,
+      universe,
+      scanDate,
+    });
+    return NextResponse.json(out, { status: out.ok ? 200 : 500 });
+  }
 
   return NextResponse.json(
     {
-      ok: plan.ok,
-      status: plan.ok ? "scan complete" : "scan failed",
-      scan_date_used: scanDate,
-      scan_date_source: resolvedDate.source,
-      mode,
-      strategy: strategies.length === 1 ? strategies[0] : null,
-      universe: explicitUniverse,
-      strategies_run: strategies,
-      universes_run: explicitUniverse
-        ? [explicitUniverse]
-        : Array.from(new Set(strategies.flatMap((s) => STRATEGY_UNIVERSES[s]))),
-      rows_written: rowsWritten,
-      duration_ms: Date.now() - startedAt,
-      completed_steps: completedSteps,
-      total_steps: totalSteps,
-      failed_step: plan.failedStep,
-      run_results: plan.runResults,
-      error: plan.failedStep?.error ?? null,
+      ok: false,
+      status: "scan failed",
+      error: `Unsupported mode: ${mode}`,
+      supported_modes: ["refresh_bars", "single", "batch", "finalize"],
     },
-    { status: plan.ok ? 200 : 500 }
+    { status: 400 }
   );
 }
 
@@ -418,13 +590,17 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
-    const mode = String(url.searchParams.get("mode") ?? "").trim().toLowerCase() || "strategy";
+    const mode = String(url.searchParams.get("mode") ?? "").trim().toLowerCase() || "batch";
     const strategy_version = String(url.searchParams.get("strategy") ?? url.searchParams.get("strategy_version") ?? "").trim();
     const universe_slug = String(url.searchParams.get("universe") ?? url.searchParams.get("universe_slug") ?? "").trim();
+    const offset = Number(url.searchParams.get("offset") ?? "0") || 0;
+    const batch_size = Number(url.searchParams.get("batch_size") ?? "40") || 40;
     return await runByMode(req, {
       mode,
       strategy_version,
       universe_slug,
+      offset,
+      batch_size,
     });
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : String(e);

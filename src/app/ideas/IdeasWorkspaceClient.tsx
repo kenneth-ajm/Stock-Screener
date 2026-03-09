@@ -792,6 +792,13 @@ export default function IdeasWorkspaceClient({
     setRunScanActiveLabel(label);
     setRunScanMessage(null);
     try {
+      const strategyUniverses: Record<StrategyVersion, string[]> = {
+        v1: ["liquid_2000", "midcap_1000"],
+        v1_trend_hold: ["core_800", "liquid_2000"],
+        v1_sector_momentum: ["growth_1500", "midcap_1000"],
+      };
+      const universes = strategyUniverses[strategyToRun] ?? [];
+
       const postWithTimeout = async (body: Record<string, unknown>, timeoutMs = 60000) => {
         const controller = new AbortController();
         let timer: any = null;
@@ -816,23 +823,62 @@ export default function IdeasWorkspaceClient({
         }
       };
 
-      setRunScanMessage(`Running ${label}...`);
-      const { res, payload } = await postWithTimeout({
-        mode: "strategy",
-        strategy_version: strategyToRun,
-      });
-      if (!res.ok || !payload?.ok) {
-        const step = payload?.failed_step;
-        const failedLabel = step
-          ? `${String(step.strategy_version)} @ ${String(step.universe_slug)}`
-          : label;
+      setRunScanMessage("Refreshing bars before scan...");
+      const barsRefresh = await postWithTimeout({ mode: "refresh_bars" }, 60000);
+      if (!barsRefresh.res.ok || !barsRefresh.payload?.ok) {
         throw new Error(
-          `${failedLabel}: ${String(payload?.error ?? payload?.status ?? `HTTP ${res.status}`)}`
+          `refresh_bars: ${String(
+            barsRefresh.payload?.error ?? barsRefresh.payload?.status ?? `HTTP ${barsRefresh.res.status}`
+          )}`
         );
       }
 
-      const totalRowsWritten = Number(payload?.rows_written ?? 0);
-      const finalScanDate = String(payload?.scan_date_used ?? "");
+      let totalRowsWritten = 0;
+      let finalScanDate = "";
+      for (const universe of universes) {
+        let offset = 0;
+        let keepGoing = true;
+        while (keepGoing) {
+          setRunScanMessage(`Running ${label}: ${universe} batch offset ${offset}...`);
+          const { res, payload } = await postWithTimeout({
+            mode: "batch",
+            strategy_version: strategyToRun,
+            universe_slug: universe,
+            offset,
+            batch_size: 40,
+          });
+          if (!res.ok || !payload?.ok) {
+            const step = payload?.failed_step;
+            const failedLabel = step
+              ? `${String(step.strategy_version)} @ ${String(step.universe_slug)} batch ${String(step.batch_index ?? "?")}`
+              : `${strategyToRun} @ ${universe}`;
+            throw new Error(
+              `${failedLabel}: ${String(payload?.error ?? payload?.status ?? `HTTP ${res.status}`)}`
+            );
+          }
+
+          totalRowsWritten += Number(payload?.rows_written ?? 0);
+          finalScanDate = String(payload?.scan_date_used ?? finalScanDate);
+          keepGoing = Boolean(payload?.has_more);
+          offset = Number(payload?.next_offset ?? 0);
+        }
+
+        setRunScanMessage(`Finalizing ${label}: ${universe}...`);
+        const finalize = await postWithTimeout({
+          mode: "finalize",
+          strategy_version: strategyToRun,
+          universe_slug: universe,
+        });
+        if (!finalize.res.ok || !finalize.payload?.ok) {
+          throw new Error(
+            `${strategyToRun} @ ${universe} finalize: ${String(
+              finalize.payload?.error ?? finalize.payload?.status ?? `HTTP ${finalize.res.status}`
+            )}`
+          );
+        }
+        totalRowsWritten += Number(finalize.payload?.rows_written ?? 0);
+        finalScanDate = String(finalize.payload?.scan_date_used ?? finalScanDate);
+      }
 
       setRunScanMessage(
         `Scan complete${finalScanDate ? ` (${finalScanDate})` : ""}. Rows written: ${
