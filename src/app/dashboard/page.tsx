@@ -9,11 +9,14 @@ import { mapExecutionState } from "@/lib/execution_state";
 import { applyEarningsRiskToAction, lookupEarningsRiskForSymbols } from "@/lib/earnings_risk";
 import { applyBreadthToAction, computeMarketBreadth } from "@/lib/market_breadth";
 import TickerCheckClient from "./TickerCheckClient";
-import { GROWTH_UNIVERSE_SLUG } from "@/lib/strategy_universe";
+import { allowedUniversesForStrategy, defaultUniverseForStrategy } from "@/lib/strategy_universe";
 import { getBuildMarker, getEnvironmentLabel } from "@/lib/build_marker";
 import PrivacyMoney from "@/components/privacy-money";
 import PrivacyToggle from "./PrivacyToggle";
 const DASHBOARD_PAGE_MARKER = "dashboard-canonical-20260308-a";
+const BUY_CAP = 5;
+const WATCH_CAP = 10;
+const MAX_ROWS = 200;
 
 function signalPill(signal: "BUY" | "WATCH" | "AVOID") {
   if (signal === "BUY") return "border-emerald-200 bg-emerald-50 text-emerald-700";
@@ -46,6 +49,27 @@ function extractAtr14(reasonJson: any): number | null {
     if (Number.isFinite(n) && n > 0) return n;
   }
   return null;
+}
+
+function rankRows(rows: Array<any>) {
+  return [...rows].sort((a, b) => {
+    const ar = typeof a.rank_score === "number" ? a.rank_score : Number(a.confidence ?? 0);
+    const br = typeof b.rank_score === "number" ? b.rank_score : Number(b.confidence ?? 0);
+    if (br !== ar) return br - ar;
+    return String(a.symbol ?? "").localeCompare(String(b.symbol ?? ""));
+  });
+}
+
+function applyDisplayCaps(rows: Array<any>) {
+  const buyRanked = rankRows(rows.filter((r) => String(r.signal ?? "").toUpperCase() === "BUY")).slice(0, BUY_CAP);
+  const watchRanked = rankRows(rows.filter((r) => String(r.signal ?? "").toUpperCase() === "WATCH")).slice(0, WATCH_CAP);
+  const avoidRanked = rankRows(
+    rows.filter((r) => {
+      const sig = String(r.signal ?? "").toUpperCase();
+      return sig !== "BUY" && sig !== "WATCH";
+    })
+  );
+  return rankRows([...buyRanked, ...watchRanked, ...avoidRanked]).slice(0, MAX_ROWS);
 }
 
 type QuoteMap = Record<
@@ -108,129 +132,133 @@ export default async function DashboardPage({
   const regime = regimeRows?.[0] ?? null;
 
   async function loadStrategySummary(strategyVersion: string) {
-    const { data: latestRow } = await supabase
-      .from("daily_scans")
-      .select("date")
-      .eq("universe_slug", "core_800")
-      .eq("strategy_version", strategyVersion)
-      .order("date", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const date = latestRow?.date ? String(latestRow.date) : null;
-    if (!date) return { date: null, buy: 0, watch: 0, avoid: 0, top: [] as any[] };
+    const allowedUniverses = allowedUniversesForStrategy(strategyVersion);
+    const rawRows: Array<any> = [];
+    const universeDates: Array<{ universe_slug: string; date_used: string | null; rows: number }> = [];
 
-    const { data: rows } = await supabase
-      .from("daily_scans")
-      .select("symbol,signal,confidence,rank,rank_score,reason_summary,reason_json,entry")
-      .eq("universe_slug", "core_800")
-      .eq("strategy_version", strategyVersion)
-      .eq("date", date)
-      .order("rank_score", { ascending: false, nullsFirst: false })
-      .order("confidence", { ascending: false })
-      .order("symbol", { ascending: true })
-      .limit(50);
-    const list = (rows ?? []) as Array<{
-      symbol: string;
-      signal: "BUY" | "WATCH" | "AVOID";
-      confidence: number | null;
-      rank: number | null;
-      rank_score: number | null;
-      reason_summary: string | null;
-      reason_json: any;
-      entry: number | null;
-    }>;
-    const symbols = Array.from(new Set(list.map((r) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean)));
-    const { data: barsOnDate } = await supabase
-      .from("price_bars")
-      .select("symbol,close")
-      .eq("date", date)
-      .in("symbol", symbols);
-    const closeBySymbol = new Map<string, number>();
-    for (const row of barsOnDate ?? []) {
-      const sym = String((row as any)?.symbol ?? "").trim().toUpperCase();
-      const close = Number((row as any)?.close);
-      if (!sym || !Number.isFinite(close) || close <= 0) continue;
-      if (!closeBySymbol.has(sym)) closeBySymbol.set(sym, close);
+    for (const universe of allowedUniverses) {
+      const { data: latestRow } = await supabase
+        .from("daily_scans")
+        .select("date")
+        .eq("universe_slug", universe)
+        .eq("strategy_version", strategyVersion)
+        .order("date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const date = latestRow?.date ? String(latestRow.date) : null;
+      if (!date) {
+        universeDates.push({ universe_slug: universe, date_used: null, rows: 0 });
+        continue;
+      }
+      const { data: rows } = await supabase
+        .from("daily_scans")
+        .select("symbol,signal,confidence,rank,rank_score,reason_summary,reason_json,entry,stop,tp1,tp2,universe_slug,date")
+        .eq("universe_slug", universe)
+        .eq("strategy_version", strategyVersion)
+        .eq("date", date)
+        .order("rank", { ascending: true, nullsFirst: false })
+        .order("confidence", { ascending: false })
+        .order("symbol", { ascending: true })
+        .limit(MAX_ROWS);
+      const list = (rows ?? []) as Array<any>;
+      rawRows.push(...list);
+      universeDates.push({ universe_slug: universe, date_used: date, rows: list.length });
     }
-    const validated = list.filter((row) => {
-      const sym = String(row.symbol ?? "").trim().toUpperCase();
-      const scanClose = closeBySymbol.get(sym);
-      if (scanClose == null) return true;
-      const entry = Number(row.entry ?? 0);
-      if (!Number.isFinite(entry) || entry <= 0) return false;
-      return Math.abs((entry - scanClose) / scanClose) <= PRICE_MISMATCH_THRESHOLD_PCT;
-    });
-    return {
-      date,
-      buy: validated.filter((r: any) => r.signal === "BUY").length,
-      watch: validated.filter((r: any) => r.signal === "WATCH").length,
-      avoid: validated.filter((r: any) => r.signal === "AVOID").length,
-      top: validated.filter((r) => r.signal !== "AVOID").slice(0, 5),
-    };
-  }
 
-  const [momentum, trend] = await Promise.all([
-    loadStrategySummary("v2_core_momentum"),
-    loadStrategySummary("v1_trend_hold"),
-  ]);
-  async function loadSectorSummary() {
-    const { data: latestRow } = await supabase
-      .from("daily_scans")
-      .select("date")
-      .eq("universe_slug", GROWTH_UNIVERSE_SLUG)
-      .eq("strategy_version", "v1_sector_momentum")
-      .order("date", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const date = latestRow?.date ? String(latestRow.date) : null;
-    if (!date) {
-      return { ok: false as const, date: null, top_groups: [] as any[], candidates: [] as any[], error: "No cached sector scan rows" };
+    const latestDate = universeDates
+      .filter((u) => u.rows > 0 && u.date_used)
+      .sort((a, b) => String(b.date_used ?? "").localeCompare(String(a.date_used ?? "")))[0]?.date_used ?? null;
+
+    if (rawRows.length === 0) {
+      return {
+        date: latestDate,
+        buy: 0,
+        watch: 0,
+        avoid: 0,
+        top: [] as any[],
+        rows_display: [] as any[],
+        universe_dates: universeDates,
+      };
     }
-    const { data: rows, error } = await supabase
-      .from("daily_scans")
-      .select("symbol,signal,entry,stop,rank_score,reason_json")
-      .eq("universe_slug", GROWTH_UNIVERSE_SLUG)
-      .eq("strategy_version", "v1_sector_momentum")
-      .eq("date", date)
-      .order("rank_score", { ascending: false, nullsFirst: false })
-      .order("symbol", { ascending: true })
-      .limit(50);
-    if (error) {
-      return { ok: false as const, date, top_groups: [] as any[], candidates: [] as any[], error: error.message };
-    }
-    const list = (rows ?? []) as Array<any>;
-    const groupsMap = new Map<string, { key: string; name: string; theme: string; rank_score: number }>();
-    for (const row of list) {
-      const g = row?.reason_json?.group ?? null;
-      const key = String(g?.key ?? "").trim();
-      if (!key || groupsMap.has(key)) continue;
-      groupsMap.set(key, {
-        key,
-        name: String(g?.name ?? key),
-        theme: String(g?.theme ?? ""),
-        rank_score: Number(g?.group_rank_score ?? 0) || 0,
+
+    const shouldValidateEntry = strategyVersion !== "v1_sector_momentum";
+    let entryValidatedRows = rawRows;
+    if (shouldValidateEntry && latestDate) {
+      const symbols = Array.from(new Set(rawRows.map((r) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean)));
+      const { data: barsOnDate } = await supabase
+        .from("price_bars")
+        .select("symbol,close")
+        .eq("date", latestDate)
+        .in("symbol", symbols);
+      const closeBySymbol = new Map<string, number>();
+      for (const row of barsOnDate ?? []) {
+        const sym = String((row as any)?.symbol ?? "").trim().toUpperCase();
+        const close = Number((row as any)?.close);
+        if (!sym || !Number.isFinite(close) || close <= 0) continue;
+        if (!closeBySymbol.has(sym)) closeBySymbol.set(sym, close);
+      }
+      entryValidatedRows = rawRows.filter((row) => {
+        const sym = String(row.symbol ?? "").trim().toUpperCase();
+        const scanClose = closeBySymbol.get(sym);
+        if (scanClose == null) return true;
+        const entry = Number(row.entry ?? 0);
+        if (!Number.isFinite(entry) || entry <= 0) return false;
+        return Math.abs((entry - scanClose) / scanClose) <= PRICE_MISMATCH_THRESHOLD_PCT;
       });
     }
+
+    const rowsDisplay = applyDisplayCaps(entryValidatedRows);
+    const top = rankRows(rowsDisplay.filter((r) => String(r.signal ?? "").toUpperCase() !== "AVOID")).slice(0, 5);
     return {
-      ok: true as const,
-      date,
-      top_groups: [...groupsMap.values()].sort((a, b) => b.rank_score - a.rank_score).slice(0, 4),
-      candidates: list.slice(0, 8).map((r) => ({
-        symbol: String(r.symbol ?? ""),
-        signal: String(r.signal ?? "WATCH"),
-        entry: Number(r.entry ?? 0),
-        stop: Number(r.stop ?? 0),
-        industry_group: String(r?.reason_json?.group?.name ?? ""),
-      })),
-      error: null as string | null,
+      date: latestDate,
+      buy: rowsDisplay.filter((r) => String(r.signal ?? "").toUpperCase() === "BUY").length,
+      watch: rowsDisplay.filter((r) => String(r.signal ?? "").toUpperCase() === "WATCH").length,
+      avoid: rowsDisplay.filter((r) => String(r.signal ?? "").toUpperCase() === "AVOID").length,
+      top,
+      rows_display: rowsDisplay,
+      universe_dates: universeDates,
     };
   }
-  const sectorMomentum = await loadSectorSummary();
+
+  const [momentum, trend, sectorSummary] = await Promise.all([
+    loadStrategySummary("v1"),
+    loadStrategySummary("v1_trend_hold"),
+    loadStrategySummary("v1_sector_momentum"),
+  ]);
+
+  const sectorGroupsMap = new Map<string, { key: string; name: string; theme: string; rank_score: number }>();
+  for (const row of sectorSummary.rows_display ?? []) {
+    const g = (row as any)?.reason_json?.group ?? null;
+    const key = String(g?.key ?? "").trim();
+    if (!key || sectorGroupsMap.has(key)) continue;
+    sectorGroupsMap.set(key, {
+      key,
+      name: String(g?.name ?? key),
+      theme: String(g?.theme ?? ""),
+      rank_score: Number(g?.group_rank_score ?? 0) || 0,
+    });
+  }
+  const sectorMomentum = {
+    ok: (sectorSummary.rows_display ?? []).length > 0,
+    date: sectorSummary.date,
+    buy: sectorSummary.buy,
+    watch: sectorSummary.watch,
+    avoid: sectorSummary.avoid,
+    top_groups: [...sectorGroupsMap.values()].sort((a, b) => b.rank_score - a.rank_score).slice(0, 4),
+    candidates: (sectorSummary.rows_display ?? []).slice(0, 8).map((r: any) => ({
+      symbol: String(r.symbol ?? ""),
+      signal: String(r.signal ?? "WATCH"),
+      entry: Number(r.entry ?? 0),
+      stop: Number(r.stop ?? 0),
+      industry_group: String(r?.reason_json?.group?.name ?? ""),
+    })),
+    error: (sectorSummary.rows_display ?? []).length > 0 ? null : "No cached sector scan rows",
+  };
   const breadth = await computeMarketBreadth({
     supabase: supabase as any,
     date: momentum.date ?? lctd.lctd ?? null,
-    universe_slug: "core_800",
-    strategy_version: "v2_core_momentum",
+    universe_slug: defaultUniverseForStrategy("v1"),
+    strategy_version: "v1",
     regime_state: regime?.state ?? null,
   });
   const brokerStatusKey = `broker_snapshot_last_run:${user.id}`;
@@ -651,7 +679,7 @@ export default async function DashboardPage({
               </div>
               <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
                 <span className="font-medium text-slate-900">Sector Momentum</span>
-                <span className="text-slate-700">{sectorMomentum.ok ? `${sectorMomentum.candidates.length} candidates` : "Unavailable"}</span>
+                <span className="text-slate-700">BUY {sectorMomentum.buy} / WATCH {sectorMomentum.watch}</span>
               </div>
               <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
                 <span className="font-medium text-slate-900">Account Risk %</span>
