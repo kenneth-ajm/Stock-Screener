@@ -892,18 +892,13 @@ export default function IdeasWorkspaceClient({
         let offset = 0;
         let keepGoing = true;
         while (keepGoing) {
-          setRunScanState((prev) => ({
-            ...prev,
-            status: "running",
-            detail: `Running ${label}: ${universe} batch offset ${offset}`,
-          }));
           const { res, payload } = await postWithTimeout({
             mode: "batch",
             strategy_version: strategyToRun,
             universe_slug: universe,
             request_id: requestId,
             offset,
-            batch_size: 40,
+            batch_size: 200,
           });
           if (!res.ok || !payload?.ok) {
             const step = payload?.failed_step;
@@ -921,6 +916,18 @@ export default function IdeasWorkspaceClient({
           lastBarsMode = String(payload?.bars_mode ?? lastBarsMode ?? "cached_db_only");
           keepGoing = Boolean(payload?.has_more);
           offset = Number(payload?.next_offset ?? 0);
+          const batchIndex = Number(payload?.batch_index ?? 0);
+          const totalBatches = Number(payload?.total_batches ?? 0);
+          setRunScanState((prev) => ({
+            ...prev,
+            status: "running",
+            detail:
+              batchIndex > 0 && totalBatches > 0
+                ? `Running ${label}: ${universe} batch ${batchIndex}/${totalBatches}`
+                : `Running ${label}: ${universe} batch offset ${offset}`,
+            rowsWritten: totalRowsWritten,
+            scanDate: finalScanDate || prev.scanDate,
+          }));
         }
 
         setRunScanState((prev) => ({

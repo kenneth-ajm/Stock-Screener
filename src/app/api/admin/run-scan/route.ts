@@ -553,7 +553,7 @@ async function runByMode(req: Request, body: any) {
       universe,
       scanDate,
       offset: 0,
-      batchSize: 40,
+      batchSize: 200,
       timeoutMs: 55_000,
     });
     const response = {
@@ -574,8 +574,8 @@ async function runByMode(req: Request, body: any) {
 
   if (mode === "batch") {
     const offset = Math.max(0, Number(body?.offset ?? 0) || 0);
-    const batchSizeRaw = Number(body?.batch_size ?? 40) || 40;
-    const batchSize = Math.min(100, Math.max(20, batchSizeRaw));
+    const batchSizeRaw = Number(body?.batch_size ?? 200) || 200;
+    const batchSize = Math.min(250, Math.max(50, batchSizeRaw));
     const out = await runChunkedBatch({
       supabase,
       strategy,
@@ -654,7 +654,7 @@ export async function GET(req: Request) {
     const strategy_version = String(url.searchParams.get("strategy") ?? url.searchParams.get("strategy_version") ?? "").trim();
     const universe_slug = String(url.searchParams.get("universe") ?? url.searchParams.get("universe_slug") ?? "").trim();
     const offset = Number(url.searchParams.get("offset") ?? "0") || 0;
-    const batch_size = Number(url.searchParams.get("batch_size") ?? "40") || 40;
+    const batch_size = Number(url.searchParams.get("batch_size") ?? "200") || 200;
     return await runByMode(req, {
       mode,
       strategy_version,
