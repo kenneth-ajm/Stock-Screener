@@ -160,7 +160,13 @@ function computeSectorBreadth(rows: ScanRow[], regimeState: string | null) {
 }
 
 const loadScreenerDataCached = unstable_cache(
-  async (userId: string, universeSlug: string, strategyVersion: string, requestedDate: string | null) => {
+  async (
+    userId: string,
+    universeSlug: string,
+    strategyVersion: string,
+    requestedDate: string | null,
+    cacheBust: string | null
+  ) => {
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -511,6 +517,7 @@ const loadScreenerDataCached = unstable_cache(
           validated_rows_is_array: Array.isArray(entryValidatedRows),
           final_rows_is_array: Array.isArray(rowsFinal),
         },
+        cache_bust: cacheBust ?? null,
         regime_state: regimeState,
         regime_date: regimeDate,
         regime_stale: regimeStale,
@@ -566,8 +573,9 @@ export async function GET(req: Request) {
     const strategyVersion = normalizeStrategyVersion(url.searchParams.get("strategy_version"));
     const universeSlug = String(url.searchParams.get("universe_slug") ?? "").trim();
     const date = String(url.searchParams.get("date") ?? "").trim() || null;
+    const cacheBust = String(url.searchParams.get("_bust") ?? "").trim() || null;
 
-    const data = await loadScreenerDataCached(user.id, universeSlug, strategyVersion, date);
+    const data = await loadScreenerDataCached(user.id, universeSlug, strategyVersion, date, cacheBust);
     return NextResponse.json(data, {
       headers: {
         "Cache-Control": "s-maxage=60, stale-while-revalidate=60",

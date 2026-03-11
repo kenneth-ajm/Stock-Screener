@@ -94,6 +94,7 @@ type Payload = {
       validated_rows_is_array?: boolean;
       final_rows_is_array?: boolean;
     } | null;
+    cache_bust?: string | null;
     regime_state: string | null;
     breadth_state?: "STRONG" | "MIXED" | "WEAK" | null;
     breadth_label?: string | null;
@@ -119,6 +120,25 @@ type QuoteMap = Record<
 >;
 type EarningsRiskMap = Record<string, EarningsRisk>;
 const PRICE_MISMATCH_THRESHOLD_PCT = 0.6;
+
+type ManualScanStatus = "idle" | "starting" | "running" | "completed" | "completed_zero" | "failed";
+
+type ManualScanState = {
+  status: ManualScanStatus;
+  label: string | null;
+  detail: string | null;
+  requestId: string | null;
+  strategyRequested: StrategyVersion | null;
+  strategyResolved: string | null;
+  universeResolved: string[] | null;
+  barsMode: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  scanDate: string | null;
+  rowsWritten: number;
+  durationMs: number | null;
+  error: string | null;
+};
 
 function round1(n: number) {
   return Math.round(n * 10) / 10;
@@ -201,9 +221,23 @@ export default function IdeasWorkspaceClient({
   const [tp2Price, setTp2Price] = useState("");
   const [tp2SizePct, setTp2SizePct] = useState("50");
   const [selectedFilter, setSelectedFilter] = useState<IdeasFilter>("all");
-  const [runScanBusy, setRunScanBusy] = useState(false);
-  const [runScanMessage, setRunScanMessage] = useState<string | null>(null);
-  const [runScanActiveLabel, setRunScanActiveLabel] = useState<string | null>(null);
+  const [scanDateHintByStrategy, setScanDateHintByStrategy] = useState<Partial<Record<StrategyVersion, string>>>({});
+  const [runScanState, setRunScanState] = useState<ManualScanState>({
+    status: "idle",
+    label: null,
+    detail: null,
+    requestId: null,
+    strategyRequested: null,
+    strategyResolved: null,
+    universeResolved: null,
+    barsMode: null,
+    startedAt: null,
+    endedAt: null,
+    scanDate: null,
+    rowsWritten: 0,
+    durationMs: null,
+    error: null,
+  });
   const [refreshNonce, setRefreshNonce] = useState(0);
   const tradeTicketRef = useRef<HTMLDivElement | null>(null);
   const entryInputRef = useRef<HTMLInputElement | null>(null);
@@ -211,6 +245,7 @@ export default function IdeasWorkspaceClient({
     breadthState: data?.meta?.breadth_state ?? "STRONG",
     breadthLabel: data?.meta?.breadth_label ?? "Breadth strong",
   } as const;
+  const runScanBusy = runScanState.status === "starting" || runScanState.status === "running";
 
   useEffect(() => {
     setStrategy(initialStrategy);
@@ -224,11 +259,10 @@ export default function IdeasWorkspaceClient({
     let mounted = true;
     setLoading(true);
     const qs = new URLSearchParams({ strategy_version: strategy });
+    const strategyDateHint = scanDateHintByStrategy[strategy];
+    if (strategyDateHint) qs.set("date", strategyDateHint);
     if (universeMode !== "auto") qs.set("universe_slug", universeMode);
-    if (refreshNonce > 0) {
-      // Bust the cached screener-data key after manual scan runs.
-      qs.set("date", `refresh_${refreshNonce}_${Date.now()}`);
-    }
+    if (refreshNonce > 0) qs.set("_bust", String(refreshNonce));
     const apiUrl = `/api/screener-data?${qs.toString()}`;
     setLastApiUrl(apiUrl);
     setLastLoadOk(null);
@@ -259,17 +293,22 @@ export default function IdeasWorkspaceClient({
     return () => {
       mounted = false;
     };
-  }, [strategy, universeMode, refreshNonce]);
+  }, [strategy, universeMode, refreshNonce, scanDateHintByStrategy]);
 
   useEffect(() => {
-    if (!runScanBusy) return;
+    if (!(runScanState.status === "starting" || runScanState.status === "running")) return;
     const timer = setTimeout(() => {
-      setRunScanBusy(false);
-      setRunScanMessage("Run scan failed: timed out while waiting for scan completion.");
-      setRunScanActiveLabel(null);
+      setRunScanState((prev) => ({
+        ...prev,
+        status: "failed",
+        detail: "Failed: timed out while waiting for scan completion.",
+        endedAt: new Date().toISOString(),
+        durationMs: prev.startedAt ? Date.now() - new Date(prev.startedAt).getTime() : prev.durationMs,
+        error: "timed out waiting for scan completion",
+      }));
     }, 180000);
     return () => clearTimeout(timer);
-  }, [runScanBusy]);
+  }, [runScanState.status, runScanState.startedAt]);
 
   useEffect(() => {
     const symbols = (data?.rows ?? []).slice(0, 100).map((r) => r.symbol).filter(Boolean);
@@ -788,9 +827,24 @@ export default function IdeasWorkspaceClient({
   }
 
   async function runStrategyScan(strategyToRun: StrategyVersion, label: string) {
-    setRunScanBusy(true);
-    setRunScanActiveLabel(label);
-    setRunScanMessage(null);
+    const requestId = `scan_ui_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const startedAtMs = Date.now();
+    setRunScanState({
+      status: "starting",
+      label,
+      detail: "Starting manual scan...",
+      requestId,
+      strategyRequested: strategyToRun,
+      strategyResolved: null,
+      universeResolved: null,
+      barsMode: null,
+      startedAt: new Date(startedAtMs).toISOString(),
+      endedAt: null,
+      scanDate: null,
+      rowsWritten: 0,
+      durationMs: null,
+      error: null,
+    });
     try {
       const strategyUniverses: Record<StrategyVersion, string[]> = {
         v1: ["liquid_2000", "midcap_1000"],
@@ -823,19 +877,31 @@ export default function IdeasWorkspaceClient({
         }
       };
 
-      setRunScanMessage("Using latest cached bars for manual scan...");
-
       let totalRowsWritten = 0;
       let finalScanDate = "";
+      let lastStrategyResolved: string | null = null;
+      let lastBarsMode: string | null = "cached_db_only";
       for (const universe of universes) {
+        const resolvedUniverses = universes.slice(0, universes.indexOf(universe) + 1);
+        setRunScanState((prev) => ({
+          ...prev,
+          status: "running",
+          detail: `Running ${label}: ${universe}`,
+          universeResolved: resolvedUniverses,
+        }));
         let offset = 0;
         let keepGoing = true;
         while (keepGoing) {
-          setRunScanMessage(`Running ${label}: ${universe} batch offset ${offset}...`);
+          setRunScanState((prev) => ({
+            ...prev,
+            status: "running",
+            detail: `Running ${label}: ${universe} batch offset ${offset}`,
+          }));
           const { res, payload } = await postWithTimeout({
             mode: "batch",
             strategy_version: strategyToRun,
             universe_slug: universe,
+            request_id: requestId,
             offset,
             batch_size: 40,
           });
@@ -851,15 +917,22 @@ export default function IdeasWorkspaceClient({
 
           totalRowsWritten += Number(payload?.rows_written ?? 0);
           finalScanDate = String(payload?.scan_date_used ?? finalScanDate);
+          lastStrategyResolved = String(payload?.strategy_version_resolved ?? payload?.strategy ?? strategyToRun);
+          lastBarsMode = String(payload?.bars_mode ?? lastBarsMode ?? "cached_db_only");
           keepGoing = Boolean(payload?.has_more);
           offset = Number(payload?.next_offset ?? 0);
         }
 
-        setRunScanMessage(`Finalizing ${label}: ${universe}...`);
+        setRunScanState((prev) => ({
+          ...prev,
+          status: "running",
+          detail: `Finalizing ${label}: ${universe}`,
+        }));
         const finalize = await postWithTimeout({
           mode: "finalize",
           strategy_version: strategyToRun,
           universe_slug: universe,
+          request_id: requestId,
         });
         if (!finalize.res.ok || !finalize.payload?.ok) {
           throw new Error(
@@ -870,23 +943,54 @@ export default function IdeasWorkspaceClient({
         }
         totalRowsWritten += Number(finalize.payload?.rows_written ?? 0);
         finalScanDate = String(finalize.payload?.scan_date_used ?? finalScanDate);
+        lastStrategyResolved = String(finalize.payload?.strategy_version_resolved ?? lastStrategyResolved ?? strategyToRun);
+        lastBarsMode = String(finalize.payload?.bars_mode ?? lastBarsMode ?? "cached_db_only");
       }
 
-      setRunScanMessage(
-        `Scan complete${finalScanDate ? ` (${finalScanDate})` : ""}. Rows written: ${
-          Number.isFinite(totalRowsWritten) ? totalRowsWritten : 0
-        }.`
-      );
+      if (finalScanDate) {
+        setScanDateHintByStrategy((prev) => ({ ...prev, [strategyToRun]: finalScanDate }));
+      }
+      const endedAt = new Date().toISOString();
+      const durationMs = Date.now() - startedAtMs;
+      const rowsOut = Number.isFinite(totalRowsWritten) ? totalRowsWritten : 0;
+      setRunScanState({
+        status: rowsOut > 0 ? "completed" : "completed_zero",
+        label,
+        detail:
+          rowsOut > 0
+            ? `Completed. ${rowsOut} rows written${finalScanDate ? ` on ${finalScanDate}` : ""}.`
+            : `Completed with 0 rows written${finalScanDate ? ` on ${finalScanDate}` : ""}.`,
+        requestId,
+        strategyRequested: strategyToRun,
+        strategyResolved: lastStrategyResolved ?? strategyToRun,
+        universeResolved: universes,
+        barsMode: lastBarsMode ?? "cached_db_only",
+        startedAt: new Date(startedAtMs).toISOString(),
+        endedAt,
+        scanDate: finalScanDate || null,
+        rowsWritten: rowsOut,
+        durationMs,
+        error: null,
+      });
       setRefreshNonce((n) => n + 1);
     } catch (e: any) {
-      const msg =
-        e?.name === "AbortError"
-          ? "Run scan failed: request timed out. Try again or reduce run scope."
-          : `Run scan failed: ${e?.message ?? "Unknown error"}`;
-      setRunScanMessage(msg);
-    } finally {
-      setRunScanBusy(false);
-      setRunScanActiveLabel(null);
+      const msg = e?.name === "AbortError" ? "request timed out" : String(e?.message ?? "Unknown error");
+      setRunScanState({
+        status: "failed",
+        label,
+        detail: `Failed: ${msg}`,
+        requestId,
+        strategyRequested: strategyToRun,
+        strategyResolved: strategyToRun,
+        universeResolved: strategyToRun === "v1" ? ["liquid_2000", "midcap_1000"] : strategyToRun === "v1_trend_hold" ? ["core_800", "liquid_2000"] : ["growth_1500", "midcap_1000"],
+        barsMode: "cached_db_only",
+        startedAt: new Date(startedAtMs).toISOString(),
+        endedAt: new Date().toISOString(),
+        scanDate: null,
+        rowsWritten: 0,
+        durationMs: Date.now() - startedAtMs,
+        error: msg,
+      });
     }
   }
 
@@ -1013,7 +1117,7 @@ export default function IdeasWorkspaceClient({
             disabled={runScanBusy}
             className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {runScanBusy && runScanActiveLabel === "Momentum Scan" ? "Running..." : "Run Momentum Scan"}
+            {runScanBusy && runScanState.label === "Momentum Scan" ? "Running..." : "Run Momentum Scan"}
           </button>
           <button
             type="button"
@@ -1021,7 +1125,7 @@ export default function IdeasWorkspaceClient({
             disabled={runScanBusy}
             className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {runScanBusy && runScanActiveLabel === "Trend Scan" ? "Running..." : "Run Trend Scan"}
+            {runScanBusy && runScanState.label === "Trend Scan" ? "Running..." : "Run Trend Scan"}
           </button>
           <button
             type="button"
@@ -1029,7 +1133,7 @@ export default function IdeasWorkspaceClient({
             disabled={runScanBusy}
             className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {runScanBusy && runScanActiveLabel === "Sector Scan" ? "Running..." : "Run Sector Scan"}
+            {runScanBusy && runScanState.label === "Sector Scan" ? "Running..." : "Run Sector Scan"}
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
@@ -1070,15 +1174,43 @@ export default function IdeasWorkspaceClient({
           </span>
         </div>
       </div>
-      {runScanMessage ? (
+      {runScanState.status !== "idle" ? (
         <div
           className={`mt-[-8px] rounded-xl border px-3 py-2 text-xs ${
-            runScanMessage.startsWith("Run scan failed")
+            runScanState.status === "failed"
               ? "border-rose-200 bg-rose-50 text-rose-700"
-              : "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : runScanState.status === "running" || runScanState.status === "starting"
+                ? "border-amber-200 bg-amber-50 text-amber-700"
+                : runScanState.status === "completed_zero"
+                  ? "border-slate-300 bg-slate-50 text-slate-700"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-700"
           }`}
         >
-          {runScanMessage}
+          <div className="font-medium">
+            {runScanState.status === "starting"
+              ? "Manual scan starting"
+              : runScanState.status === "running"
+                ? "Manual scan running"
+                : runScanState.status === "completed"
+                  ? "Manual scan completed"
+                  : runScanState.status === "completed_zero"
+                    ? "Manual scan completed (0 rows written)"
+                    : "Manual scan failed"}
+          </div>
+          <div className="mt-0.5">{runScanState.detail ?? "—"}</div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] opacity-90">
+            <span className="surface-chip px-2 py-0.5">request: {runScanState.requestId ?? "—"}</span>
+            <span className="surface-chip px-2 py-0.5">strategy: {runScanState.strategyResolved ?? runScanState.strategyRequested ?? "—"}</span>
+            <span className="surface-chip px-2 py-0.5">
+              universes: {(runScanState.universeResolved ?? []).join(", ") || "—"}
+            </span>
+            <span className="surface-chip px-2 py-0.5">bars: {runScanState.barsMode ?? "—"}</span>
+            <span className="surface-chip px-2 py-0.5">date: {runScanState.scanDate ?? "—"}</span>
+            <span className="surface-chip px-2 py-0.5">rows: {runScanState.rowsWritten}</span>
+            <span className="surface-chip px-2 py-0.5">
+              duration: {runScanState.durationMs != null ? `${runScanState.durationMs}ms` : "—"}
+            </span>
+          </div>
         </div>
       ) : null}
       <div className="mt-[-8px] text-[11px] text-slate-500">
@@ -1164,6 +1296,13 @@ export default function IdeasWorkspaceClient({
           {" • "}shape_final={String(Boolean(data?.meta?.response_shape?.final_rows_is_array))}
           {" • "}ok={loading ? "loading" : lastLoadOk === null ? "unknown" : lastLoadOk ? "true" : "false"}
           {" • "}api={lastApiUrl || "—"}
+          {" • "}scan_status={runScanState.status}
+          {" • "}scan_request_id={runScanState.requestId ?? "—"}
+          {" • "}scan_rows_written={runScanState.rowsWritten}
+          {" • "}scan_date={runScanState.scanDate ?? "—"}
+          {" • "}scan_error={runScanState.error ?? "—"}
+          {" • "}strategy_date_hint={scanDateHintByStrategy[strategy] ?? "—"}
+          {" • "}cache_bust={data?.meta?.cache_bust ?? "—"}
         </div>
       ) : null}
 

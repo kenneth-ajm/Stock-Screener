@@ -27,6 +27,14 @@ function makeServiceClient() {
   ) as any;
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function makeRequestId() {
+  return `scan_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function isAuthorized(req: Request) {
   const expected = process.env.ADMIN_RUN_SCAN_KEY;
   if (!expected) return true;
@@ -457,6 +465,7 @@ async function runByMode(req: Request, body: any) {
   }
 
   const mode = String(body?.mode ?? "strategy").trim().toLowerCase();
+  const requestId = String(body?.request_id ?? "").trim() || makeRequestId();
   if (mode === "refresh_bars") return await runRefreshBars(req);
 
   const strategyRaw = String(body?.strategy ?? body?.strategy_version ?? "").trim();
@@ -475,11 +484,20 @@ async function runByMode(req: Request, body: any) {
   }
 
   const strategy = strategyRaw;
+  const scanStartedAt = nowIso();
+  console.info("[admin/run-scan] request:start", {
+    request_id: requestId,
+    mode,
+    strategy_requested: strategyRaw || null,
+    universe_requested: universeRaw || null,
+    started_at: scanStartedAt,
+  });
 
   if (mode === "strategy") {
     return NextResponse.json({
       ok: false,
       status: "scan failed",
+      request_id: requestId,
       error: "mode=strategy is deprecated for long-running scans; use mode=batch + mode=finalize",
       strategy,
       allowed_universes: STRATEGY_UNIVERSES[strategy],
@@ -504,6 +522,7 @@ async function runByMode(req: Request, body: any) {
       {
         ok: false,
         status: "scan failed",
+        request_id: requestId,
         error: `Universe ${universe} not allowed for strategy ${strategy}`,
         strategy,
         allowed_universes: STRATEGY_UNIVERSES[strategy],
@@ -537,7 +556,20 @@ async function runByMode(req: Request, body: any) {
       batchSize: 40,
       timeoutMs: 55_000,
     });
-    return NextResponse.json(single, { status: single.ok ? 200 : 500 });
+    const response = {
+      ...single,
+      request_id: requestId,
+      phase: "single",
+      bars_mode: "cached_db_only",
+      strategy_requested: strategyRaw,
+      strategy_version_resolved: strategy,
+      universe_requested: universeRaw,
+      universe_resolved: universe,
+      scan_started_at: scanStartedAt,
+      scan_ended_at: nowIso(),
+    };
+    console.info("[admin/run-scan] request:end", response);
+    return NextResponse.json(response, { status: single.ok ? 200 : 500 });
   }
 
   if (mode === "batch") {
@@ -553,7 +585,20 @@ async function runByMode(req: Request, body: any) {
       batchSize,
       timeoutMs: 55_000,
     });
-    return NextResponse.json(out, { status: out.ok ? 200 : 500 });
+    const response = {
+      ...out,
+      request_id: requestId,
+      phase: "batch",
+      bars_mode: "cached_db_only",
+      strategy_requested: strategyRaw,
+      strategy_version_resolved: strategy,
+      universe_requested: universeRaw,
+      universe_resolved: universe,
+      scan_started_at: scanStartedAt,
+      scan_ended_at: nowIso(),
+    };
+    console.info("[admin/run-scan] request:end", response);
+    return NextResponse.json(response, { status: out.ok ? 200 : 500 });
   }
 
   if (mode === "finalize") {
@@ -563,18 +608,33 @@ async function runByMode(req: Request, body: any) {
       universe,
       scanDate,
     });
-    return NextResponse.json(out, { status: out.ok ? 200 : 500 });
+    const response = {
+      ...out,
+      request_id: requestId,
+      phase: "finalize",
+      bars_mode: "cached_db_only",
+      strategy_requested: strategyRaw,
+      strategy_version_resolved: strategy,
+      universe_requested: universeRaw,
+      universe_resolved: universe,
+      scan_started_at: scanStartedAt,
+      scan_ended_at: nowIso(),
+    };
+    console.info("[admin/run-scan] request:end", response);
+    return NextResponse.json(response, { status: out.ok ? 200 : 500 });
   }
 
-  return NextResponse.json(
-    {
-      ok: false,
-      status: "scan failed",
-      error: `Unsupported mode: ${mode}`,
-      supported_modes: ["refresh_bars", "single", "batch", "finalize"],
-    },
-    { status: 400 }
-  );
+  const unsupported = {
+    ok: false,
+    status: "scan failed",
+    request_id: requestId,
+    error: `Unsupported mode: ${mode}`,
+    supported_modes: ["refresh_bars", "single", "batch", "finalize"],
+    scan_started_at: scanStartedAt,
+    scan_ended_at: nowIso(),
+  };
+  console.info("[admin/run-scan] request:end", unsupported);
+  return NextResponse.json(unsupported, { status: 400 });
 }
 
 export async function POST(req: Request) {
