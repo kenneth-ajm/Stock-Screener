@@ -21,6 +21,33 @@ type StageResult = {
   error?: string;
 };
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function triggerMetaFromReq(req: Request) {
+  const authHeader = req.headers.get("authorization");
+  const hasBearer = Boolean(authHeader && authHeader.toLowerCase().startsWith("bearer "));
+  return {
+    source: req.headers.get("x-vercel-cron") ? "vercel_cron" : "manual_or_internal",
+    has_bearer: hasBearer,
+    user_agent: req.headers.get("user-agent") ?? null,
+  };
+}
+
+function isAuthorized(req: Request) {
+  const cronSecret = process.env.CRON_SECRET;
+  const adminKey = process.env.ADMIN_RUN_SCAN_KEY;
+  if (!cronSecret && !adminKey) return true;
+
+  const authHeader = req.headers.get("authorization") ?? "";
+  const token = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+  const xAdmin = req.headers.get("x-admin-key") ?? "";
+  if (cronSecret && (token === cronSecret || xAdmin === cronSecret)) return true;
+  if (adminKey && (xAdmin === adminKey || token === adminKey)) return true;
+  return false;
+}
+
 function makeClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -30,27 +57,48 @@ function makeClient() {
 
 async function runStage(name: string, fn: () => Promise<Record<string, unknown>>) {
   const startedAt = Date.now();
+  console.info("[daily-scheduled-scan] stage:start", {
+    stage: name,
+    started_at: nowIso(),
+  });
   try {
     const detail = await fn();
-    return {
+    const out = {
       stage: name,
       ok: true,
       duration_ms: Date.now() - startedAt,
       detail,
     } as StageResult;
+    console.info("[daily-scheduled-scan] stage:end", {
+      stage: name,
+      ok: true,
+      duration_ms: out.duration_ms,
+      ended_at: nowIso(),
+      detail,
+    });
+    return out;
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
-    return {
+    const out = {
       stage: name,
       ok: false,
       duration_ms: Date.now() - startedAt,
       error,
     } as StageResult;
+    console.error("[daily-scheduled-scan] stage:end", {
+      stage: name,
+      ok: false,
+      duration_ms: out.duration_ms,
+      ended_at: nowIso(),
+      error,
+    });
+    return out;
   }
 }
 
-async function runWorkflow(opts: { dry_run?: boolean }) {
+async function runWorkflow(opts: { dry_run?: boolean; trigger?: Record<string, unknown> }) {
   const startedAt = Date.now();
+  const startedAtIso = nowIso();
   const dry_run = opts.dry_run === true;
   const supa = makeClient();
 
@@ -267,6 +315,9 @@ async function runWorkflow(opts: { dry_run?: boolean }) {
   const payload = {
     ok: failed.length === 0,
     dry_run,
+    started_at: startedAtIso,
+    ended_at: nowIso(),
+    trigger: opts.trigger ?? null,
     scan_date_used,
     regime_state,
     regime_stale,
@@ -296,8 +347,26 @@ async function runWorkflow(opts: { dry_run?: boolean }) {
 
 export async function POST(req: Request) {
   try {
+    if (!isAuthorized(req)) {
+      return NextResponse.json(
+        { ok: false, error: "Unauthorized: invalid cron/admin secret" },
+        { status: 401 }
+      );
+    }
     const body = (await req.json().catch(() => ({}))) as { dry_run?: boolean };
-    const payload = await runWorkflow({ dry_run: body?.dry_run === true });
+    const trigger = triggerMetaFromReq(req);
+    console.info("[daily-scheduled-scan] run:start", {
+      started_at: nowIso(),
+      trigger,
+      dry_run: body?.dry_run === true,
+    });
+    const payload = await runWorkflow({ dry_run: body?.dry_run === true, trigger });
+    console.info("[daily-scheduled-scan] run:end", {
+      ended_at: nowIso(),
+      ok: payload.ok,
+      scan_date_used: payload.scan_date_used ?? null,
+      duration_ms: payload.duration_ms,
+    });
     return NextResponse.json(payload, { status: payload.ok ? 200 : 500 });
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
@@ -314,8 +383,26 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
+  if (!isAuthorized(req)) {
+    return NextResponse.json(
+      { ok: false, error: "Unauthorized: invalid cron/admin secret" },
+      { status: 401 }
+    );
+  }
   const url = new URL(req.url);
   const dry_run = String(url.searchParams.get("dry_run") ?? "").trim() === "1";
-  const payload = await runWorkflow({ dry_run });
+  const trigger = triggerMetaFromReq(req);
+  console.info("[daily-scheduled-scan] run:start", {
+    started_at: nowIso(),
+    trigger,
+    dry_run,
+  });
+  const payload = await runWorkflow({ dry_run, trigger });
+  console.info("[daily-scheduled-scan] run:end", {
+    ended_at: nowIso(),
+    ok: payload.ok,
+    scan_date_used: payload.scan_date_used ?? null,
+    duration_ms: payload.duration_ms,
+  });
   return NextResponse.json(payload, { status: payload.ok ? 200 : 500 });
 }

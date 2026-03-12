@@ -19,6 +19,11 @@ Core rules:
   - breadth + diagnostics snapshots
 - `runAutopilot()` performs Polygon grouped daily ingest into `price_bars` for `core_800 + SPY` before scans.
 - This is the canonical production refresh orchestration.
+- Vercel cron config: `vercel.json` schedules `GET /api/jobs/daily-scheduled-scan` at `0 23 * * 1-5` (UTC).
+- Route protection:
+  - set `CRON_SECRET` in Vercel
+  - Vercel cron sends `Authorization: Bearer <CRON_SECRET>`
+  - manual/admin calls can also use `x-admin-key` (`ADMIN_RUN_SCAN_KEY`) if configured.
 
 ### 2) Manual/Admin Path
 - Route: `POST /api/admin/run-scan`
@@ -78,3 +83,20 @@ Core rules:
 2. Use `admin/run-scan` batch/finalize for interactive manual scans in Ideas.
 3. Use maintenance ingest routes only for controlled backfills.
 4. Keep legacy Stooq routes disabled unless explicitly needed for emergency/manual testing.
+
+## How To Verify Daily Refresh Success
+
+1. Trigger manually (safe check):
+   - `GET /api/jobs/daily-scheduled-scan?dry_run=1` for non-writing validation
+   - `POST /api/jobs/daily-scheduled-scan` for full run (with proper auth header)
+2. Confirm response metadata:
+   - `started_at`, `ended_at`, `scan_date_used`, `stages[]`, `summary`, `duration_ms`
+3. Confirm grouped ingest attempts in autopilot output/status:
+   - `ingest_attempts[]`
+   - `bars_upserted`
+   - `lctd_before_ingest`
+4. Confirm persisted observability status:
+   - `system_status.key = daily_scheduled_scan_last_run`
+   - `system_status.key = daily_autopilot_core_800`
+5. Confirm market-data freshness:
+   - `max(price_bars.date)` advances when Polygon has a newer completed daily bar.

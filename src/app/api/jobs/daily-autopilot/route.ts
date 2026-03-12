@@ -19,6 +19,19 @@ import { refreshSpyRegimeForLctd } from "@/lib/spy_regime";
 const UNIVERSE_SLUG = "core_800";
 const STATUS_KEY = "daily_autopilot_core_800";
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function usTodayDate() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 async function ingestGroupedForDate(opts: {
   supabase: any;
   date: string;
@@ -102,7 +115,15 @@ async function ingestGroupedForDate(opts: {
     });
   }
 
-  if (upserts.length === 0) return 0;
+  if (upserts.length === 0) {
+    return {
+      date: opts.date,
+      grouped_rows_total: groupedRows.length,
+      eligible_symbols: symbolSet.size,
+      already_present_rows: alreadyPresent.size,
+      bars_upserted: 0,
+    };
+  }
   const chunkSize = 400;
   let written = 0;
   for (let i = 0; i < upserts.length; i += chunkSize) {
@@ -113,7 +134,13 @@ async function ingestGroupedForDate(opts: {
     if (error) throw error;
     written += chunk.length;
   }
-  return written;
+  return {
+    date: opts.date,
+    grouped_rows_total: groupedRows.length,
+    eligible_symbols: symbolSet.size,
+    already_present_rows: alreadyPresent.size,
+    bars_upserted: written,
+  };
 }
 
 async function runFullStrategyScan(opts: {
@@ -178,6 +205,11 @@ async function writeStatus(payload: Record<string, unknown>) {
 
 export async function runAutopilot() {
   const startedAt = Date.now();
+  const startedAtIso = nowIso();
+  console.info("[daily-autopilot] run:start", {
+    started_at: startedAtIso,
+    universe_slug: UNIVERSE_SLUG,
+  });
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -188,7 +220,7 @@ export async function runAutopilot() {
   if (!lctd.ok || !lctd.scan_date) {
     throw new Error(lctd.error ?? "Unable to resolve scan date");
   }
-  const scanDate = lctd.scan_date;
+  const lctdDate = lctd.scan_date;
 
   const { data: universe, error: universeErr } = await supa
     .from("universes")
@@ -210,11 +242,48 @@ export async function runAutopilot() {
     .filter(Boolean);
   const symbolsWithSpy = Array.from(new Set([...symbols, "SPY"]));
 
-  const bars_upserted = await ingestGroupedForDate({
-    supabase: supa,
-    date: scanDate,
-    symbols: symbolsWithSpy,
-  });
+  const candidateDates = Array.from(new Set([usTodayDate(), lctdDate].filter(Boolean)));
+  const ingest_attempts: Array<Record<string, unknown>> = [];
+  let scanDate: string | null = null;
+  let barsUpsertedTotal = 0;
+  for (const candidate of candidateDates) {
+    const ingestStarted = nowIso();
+    console.info("[daily-autopilot] grouped_ingest:start", {
+      date: candidate,
+      started_at: ingestStarted,
+      symbol_count: symbolsWithSpy.length,
+    });
+    const ingestResult = await ingestGroupedForDate({
+      supabase: supa,
+      date: candidate,
+      symbols: symbolsWithSpy,
+    });
+    barsUpsertedTotal += Number(ingestResult.bars_upserted ?? 0);
+    const { data: spyBar } = await supa
+      .from("price_bars")
+      .select("date")
+      .eq("symbol", "SPY")
+      .eq("source", "polygon")
+      .eq("date", candidate)
+      .limit(1)
+      .maybeSingle();
+    const hasSpyBar = Boolean(spyBar?.date);
+    const attemptMeta = {
+      ...ingestResult,
+      started_at: ingestStarted,
+      ended_at: nowIso(),
+      has_spy_bar_after_ingest: hasSpyBar,
+    };
+    ingest_attempts.push(attemptMeta);
+    console.info("[daily-autopilot] grouped_ingest:end", attemptMeta);
+    if (hasSpyBar) {
+      scanDate = candidate;
+      break;
+    }
+  }
+  if (!scanDate) {
+    scanDate = lctdDate;
+  }
   const regime = await refreshSpyRegimeForLctd({ supabase: supa, lctd: scanDate });
 
   const momentumRun = await runFullStrategyScan({
@@ -224,6 +293,13 @@ export async function runAutopilot() {
     scan_date_used: scanDate,
     total_members: symbols.length,
   });
+  console.info("[daily-autopilot] scan:strategy_complete", {
+    strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
+    scan_date_used: scanDate,
+    processed: momentumRun.processed,
+    scored: momentumRun.scored,
+    upserted: momentumRun.upserted,
+  });
 
   const trendRun = await runFullStrategyScan({
     supabase: supa,
@@ -231,6 +307,13 @@ export async function runAutopilot() {
     strategy_version: TREND_HOLD_DEFAULT_VERSION,
     scan_date_used: scanDate,
     total_members: symbols.length,
+  });
+  console.info("[daily-autopilot] scan:strategy_complete", {
+    strategy_version: TREND_HOLD_DEFAULT_VERSION,
+    scan_date_used: scanDate,
+    processed: trendRun.processed,
+    scored: trendRun.scored,
+    upserted: trendRun.upserted,
   });
 
   const finalizations: Record<string, any> = {};
@@ -257,12 +340,16 @@ export async function runAutopilot() {
     throw new Error(`Autopilot diagnostics failed: ${JSON.stringify(diagnostics_summary)}`);
   }
 
-  return {
+  const result = {
     ok: true,
+    started_at: startedAtIso,
+    ended_at: nowIso(),
     scan_date: scanDate,
     scan_date_used: scanDate,
+    lctd_before_ingest: lctdDate,
     lctd_source: lctd.lctd_source,
-    bars_upserted,
+    bars_upserted: barsUpsertedTotal,
+    ingest_attempts,
     regime_state: regime.state ?? "FAVORABLE",
     regime_date_used: regime.regime_date_used,
     spy_regime_stale: regime.regime_stale,
@@ -278,6 +365,16 @@ export async function runAutopilot() {
     diagnostics_summary,
     duration_ms: Date.now() - startedAt,
   };
+  console.info("[daily-autopilot] run:end", {
+    ended_at: nowIso(),
+    ok: true,
+    scan_date_used: result.scan_date_used,
+    bars_upserted: result.bars_upserted,
+    momentum: result.momentum,
+    trend: result.trend,
+    duration_ms: result.duration_ms,
+  });
+  return result;
 }
 
 export async function GET() {
@@ -285,9 +382,13 @@ export async function GET() {
     const result = await runAutopilot();
     await writeStatus({
       ok: true,
+      started_at: result.started_at ?? null,
+      ended_at: result.ended_at ?? null,
       scan_date: result.scan_date,
       date_used: result.scan_date_used,
       bars_upserted: result.bars_upserted,
+      ingest_attempts: result.ingest_attempts ?? [],
+      lctd_before_ingest: result.lctd_before_ingest ?? null,
       regime_state: result.regime_state,
       regime_date_used: result.regime_date_used,
       spy_regime_stale: result.spy_regime_stale,
@@ -306,6 +407,8 @@ export async function GET() {
     const detail = e instanceof Error ? e.stack ?? null : null;
     await writeStatus({
       ok: false,
+      started_at: null,
+      ended_at: nowIso(),
       scan_date: null,
       date_used: null,
       bars_upserted: 0,
