@@ -1,3 +1,5 @@
+import { applyPostStrategyFilters, loadMarketRegimeGate, type Signal as FilterSignal } from "@/lib/post_signal_filters";
+
 type FinalizeArgs = {
   supabase: any;
   date: string;
@@ -5,7 +7,7 @@ type FinalizeArgs = {
   strategy_version: string;
 };
 
-type Signal = "BUY" | "WATCH" | "AVOID";
+type Signal = FilterSignal;
 
 type ScanRow = {
   id: string | number | null;
@@ -17,6 +19,9 @@ type ScanRow = {
   confidence: number | null;
   rank_score: number | null;
   rank: number | null;
+  reason_summary: string | null;
+  reason_json: Record<string, unknown> | null;
+  earnings_date: string | null;
 };
 
 const BUY_CAP = 5;
@@ -42,11 +47,7 @@ export async function finalizeSignals(opts: FinalizeArgs) {
   if (!universe_slug) {
     return { ok: false, error: "Missing universe_slug for finalizeSignals" };
   }
-  console.log("finalizeSignals filters", {
-    date: opts.date,
-    universe_slug,
-    strategy_version: opts.strategy_version,
-  });
+
   const { data, error } = await supa
     .from("daily_scans")
     .select("*")
@@ -56,12 +57,6 @@ export async function finalizeSignals(opts: FinalizeArgs) {
 
   if (error) return { ok: false, error: error.message };
   const rawRows = Array.isArray(data) ? (data as any[]) : [];
-  console.log("finalizeSignals fetched", {
-    fetched_total: rawRows.length,
-    strategy_version: opts.strategy_version,
-    universe_slug,
-    date: opts.date,
-  });
   if (!rawRows.length) {
     return {
       ok: true,
@@ -72,6 +67,12 @@ export async function finalizeSignals(opts: FinalizeArgs) {
       updated_rows: 0,
       before_counts: { buy: 0, watch: 0, avoid: 0 },
       after_counts: { buy: 0, watch: 0, avoid: 0 },
+      post_filter_downgrades: 0,
+      post_filter_blockers: {
+        market_regime_block: 0,
+        earnings_proximity_block: 0,
+        relative_volume_block: 0,
+      },
       total: 0,
       buy: 0,
       watch: 0,
@@ -93,7 +94,11 @@ export async function finalizeSignals(opts: FinalizeArgs) {
     confidence: toNumber(row.confidence),
     rank_score: toNumber(row.rank_score),
     rank: toNumber(row.rank),
+    reason_summary: typeof row.reason_summary === "string" ? row.reason_summary : null,
+    reason_json: row.reason_json && typeof row.reason_json === "object" && !Array.isArray(row.reason_json) ? row.reason_json : null,
+    earnings_date: typeof row.earnings_date === "string" ? row.earnings_date : null,
   }));
+
   const before = {
     buy: rows.filter((row) => row.signal === "BUY").length,
     watch: rows.filter((row) => row.signal === "WATCH").length,
@@ -102,6 +107,43 @@ export async function finalizeSignals(opts: FinalizeArgs) {
 
   for (const row of rows) {
     if (row.rank_score === null) row.rank_score = toNumber(row.confidence) ?? 0;
+  }
+
+  const marketRegimeGate = await loadMarketRegimeGate({
+    supabase: supa,
+    scan_date: opts.date,
+  });
+
+  let postFilterDowngrades = 0;
+  const blockerCounts: Record<string, number> = {
+    market_regime_block: 0,
+    earnings_proximity_block: 0,
+    relative_volume_block: 0,
+  };
+
+  for (const row of rows) {
+    const originalSignal = row.signal;
+    const filtered = applyPostStrategyFilters(
+      {
+        signal: row.signal,
+        strategy_version: row.strategy_version,
+        reason_summary: row.reason_summary,
+        reason_json: row.reason_json,
+        earnings_date: row.earnings_date,
+      },
+      marketRegimeGate
+    );
+
+    row.signal = filtered.signal;
+    row.reason_summary = filtered.reason_summary;
+    row.reason_json = filtered.reason_json;
+
+    if (originalSignal === "BUY" && filtered.signal === "WATCH") {
+      postFilterDowngrades += 1;
+    }
+    for (const blocker of filtered.filter_blockers) {
+      blockerCounts[blocker] = (blockerCounts[blocker] ?? 0) + 1;
+    }
   }
 
   const sorted = sortByRankScore(rows);
@@ -127,8 +169,11 @@ export async function finalizeSignals(opts: FinalizeArgs) {
       signal: row.signal,
       rank: row.rank,
       rank_score: row.rank_score,
+      reason_summary: row.reason_summary,
+      reason_json: row.reason_json,
       updated_at: nowIso,
     }));
+
   if (updatesById.length !== sorted.length) {
     return {
       ok: false,
@@ -141,6 +186,7 @@ export async function finalizeSignals(opts: FinalizeArgs) {
       before_counts: before,
     };
   }
+
   const chunkSize = 100;
   for (let i = 0; i < updatesById.length; i += chunkSize) {
     const chunk = updatesById.slice(i, i + chunkSize);
@@ -152,12 +198,15 @@ export async function finalizeSignals(opts: FinalizeArgs) {
             signal: row.signal,
             rank: row.rank,
             rank_score: row.rank_score,
+            reason_summary: row.reason_summary,
+            reason_json: row.reason_json,
             updated_at: row.updated_at,
           })
           .eq("id", row.id);
         return updateError;
       })
     );
+
     const failed = chunkResults.find(Boolean);
     if (failed) {
       return {
@@ -188,6 +237,9 @@ export async function finalizeSignals(opts: FinalizeArgs) {
     after,
     before_counts: before,
     after_counts: after,
+    post_filter_downgrades: postFilterDowngrades,
+    post_filter_blockers: blockerCounts,
+    post_filter_market_regime: marketRegimeGate,
     total: sorted.length,
     buy: after.buy,
     watch: after.watch,
