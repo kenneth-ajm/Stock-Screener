@@ -31,6 +31,36 @@ function makeServiceClient() {
   ) as any;
 }
 
+const STATUS_KEY_PREFIX = "manual_scan_";
+
+async function writeScanStatus(supabase: any, requestId: string, value: Record<string, unknown>) {
+  try {
+    await supabase.from("system_status").upsert(
+      {
+        key: `${STATUS_KEY_PREFIX}${requestId}`,
+        value: {
+          ...value,
+          request_id: requestId,
+          updated_at: nowIso(),
+        },
+        updated_at: nowIso(),
+      },
+      { onConflict: "key" }
+    );
+  } catch {
+    // non-fatal status write
+  }
+}
+
+async function readScanStatus(supabase: any, requestId: string) {
+  const { data } = await supabase
+    .from("system_status")
+    .select("key,updated_at,value")
+    .eq("key", `${STATUS_KEY_PREFIX}${requestId}`)
+    .maybeSingle();
+  return data ?? null;
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -360,6 +390,9 @@ async function runChunkedBatch(opts: {
       context_row_count: after,
       batch_index: batchIndex,
       total_batches: totalBatches,
+      total_symbols: totalSymbols,
+      symbols_processed_batch: Number((out as any)?.processed ?? 0),
+      symbols_processed_total: Math.min(totalSymbols, opts.offset + Number((out as any)?.processed ?? 0)),
       has_more: hasMore,
       next_offset: hasMore ? nextOffset : null,
       completed_steps: batchIndex,
@@ -383,6 +416,9 @@ async function runChunkedBatch(opts: {
       context_row_count: before,
       batch_index: batchIndex,
       total_batches: totalBatches,
+      total_symbols: totalSymbols,
+      symbols_processed_batch: 0,
+      symbols_processed_total: Math.min(totalSymbols, opts.offset),
       has_more: false,
       next_offset: null,
       completed_steps: Math.max(0, batchIndex - 1),
@@ -486,6 +522,21 @@ async function runByMode(req: Request, body: any) {
 
   const strategyRaw = String(body?.strategy ?? body?.strategy_version ?? "").trim();
   const universeRaw = String(body?.universe ?? body?.universe_slug ?? "").trim();
+  const supabase = makeServiceClient();
+
+  if (mode === "status") {
+    const status = await readScanStatus(supabase, requestId);
+    return NextResponse.json(
+      {
+        ok: true,
+        status: "scan status",
+        request_id: requestId,
+        found: Boolean(status),
+        scan_status: status?.value ?? null,
+      },
+      { status: 200 }
+    );
+  }
 
   if (!isStrategyVersion(strategyRaw)) {
     return NextResponse.json(
@@ -547,7 +598,25 @@ async function runByMode(req: Request, body: any) {
     );
   }
 
-  const supabase = makeServiceClient();
+  await writeScanStatus(supabase, requestId, {
+    phase: mode,
+    status: "starting",
+    strategy_requested: strategyRaw || null,
+    strategy_version_resolved: strategy,
+    universe_requested: universeRaw || null,
+    universe_resolved: universe,
+    bars_mode: "cached_db_only",
+    scan_started_at: scanStartedAt,
+    scan_ended_at: null,
+    rows_written: 0,
+    rows_new: 0,
+    batch_index: 0,
+    total_batches: null,
+    symbols_processed: 0,
+    failed_step: null,
+    error: null,
+  });
+
   const resolvedDate = await resolveScanDate(supabase);
   if (!resolvedDate.scan_date) {
     return NextResponse.json(
@@ -586,6 +655,15 @@ async function runByMode(req: Request, body: any) {
       scan_ended_at: nowIso(),
     };
     console.info("[admin/run-scan] request:end", response);
+    await writeScanStatus(supabase, requestId, {
+      ...response,
+      status: single.ok ? "completed" : "failed",
+      symbols_processed: Number((single as any)?.processed ?? 0),
+      total_batches: Number(single?.total_batches ?? 1),
+      batch_index: Number(single?.batch_index ?? 1),
+      failed_step: single?.failed_step ?? null,
+      error: single?.error ?? null,
+    });
     return NextResponse.json(response, { status: single.ok ? 200 : 500 });
   }
 
@@ -616,6 +694,24 @@ async function runByMode(req: Request, body: any) {
       scan_ended_at: nowIso(),
     };
     console.info("[admin/run-scan] request:end", response);
+    const batchIndex = Number(out?.batch_index ?? 0);
+    const totalBatches = Number(out?.total_batches ?? 0);
+    const symbolsProcessed = Number(
+      (out as any)?.symbols_processed_total ?? (out as any)?.symbols_processed_batch ?? (out as any)?.processed ?? 0
+    );
+    await writeScanStatus(supabase, requestId, {
+      ...response,
+      status: out.ok ? (out.has_more ? "running" : "batch_complete") : "failed",
+      detail:
+        out.ok
+          ? `Batch ${batchIndex}/${totalBatches || "?"} ${universe}`
+          : `Batch failed ${batchIndex}/${totalBatches || "?"} ${universe}`,
+      symbols_processed: symbolsProcessed,
+      total_batches: totalBatches || null,
+      batch_index: batchIndex || null,
+      failed_step: out?.failed_step ?? null,
+      error: out?.error ?? null,
+    });
     return NextResponse.json(response, { status: out.ok ? 200 : 500 });
   }
 
@@ -640,6 +736,15 @@ async function runByMode(req: Request, body: any) {
       scan_ended_at: nowIso(),
     };
     console.info("[admin/run-scan] request:end", response);
+    await writeScanStatus(supabase, requestId, {
+      ...response,
+      status: out.ok ? "completed" : "failed",
+      detail: out.ok ? `Finalize complete ${universe}` : `Finalize failed ${universe}`,
+      batch_index: null,
+      total_batches: null,
+      failed_step: null,
+      error: out?.error ?? null,
+    });
     return NextResponse.json(response, { status: out.ok ? 200 : 500 });
   }
 
@@ -648,11 +753,16 @@ async function runByMode(req: Request, body: any) {
     status: "scan failed",
     request_id: requestId,
     error: `Unsupported mode: ${mode}`,
-    supported_modes: ["refresh_bars", "single", "batch", "finalize"],
+    supported_modes: ["refresh_bars", "single", "batch", "finalize", "status"],
     scan_started_at: scanStartedAt,
     scan_ended_at: nowIso(),
   };
   console.info("[admin/run-scan] request:end", unsupported);
+  await writeScanStatus(supabase, requestId, {
+    ...unsupported,
+    status: "failed",
+    error: unsupported.error,
+  });
   return NextResponse.json(unsupported, { status: 400 });
 }
 
@@ -672,12 +782,14 @@ export async function GET(req: Request) {
     const mode = String(url.searchParams.get("mode") ?? "").trim().toLowerCase() || "batch";
     const strategy_version = String(url.searchParams.get("strategy") ?? url.searchParams.get("strategy_version") ?? "").trim();
     const universe_slug = String(url.searchParams.get("universe") ?? url.searchParams.get("universe_slug") ?? "").trim();
+    const request_id = String(url.searchParams.get("request_id") ?? "").trim();
     const offset = Number(url.searchParams.get("offset") ?? "0") || 0;
     const batch_size = Number(url.searchParams.get("batch_size") ?? "200") || 200;
     return await runByMode(req, {
       mode,
       strategy_version,
       universe_slug,
+      request_id,
       offset,
       batch_size,
     });

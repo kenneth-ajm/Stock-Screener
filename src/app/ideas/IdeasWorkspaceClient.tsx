@@ -141,6 +141,9 @@ type ManualScanState = {
   rowsNew: number;
   contextRowCount: number | null;
   contextKeys: string[];
+  batchesCompleted: number;
+  totalBatches: number | null;
+  symbolsProcessed: number;
   durationMs: number | null;
   error: string | null;
 };
@@ -243,6 +246,9 @@ export default function IdeasWorkspaceClient({
     rowsNew: 0,
     contextRowCount: null,
     contextKeys: [],
+    batchesCompleted: 0,
+    totalBatches: null,
+    symbolsProcessed: 0,
     durationMs: null,
     error: null,
   });
@@ -845,6 +851,7 @@ export default function IdeasWorkspaceClient({
   async function runStrategyScan(strategyToRun: StrategyVersion, label: string) {
     const requestId = `scan_ui_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const startedAtMs = Date.now();
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
     setRunScanState({
       status: "starting",
       label,
@@ -861,6 +868,9 @@ export default function IdeasWorkspaceClient({
       rowsNew: 0,
       contextRowCount: null,
       contextKeys: [],
+      batchesCompleted: 0,
+      totalBatches: null,
+      symbolsProcessed: 0,
       durationMs: null,
       error: null,
     });
@@ -895,9 +905,69 @@ export default function IdeasWorkspaceClient({
           if (timer) clearTimeout(timer);
         }
       };
+      const readStatus = async () => {
+        const res = await fetch(`/api/admin/run-scan?mode=status&request_id=${encodeURIComponent(requestId)}`, {
+          cache: "no-store",
+        });
+        const payload = await res.json().catch(() => null);
+        if (!res.ok || !payload?.ok) return null;
+        return payload?.scan_status ?? null;
+      };
+      const tryBatch = async (strategy_version: StrategyVersion, universe_slug: string, offset: number) => {
+        const batchCandidates = [200, 120, 80];
+        let lastErr: Error | null = null;
+        for (const size of batchCandidates) {
+          const { res, payload } = await postWithTimeout(
+            {
+              mode: "batch",
+              strategy_version,
+              universe_slug,
+              request_id: requestId,
+              offset,
+              batch_size: size,
+            },
+            58000
+          );
+          if (res.ok && payload?.ok) return { res, payload };
+          const msg = String(payload?.error ?? payload?.status ?? `HTTP ${res.status}`);
+          lastErr = new Error(msg);
+          const isTimeout = msg.toLowerCase().includes("timed out");
+          if (!isTimeout) break;
+          setRunScanState((prev) => ({
+            ...prev,
+            status: "running",
+            detail: `Batch timed out at size ${size}; retrying smaller batch...`,
+          }));
+        }
+        throw lastErr ?? new Error("scan batch failed");
+      };
+      pollTimer = setInterval(async () => {
+        try {
+          const status = await readStatus();
+          if (!status) return;
+          setRunScanState((prev) => ({
+            ...prev,
+            status: status?.status === "failed" ? "failed" : prev.status,
+            detail: String(status?.detail ?? prev.detail ?? ""),
+            rowsWritten: Number(status?.rows_written ?? prev.rowsWritten ?? 0),
+            rowsNew: Number(status?.rows_new ?? prev.rowsNew ?? 0),
+            batchesCompleted: Number(status?.batch_index ?? prev.batchesCompleted ?? 0),
+            totalBatches:
+              Number.isFinite(Number(status?.total_batches))
+                ? Number(status?.total_batches)
+                : prev.totalBatches,
+            symbolsProcessed: Number(status?.symbols_processed ?? prev.symbolsProcessed ?? 0),
+          }));
+        } catch {
+          // non-fatal
+        }
+      }, 1500);
 
       let totalRowsWritten = 0;
       let totalRowsNew = 0;
+      let batchesCompleted = 0;
+      let totalBatchesSeen: number | null = null;
+      let symbolsProcessed = 0;
       let finalScanDate = "";
       let lastStrategyResolved: string | null = null;
       let lastBarsMode: string | null = "cached_db_only";
@@ -914,14 +984,7 @@ export default function IdeasWorkspaceClient({
         let offset = 0;
         let keepGoing = true;
         while (keepGoing) {
-          const { res, payload } = await postWithTimeout({
-            mode: "batch",
-            strategy_version: strategyToRun,
-            universe_slug: universe,
-            request_id: requestId,
-            offset,
-            batch_size: 200,
-          });
+          const { res, payload } = await tryBatch(strategyToRun, universe, offset);
           if (!res.ok || !payload?.ok) {
             const step = payload?.failed_step;
             const failedLabel = step
@@ -945,6 +1008,9 @@ export default function IdeasWorkspaceClient({
           offset = Number(payload?.next_offset ?? 0);
           const batchIndex = Number(payload?.batch_index ?? 0);
           const totalBatches = Number(payload?.total_batches ?? 0);
+          if (batchIndex > 0) batchesCompleted = batchIndex;
+          if (totalBatches > 0) totalBatchesSeen = totalBatches;
+          symbolsProcessed = Math.max(symbolsProcessed, Number(payload?.symbols_processed_total ?? payload?.symbols_processed_batch ?? 0));
           setRunScanState((prev) => ({
             ...prev,
             status: "running",
@@ -956,6 +1022,9 @@ export default function IdeasWorkspaceClient({
             rowsNew: totalRowsNew,
             contextRowCount: lastContextRowCount,
             contextKeys: Array.from(contextKeySet),
+            batchesCompleted,
+            totalBatches: totalBatchesSeen,
+            symbolsProcessed,
             scanDate: finalScanDate || prev.scanDate,
           }));
         }
@@ -1016,6 +1085,9 @@ export default function IdeasWorkspaceClient({
         rowsNew: rowsNewOut,
         contextRowCount: lastContextRowCount,
         contextKeys: contextKeysOut,
+        batchesCompleted,
+        totalBatches: totalBatchesSeen,
+        symbolsProcessed,
         durationMs,
         error: null,
       });
@@ -1038,9 +1110,14 @@ export default function IdeasWorkspaceClient({
         rowsNew: 0,
         contextRowCount: null,
         contextKeys: [],
+        batchesCompleted: 0,
+        totalBatches: null,
+        symbolsProcessed: 0,
         durationMs: Date.now() - startedAtMs,
         error: msg,
       });
+    } finally {
+      if (pollTimer) clearInterval(pollTimer);
     }
   }
 
@@ -1262,6 +1339,11 @@ export default function IdeasWorkspaceClient({
             <span className="surface-chip px-2 py-0.5">rows processed: {runScanState.rowsWritten}</span>
             <span className="surface-chip px-2 py-0.5">rows net-new: {runScanState.rowsNew}</span>
             <span className="surface-chip px-2 py-0.5">
+              batches: {runScanState.batchesCompleted}
+              {runScanState.totalBatches != null ? `/${runScanState.totalBatches}` : ""}
+            </span>
+            <span className="surface-chip px-2 py-0.5">symbols processed: {runScanState.symbolsProcessed}</span>
+            <span className="surface-chip px-2 py-0.5">
               context rows: {runScanState.contextRowCount != null ? runScanState.contextRowCount : "—"}
             </span>
             <span className="surface-chip px-2 py-0.5">context match: {readContextMatchesLatestManualScan ? "yes" : "no"}</span>
@@ -1366,6 +1448,9 @@ export default function IdeasWorkspaceClient({
           {" • "}scan_request_id={runScanState.requestId ?? "—"}
           {" • "}scan_rows_written={runScanState.rowsWritten}
           {" • "}scan_rows_new={runScanState.rowsNew}
+          {" • "}scan_batches_completed={runScanState.batchesCompleted}
+          {" • "}scan_total_batches={runScanState.totalBatches ?? "—"}
+          {" • "}scan_symbols_processed={runScanState.symbolsProcessed}
           {" • "}scan_context_rows={runScanState.contextRowCount ?? "—"}
           {" • "}scan_context_keys={(runScanState.contextKeys ?? []).join(",") || "—"}
           {" • "}scan_date={runScanState.scanDate ?? "—"}
