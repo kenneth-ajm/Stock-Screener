@@ -8,6 +8,10 @@ import { finalizeSignals } from "@/lib/finalize_signals";
 
 export const dynamic = "force-dynamic";
 
+// Admin/manual scan endpoint.
+// Recommended interactive modes: batch/finalize (cached_db_only).
+// Heavy refresh_bars mode exists for admin maintenance and calls daily-autopilot.
+
 const STRATEGIES = ["v1", "v1_trend_hold", "v1_sector_momentum"] as const;
 const UNIVERSES = ["liquid_2000", "core_800", "growth_1500", "midcap_1000"] as const;
 

@@ -3,6 +3,9 @@ import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
 
+// Polygon maintenance/backfill endpoint for universe history batches.
+// Not the primary daily production refresh path.
+
 function isoDate(d: Date) {
   return d.toISOString().slice(0, 10);
 }

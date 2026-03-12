@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { POST as ingestUniversePost } from "@/app/api/universe/ingest-liquid-2000/route";
 
+// Backfill/maintenance wrapper around universe ingest batches.
+// Intended for controlled historical hydration, not daily production refresh.
 const UNIVERSE_SLUG = "core_800";
 
 function toInt(v: unknown, fallback: number) {

@@ -111,6 +111,8 @@ function makeSupabaseAdminClient() {
 }
 
 async function fetchAndUpsertDailyBars(symbolRaw: string) {
+  // Fallback-only targeted hydration for missing open-position symbols.
+  // Not a replacement for the production daily refresh pipeline.
   const apiKey = process.env.POLYGON_API_KEY;
   if (!apiKey) return;
 

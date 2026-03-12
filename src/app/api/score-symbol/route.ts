@@ -79,6 +79,8 @@ export async function POST(req: Request) {
     .order("date", { ascending: true });
 
   if (!bars || bars.length < 220) {
+    // Fallback-only targeted hydration for one symbol.
+    // Keeps manual score/check usable without triggering heavy global refresh jobs.
     const polygonKey = process.env.POLYGON_API_KEY;
     if (!polygonKey) {
       return NextResponse.json({ ok: false, error: "Missing POLYGON_API_KEY" }, { status: 500 });

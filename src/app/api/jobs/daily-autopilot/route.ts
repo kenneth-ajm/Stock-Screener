@@ -14,6 +14,8 @@ import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 import { finalizeSignals } from "@/lib/finalize_signals";
 import { refreshSpyRegimeForLctd } from "@/lib/spy_regime";
 
+// Production daily market-data refresh path.
+// This route ingests Polygon grouped bars into price_bars, then runs scans/finalization.
 const UNIVERSE_SLUG = "core_800";
 const STATUS_KEY = "daily_autopilot_core_800";
 

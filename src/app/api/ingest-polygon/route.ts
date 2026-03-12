@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+// Polygon maintenance ingest bridge (legacy core_400 scope).
+// Keep for controlled maintenance/backfill use; production daily refresh is daily-autopilot.
 // ---- helpers ----
 function isoDate(d: Date) {
   return d.toISOString().slice(0, 10);

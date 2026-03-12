@@ -11,6 +11,8 @@ import { computeMarketBreadth } from "@/lib/market_breadth";
 import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 import { OBS_KEYS, writeObservabilityStatus } from "@/lib/observability";
 
+// Canonical production scheduler entrypoint.
+// Orchestrates daily-autopilot first, then downstream derived scans/metrics.
 type StageResult = {
   stage: string;
   ok: boolean;
