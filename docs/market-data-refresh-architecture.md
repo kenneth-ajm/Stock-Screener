@@ -24,6 +24,10 @@ Core rules:
   - set `CRON_SECRET` in Vercel
   - Vercel cron sends `Authorization: Bearer <CRON_SECRET>`
   - manual/admin calls can also use `x-admin-key` (`ADMIN_RUN_SCAN_KEY`) if configured.
+- Daily-autopilot ingest date selection:
+  - tries US-today first
+  - if Polygon returns delayed/empty grouped data, falls back through recent weekday dates
+  - avoids getting stuck on a stale existing LCTD when newer finalized market bars are already available.
 
 ### 2) Manual/Admin Path
 - Route: `POST /api/admin/run-scan`

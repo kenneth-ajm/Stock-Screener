@@ -32,6 +32,34 @@ function usTodayDate() {
   }).format(new Date());
 }
 
+function shiftDate(date: string, days: number) {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function isWeekday(date: string) {
+  const d = new Date(`${date}T00:00:00Z`);
+  const day = d.getUTCDay();
+  return day >= 1 && day <= 5;
+}
+
+function candidateIngestDates(lctdDate: string, lookbackDays = 7) {
+  const today = usTodayDate();
+  const out: string[] = [];
+  const push = (d: string) => {
+    if (!d) return;
+    if (!out.includes(d)) out.push(d);
+  };
+  push(today);
+  for (let i = 1; i <= lookbackDays; i += 1) {
+    const d = shiftDate(today, -i);
+    if (isWeekday(d)) push(d);
+  }
+  push(lctdDate);
+  return out;
+}
+
 async function ingestGroupedForDate(opts: {
   supabase: any;
   date: string;
@@ -118,6 +146,10 @@ async function ingestGroupedForDate(opts: {
   if (upserts.length === 0) {
     return {
       date: opts.date,
+      polygon_path: `/v2/aggs/grouped/locale/us/market/stocks/${opts.date}`,
+      polygon_adjusted: false,
+      polygon_http_status: res.status,
+      polygon_response_status: (json as any)?.status ?? null,
       grouped_rows_total: groupedRows.length,
       eligible_symbols: symbolSet.size,
       already_present_rows: alreadyPresent.size,
@@ -136,6 +168,10 @@ async function ingestGroupedForDate(opts: {
   }
   return {
     date: opts.date,
+    polygon_path: `/v2/aggs/grouped/locale/us/market/stocks/${opts.date}`,
+    polygon_adjusted: false,
+    polygon_http_status: res.status,
+    polygon_response_status: (json as any)?.status ?? null,
     grouped_rows_total: groupedRows.length,
     eligible_symbols: symbolSet.size,
     already_present_rows: alreadyPresent.size,
@@ -242,7 +278,7 @@ export async function runAutopilot() {
     .filter(Boolean);
   const symbolsWithSpy = Array.from(new Set([...symbols, "SPY"]));
 
-  const candidateDates = Array.from(new Set([usTodayDate(), lctdDate].filter(Boolean)));
+  const candidateDates = candidateIngestDates(lctdDate, 7);
   const ingest_attempts: Array<Record<string, unknown>> = [];
   let scanDate: string | null = null;
   let barsUpsertedTotal = 0;
@@ -253,12 +289,18 @@ export async function runAutopilot() {
       started_at: ingestStarted,
       symbol_count: symbolsWithSpy.length,
     });
-    const ingestResult = await ingestGroupedForDate({
-      supabase: supa,
-      date: candidate,
-      symbols: symbolsWithSpy,
-    });
-    barsUpsertedTotal += Number(ingestResult.bars_upserted ?? 0);
+    let ingestResult: Record<string, unknown> | null = null;
+    let ingestError: string | null = null;
+    try {
+      ingestResult = await ingestGroupedForDate({
+        supabase: supa,
+        date: candidate,
+        symbols: symbolsWithSpy,
+      });
+      barsUpsertedTotal += Number((ingestResult as any)?.bars_upserted ?? 0);
+    } catch (e: unknown) {
+      ingestError = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+    }
     const { data: spyBar } = await supa
       .from("price_bars")
       .select("date")
@@ -269,7 +311,8 @@ export async function runAutopilot() {
       .maybeSingle();
     const hasSpyBar = Boolean(spyBar?.date);
     const attemptMeta = {
-      ...ingestResult,
+      ...(ingestResult ?? {}),
+      error: ingestError,
       started_at: ingestStarted,
       ended_at: nowIso(),
       has_spy_bar_after_ingest: hasSpyBar,
@@ -284,6 +327,7 @@ export async function runAutopilot() {
   if (!scanDate) {
     scanDate = lctdDate;
   }
+  const selectedAttempt = ingest_attempts.find((a) => a?.has_spy_bar_after_ingest && a?.date === scanDate) ?? null;
   const regime = await refreshSpyRegimeForLctd({ supabase: supa, lctd: scanDate });
 
   const momentumRun = await runFullStrategyScan({
@@ -347,9 +391,11 @@ export async function runAutopilot() {
     scan_date: scanDate,
     scan_date_used: scanDate,
     lctd_before_ingest: lctdDate,
+    ingest_candidate_dates: candidateDates,
     lctd_source: lctd.lctd_source,
     bars_upserted: barsUpsertedTotal,
     ingest_attempts,
+    ingest_selected_attempt: selectedAttempt,
     regime_state: regime.state ?? "FAVORABLE",
     regime_date_used: regime.regime_date_used,
     spy_regime_stale: regime.regime_stale,
@@ -388,6 +434,8 @@ export async function GET() {
       date_used: result.scan_date_used,
       bars_upserted: result.bars_upserted,
       ingest_attempts: result.ingest_attempts ?? [],
+      ingest_candidate_dates: result.ingest_candidate_dates ?? [],
+      ingest_selected_attempt: result.ingest_selected_attempt ?? null,
       lctd_before_ingest: result.lctd_before_ingest ?? null,
       regime_state: result.regime_state,
       regime_date_used: result.regime_date_used,
