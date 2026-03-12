@@ -518,6 +518,8 @@ const loadScreenerDataCached = unstable_cache(
           final_rows_is_array: Array.isArray(rowsFinal),
         },
         cache_bust: cacheBust ?? null,
+        read_context_key: `${strategyVersion}:${mappedUniverse}:${resolvedDateUsed ?? "none"}`,
+        read_context_is_fallback: fallbackDecisions.length > 0,
         regime_state: regimeState,
         regime_date: regimeDate,
         regime_stale: regimeStale,

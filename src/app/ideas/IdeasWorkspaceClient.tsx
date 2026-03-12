@@ -95,6 +95,8 @@ type Payload = {
       final_rows_is_array?: boolean;
     } | null;
     cache_bust?: string | null;
+    read_context_key?: string | null;
+    read_context_is_fallback?: boolean | null;
     regime_state: string | null;
     breadth_state?: "STRONG" | "MIXED" | "WEAK" | null;
     breadth_label?: string | null;
@@ -136,6 +138,9 @@ type ManualScanState = {
   endedAt: string | null;
   scanDate: string | null;
   rowsWritten: number;
+  rowsNew: number;
+  contextRowCount: number | null;
+  contextKeys: string[];
   durationMs: number | null;
   error: string | null;
 };
@@ -235,6 +240,9 @@ export default function IdeasWorkspaceClient({
     endedAt: null,
     scanDate: null,
     rowsWritten: 0,
+    rowsNew: 0,
+    contextRowCount: null,
+    contextKeys: [],
     durationMs: null,
     error: null,
   });
@@ -556,6 +564,14 @@ export default function IdeasWorkspaceClient({
     }
     return `No BUY/WATCH candidates after display caps for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}.`;
   }, [loading, data, filteredRows.length, strategy, selectedFilter, universeMode]);
+  const readContextKey = String(data?.meta?.read_context_key ?? "").trim() || null;
+  const readContextMatchesLatestManualScan =
+    Boolean(readContextKey) &&
+    (runScanState.contextKeys ?? []).includes(String(readContextKey));
+  const showingExistingRowsAfterZeroScan =
+    runScanState.status === "completed_zero" &&
+    readContextMatchesLatestManualScan &&
+    Number(data?.meta?.rows_display_count ?? 0) > 0;
   const fillNum = Number(fill);
   const stopNum = Number(selected?.stop ?? 0);
   const riskPerShare = fillNum > 0 && stopNum > 0 ? fillNum - stopNum : 0;
@@ -842,6 +858,9 @@ export default function IdeasWorkspaceClient({
       endedAt: null,
       scanDate: null,
       rowsWritten: 0,
+      rowsNew: 0,
+      contextRowCount: null,
+      contextKeys: [],
       durationMs: null,
       error: null,
     });
@@ -878,9 +897,12 @@ export default function IdeasWorkspaceClient({
       };
 
       let totalRowsWritten = 0;
+      let totalRowsNew = 0;
       let finalScanDate = "";
       let lastStrategyResolved: string | null = null;
       let lastBarsMode: string | null = "cached_db_only";
+      let lastContextRowCount: number | null = null;
+      const contextKeySet = new Set<string>();
       for (const universe of universes) {
         const resolvedUniverses = universes.slice(0, universes.indexOf(universe) + 1);
         setRunScanState((prev) => ({
@@ -911,9 +933,14 @@ export default function IdeasWorkspaceClient({
           }
 
           totalRowsWritten += Number(payload?.rows_written ?? 0);
+          totalRowsNew += Number(payload?.rows_new ?? 0);
           finalScanDate = String(payload?.scan_date_used ?? finalScanDate);
           lastStrategyResolved = String(payload?.strategy_version_resolved ?? payload?.strategy ?? strategyToRun);
           lastBarsMode = String(payload?.bars_mode ?? lastBarsMode ?? "cached_db_only");
+          if (Number.isFinite(Number(payload?.context_row_count))) {
+            lastContextRowCount = Number(payload?.context_row_count);
+          }
+          if (payload?.scan_context_key) contextKeySet.add(String(payload.scan_context_key));
           keepGoing = Boolean(payload?.has_more);
           offset = Number(payload?.next_offset ?? 0);
           const batchIndex = Number(payload?.batch_index ?? 0);
@@ -926,6 +953,9 @@ export default function IdeasWorkspaceClient({
                 ? `Running ${label}: ${universe} batch ${batchIndex}/${totalBatches}`
                 : `Running ${label}: ${universe} batch offset ${offset}`,
             rowsWritten: totalRowsWritten,
+            rowsNew: totalRowsNew,
+            contextRowCount: lastContextRowCount,
+            contextKeys: Array.from(contextKeySet),
             scanDate: finalScanDate || prev.scanDate,
           }));
         }
@@ -949,9 +979,14 @@ export default function IdeasWorkspaceClient({
           );
         }
         totalRowsWritten += Number(finalize.payload?.rows_written ?? 0);
+        totalRowsNew += Number(finalize.payload?.rows_new ?? 0);
         finalScanDate = String(finalize.payload?.scan_date_used ?? finalScanDate);
         lastStrategyResolved = String(finalize.payload?.strategy_version_resolved ?? lastStrategyResolved ?? strategyToRun);
         lastBarsMode = String(finalize.payload?.bars_mode ?? lastBarsMode ?? "cached_db_only");
+        if (Number.isFinite(Number(finalize.payload?.context_row_count))) {
+          lastContextRowCount = Number(finalize.payload?.context_row_count);
+        }
+        if (finalize.payload?.scan_context_key) contextKeySet.add(String(finalize.payload.scan_context_key));
       }
 
       if (finalScanDate) {
@@ -960,13 +995,15 @@ export default function IdeasWorkspaceClient({
       const endedAt = new Date().toISOString();
       const durationMs = Date.now() - startedAtMs;
       const rowsOut = Number.isFinite(totalRowsWritten) ? totalRowsWritten : 0;
+      const rowsNewOut = Number.isFinite(totalRowsNew) ? totalRowsNew : 0;
+      const contextKeysOut = Array.from(contextKeySet);
       setRunScanState({
-        status: rowsOut > 0 ? "completed" : "completed_zero",
+        status: rowsOut > 0 || rowsNewOut > 0 ? "completed" : "completed_zero",
         label,
         detail:
-          rowsOut > 0
-            ? `Completed. ${rowsOut} rows written${finalScanDate ? ` on ${finalScanDate}` : ""}.`
-            : `Completed with 0 rows written${finalScanDate ? ` on ${finalScanDate}` : ""}.`,
+          rowsOut > 0 || rowsNewOut > 0
+            ? `Completed. ${rowsOut} rows processed (${rowsNewOut} net new)${finalScanDate ? ` on ${finalScanDate}` : ""}.`
+            : `Completed with 0 processed rows${finalScanDate ? ` on ${finalScanDate}` : ""}.`,
         requestId,
         strategyRequested: strategyToRun,
         strategyResolved: lastStrategyResolved ?? strategyToRun,
@@ -976,6 +1013,9 @@ export default function IdeasWorkspaceClient({
         endedAt,
         scanDate: finalScanDate || null,
         rowsWritten: rowsOut,
+        rowsNew: rowsNewOut,
+        contextRowCount: lastContextRowCount,
+        contextKeys: contextKeysOut,
         durationMs,
         error: null,
       });
@@ -995,6 +1035,9 @@ export default function IdeasWorkspaceClient({
         endedAt: new Date().toISOString(),
         scanDate: null,
         rowsWritten: 0,
+        rowsNew: 0,
+        contextRowCount: null,
+        contextKeys: [],
         durationMs: Date.now() - startedAtMs,
         error: msg,
       });
@@ -1145,7 +1188,10 @@ export default function IdeasWorkspaceClient({
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
           <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
-          <span className="surface-chip px-2.5 py-1">Latest scan: {data?.meta?.date_used ?? "—"}</span>
+          <span className="surface-chip px-2.5 py-1">
+            Latest scan: {data?.meta?.date_used ?? "—"}
+            {data?.meta?.read_context_is_fallback ? " (fallback)" : ""}
+          </span>
           <span className="surface-chip px-2.5 py-1">
             Universe: {data?.meta?.universe_slug ?? "—"}
             {universeMode === "auto" ? " (auto)" : ""}
@@ -1201,7 +1247,7 @@ export default function IdeasWorkspaceClient({
                 : runScanState.status === "completed"
                   ? "Manual scan completed"
                   : runScanState.status === "completed_zero"
-                    ? "Manual scan completed (0 rows written)"
+                    ? "Manual scan completed (0 processed rows)"
                     : "Manual scan failed"}
           </div>
           <div className="mt-0.5">{runScanState.detail ?? "—"}</div>
@@ -1213,11 +1259,21 @@ export default function IdeasWorkspaceClient({
             </span>
             <span className="surface-chip px-2 py-0.5">bars: {runScanState.barsMode ?? "—"}</span>
             <span className="surface-chip px-2 py-0.5">date: {runScanState.scanDate ?? "—"}</span>
-            <span className="surface-chip px-2 py-0.5">rows: {runScanState.rowsWritten}</span>
+            <span className="surface-chip px-2 py-0.5">rows processed: {runScanState.rowsWritten}</span>
+            <span className="surface-chip px-2 py-0.5">rows net-new: {runScanState.rowsNew}</span>
+            <span className="surface-chip px-2 py-0.5">
+              context rows: {runScanState.contextRowCount != null ? runScanState.contextRowCount : "—"}
+            </span>
+            <span className="surface-chip px-2 py-0.5">context match: {readContextMatchesLatestManualScan ? "yes" : "no"}</span>
             <span className="surface-chip px-2 py-0.5">
               duration: {runScanState.durationMs != null ? `${runScanState.durationMs}ms` : "—"}
             </span>
           </div>
+          {showingExistingRowsAfterZeroScan ? (
+            <div className="mt-1 text-[11px]">
+              This run produced 0 new rows; Ideas is showing existing cached rows for the same scan context.
+            </div>
+          ) : null}
         </div>
       ) : null}
       <div className="mt-[-8px] text-[11px] text-slate-500">
@@ -1301,11 +1357,17 @@ export default function IdeasWorkspaceClient({
           {" • "}shape_raw={String(Boolean(data?.meta?.response_shape?.raw_rows_is_array))}
           {" • "}shape_validated={String(Boolean(data?.meta?.response_shape?.validated_rows_is_array))}
           {" • "}shape_final={String(Boolean(data?.meta?.response_shape?.final_rows_is_array))}
+          {" • "}read_context_key={data?.meta?.read_context_key ?? "—"}
+          {" • "}read_context_is_fallback={String(Boolean(data?.meta?.read_context_is_fallback))}
+          {" • "}read_context_matches_manual_scan={String(readContextMatchesLatestManualScan)}
           {" • "}ok={loading ? "loading" : lastLoadOk === null ? "unknown" : lastLoadOk ? "true" : "false"}
           {" • "}api={lastApiUrl || "—"}
           {" • "}scan_status={runScanState.status}
           {" • "}scan_request_id={runScanState.requestId ?? "—"}
           {" • "}scan_rows_written={runScanState.rowsWritten}
+          {" • "}scan_rows_new={runScanState.rowsNew}
+          {" • "}scan_context_rows={runScanState.contextRowCount ?? "—"}
+          {" • "}scan_context_keys={(runScanState.contextKeys ?? []).join(",") || "—"}
           {" • "}scan_date={runScanState.scanDate ?? "—"}
           {" • "}scan_error={runScanState.error ?? "—"}
           {" • "}strategy_date_hint={scanDateHintByStrategy[strategy] ?? "—"}
