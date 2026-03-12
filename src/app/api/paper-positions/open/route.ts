@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import { getActivePortfolioCapacity } from "@/lib/portfolio_capacity";
+import { getPaperTradingCapacity, makePaperAccountClient } from "@/lib/paper_account";
 import { getOrRepairDefaultPortfolio } from "@/lib/get_or_repair_default_portfolio";
 
 const ALLOWED_OPEN_STATUSES = new Set(["PENDING", "OPEN"]);
@@ -57,9 +57,10 @@ export async function POST(req: Request) {
     user_id: user.id,
   });
 
-  const capacity = await getActivePortfolioCapacity({
-    supabase: supabase as any,
-    userId: user.id,
+  const admin = makePaperAccountClient();
+  const capacity = await getPaperTradingCapacity({
+    supabase: admin,
+    user_id: user.id,
   });
   if (!capacity) {
     return NextResponse.json({ ok: false, error: "Portfolio capacity unavailable" }, { status: 400 });
@@ -73,6 +74,9 @@ export async function POST(req: Request) {
         error: "Insufficient cash for paper position (cash-only rule)",
         detail: {
           cash_available: Number(capacity.cash_available ?? 0),
+          cash_total: Number(capacity.cash_total ?? 0),
+          capital_deployed: Number(capacity.capital_deployed ?? 0),
+          source: String(capacity.source ?? "paper_wallet"),
           estimated_cost: estimatedCost,
           shares,
           entry_price: entryPrice,

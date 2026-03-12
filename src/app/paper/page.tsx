@@ -1,6 +1,8 @@
 import AppShell from "@/components/app-shell";
 import PaperPositionsClient from "@/app/paper/PaperPositionsClient";
+import PaperAccountControlsClient from "@/app/paper/PaperAccountControlsClient";
 import { getWorkspaceContext } from "@/lib/workspace_context";
+import { getPaperTradingCapacity, makePaperAccountClient } from "@/lib/paper_account";
 
 export const dynamic = "force-dynamic";
 
@@ -69,6 +71,16 @@ function buildPerformanceRows(items: Array<any>, keyField: string) {
 export default async function PaperPage() {
   const { supabase, user, portfolios, defaultPortfolio } = await getWorkspaceContext("/paper");
   const portfolioId = defaultPortfolio?.id ? String(defaultPortfolio.id) : null;
+  const paperAdmin = makePaperAccountClient();
+  const paperCapacity = await getPaperTradingCapacity({
+    supabase: paperAdmin,
+    user_id: user.id,
+  });
+  const defaultResetAmount = (() => {
+    const env = Number(process.env.PAPER_DEFAULT_CASH ?? "");
+    if (Number.isFinite(env) && env > 0) return env;
+    return 25_000;
+  })();
 
   let query = supabase
     .from("paper_positions")
@@ -255,6 +267,13 @@ export default async function PaperPage() {
             Simulated execution only. Paper positions are separate from broker holdings.
           </p>
         </div>
+
+        <PaperAccountControlsClient
+          initialCashTotal={Number(paperCapacity.cash_total ?? 0)}
+          initialCashAvailable={Number(paperCapacity.cash_available ?? 0)}
+          initialCapitalDeployed={Number(paperCapacity.capital_deployed ?? 0)}
+          defaultResetAmount={defaultResetAmount}
+        />
 
         {paperError ? (
           <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
