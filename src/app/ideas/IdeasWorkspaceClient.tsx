@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
 import { mapExecutionState } from "@/lib/execution_state";
 import { applyEarningsRiskToAction, type EarningsRisk } from "@/lib/earnings_risk";
 import { applyBreadthToAction } from "@/lib/market_breadth";
 import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
-type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold";
+type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold" | "quality_dip";
 type IdeasFilter = "all" | "buy" | "watch" | "actionable";
 
 type IdeaRow = {
@@ -112,6 +112,41 @@ type Payload = {
   error?: string;
 };
 
+type QualityDipSignal = "CONSIDER_BUY" | "WATCH" | "AVOID";
+
+type QualityDipRow = {
+  symbol: string;
+  name: string;
+  group: string;
+  current_price: number | null;
+  high_30d: number | null;
+  drop_pct_from_30d_high: number | null;
+  stock_above_sma200: boolean | null;
+  market_spy_above_sma200: boolean;
+  signal: QualityDipSignal;
+  reason_summary: string;
+  source_date: string | null;
+  bars_count: number;
+};
+
+type QualityDipPayload = {
+  ok: boolean;
+  rows?: QualityDipRow[];
+  summary?: { consider_buy: number; watch: number; avoid: number };
+  meta?: {
+    watchlist_size?: number;
+    source_date?: string | null;
+    market?: {
+      spy_close?: number | null;
+      spy_sma200?: number | null;
+      spy_above_sma200?: boolean;
+      source_date?: string | null;
+    };
+    missing_symbols?: string[];
+  };
+  error?: string;
+};
+
 type QuoteMap = Record<
   string,
   {
@@ -204,6 +239,7 @@ export default function IdeasWorkspaceClient({
   const [strategy, setStrategy] = useState<StrategyVersion>(initialStrategy);
   const [universeMode, setUniverseMode] = useState<string>(initialUniverse);
   const [data, setData] = useState<Payload | null>(null);
+  const [qualityDipData, setQualityDipData] = useState<QualityDipPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<IdeaRow | null>(null);
   const [fill, setFill] = useState("");
@@ -215,6 +251,7 @@ export default function IdeasWorkspaceClient({
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [lastApiUrl, setLastApiUrl] = useState<string>("");
+  const [lastQualityApiUrl, setLastQualityApiUrl] = useState<string>("");
   const [lastLoadOk, setLastLoadOk] = useState<boolean | null>(null);
   const [quoteBySymbol, setQuoteBySymbol] = useState<QuoteMap>({});
   const [earningsBySymbol, setEarningsBySymbol] = useState<EarningsRiskMap>({});
@@ -266,12 +303,47 @@ export default function IdeasWorkspaceClient({
   }, [initialStrategy]);
 
   useEffect(() => {
+    if (strategy === "quality_dip") {
+      setSelected(null);
+    }
+  }, [strategy]);
+
+  useEffect(() => {
     setUniverseMode(initialUniverse);
   }, [initialUniverse]);
 
   useEffect(() => {
     let mounted = true;
     setLoading(true);
+    if (strategy === "quality_dip") {
+      const apiUrl = "/api/quality-dip";
+      setLastQualityApiUrl(apiUrl);
+      setLastApiUrl(apiUrl);
+      setLastLoadOk(null);
+      fetch(apiUrl, { cache: "no-store" })
+        .then(async (r) => {
+          const json = await r.json().catch(() => null);
+          if (!mounted) return;
+          if (!r.ok || !json) {
+            const apiError = (json as any)?.error ?? `HTTP ${r.status}`;
+            setLastLoadOk(false);
+            setQualityDipData({ ok: false, error: String(apiError) });
+            return;
+          }
+          setLastLoadOk(Boolean(json?.ok));
+          setQualityDipData(json as QualityDipPayload);
+        })
+        .catch((e) => {
+          if (!mounted) return;
+          setLastLoadOk(false);
+          setQualityDipData({ ok: false, error: e instanceof Error ? e.message : "Load failed" });
+        })
+        .finally(() => mounted && setLoading(false));
+      return () => {
+        mounted = false;
+      };
+    }
+
     const qs = new URLSearchParams({ strategy_version: strategy });
     const strategyDateHint = scanDateHintByStrategy[strategy];
     if (strategyDateHint) qs.set("date", strategyDateHint);
@@ -293,15 +365,18 @@ export default function IdeasWorkspaceClient({
             : apiError;
           setLastLoadOk(false);
           setData({ ok: false, error: safeError });
+          setQualityDipData(null);
           return;
         }
         setLastLoadOk(Boolean(json?.ok));
         setData(json);
+        setQualityDipData(null);
       })
       .catch((e) => {
         if (!mounted) return;
         setLastLoadOk(false);
         setData({ ok: false, error: e instanceof Error ? e.message : "Load failed" });
+        setQualityDipData(null);
       })
       .finally(() => mounted && setLoading(false));
     return () => {
@@ -452,6 +527,25 @@ export default function IdeasWorkspaceClient({
   }, [initialSymbol, initialManualContext, openTicketOnLoad, data?.rows]);
 
   const allRows = useMemo(() => data?.rows ?? [], [data]);
+  const qualityRows = useMemo(() => qualityDipData?.rows ?? [], [qualityDipData]);
+  const qualityGroupedRows = useMemo(() => {
+    const order = ["Leaders", "Quality Cyclicals", "Financials", "Industrials & Defense", "ETF Anchors"];
+    return order
+      .map((group) => ({
+        group,
+        rows: qualityRows.filter((r) => r.group === group),
+      }))
+      .filter((g) => g.rows.length > 0);
+  }, [qualityRows]);
+  const qualitySummary = useMemo(
+    () =>
+      qualityDipData?.summary ?? {
+        consider_buy: 0,
+        watch: 0,
+        avoid: 0,
+      },
+    [qualityDipData]
+  );
   const rows = useMemo(() => allRows.slice(0, 10), [allRows]);
   const filteredRows = useMemo(() => {
     if (selectedFilter === "all") return rows;
@@ -848,7 +942,7 @@ export default function IdeasWorkspaceClient({
     }
   }
 
-  async function runStrategyScan(strategyToRun: StrategyVersion, label: string) {
+  async function runStrategyScan(strategyToRun: Exclude<StrategyVersion, "quality_dip">, label: string) {
     const requestId = `scan_ui_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const startedAtMs = Date.now();
     let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -875,7 +969,7 @@ export default function IdeasWorkspaceClient({
       error: null,
     });
     try {
-      const strategyUniverses: Record<StrategyVersion, string[]> = {
+      const strategyUniverses: Record<Exclude<StrategyVersion, "quality_dip">, string[]> = {
         v1: ["liquid_2000", "midcap_1000"],
         v1_trend_hold: ["core_800", "liquid_2000"],
         v1_sector_momentum: ["growth_1500", "midcap_1000"],
@@ -1127,6 +1221,12 @@ export default function IdeasWorkspaceClient({
     return "border-rose-200 bg-rose-50 text-rose-700";
   }
 
+  function qualitySignalPill(signal: QualityDipSignal) {
+    if (signal === "CONSIDER_BUY") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    if (signal === "WATCH") return "border-amber-200 bg-amber-50 text-amber-700";
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+
   function actionPill(action: "BUY NOW" | "WAIT" | "SKIP") {
     if (action === "BUY NOW") return "border-emerald-200 bg-emerald-50 text-emerald-700";
     if (action === "WAIT") return "border-amber-200 bg-amber-50 text-amber-700";
@@ -1172,7 +1272,18 @@ export default function IdeasWorkspaceClient({
           >
             Trend Hold
           </button>
+          <button
+            onClick={() => setStrategy("quality_dip")}
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
+              strategy === "quality_dip"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
+            }`}
+          >
+            Quality Dip
+          </button>
         </div>
+        {strategy !== "quality_dip" ? (
         <div className="flex items-center gap-2 rounded-xl border border-[#e3d5bf] bg-[#fcf8f1] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
           <button
             onClick={() => setUniverseMode("auto")}
@@ -1237,6 +1348,8 @@ export default function IdeasWorkspaceClient({
             Growth 1500
           </button>
         </div>
+        ) : null}
+        {strategy !== "quality_dip" ? (
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -1263,8 +1376,21 @@ export default function IdeasWorkspaceClient({
             {runScanBusy && runScanState.label === "Sector Scan" ? "Running..." : "Run Sector Scan"}
           </button>
         </div>
+        ) : null}
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-          <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
+          {strategy === "quality_dip" ? (
+            <>
+              <span className="surface-chip px-2.5 py-1">
+                Watchlist: {qualityDipData?.meta?.watchlist_size ?? qualityRows.length}
+              </span>
+              <span className="surface-chip px-2.5 py-1">Latest bars: {qualityDipData?.meta?.source_date ?? "—"}</span>
+              <span className="surface-chip px-2.5 py-1">
+                SPY trend: {qualityDipData?.meta?.market?.spy_above_sma200 ? "Healthy" : "Weak"}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
           <span className="surface-chip px-2.5 py-1">
             Latest scan: {data?.meta?.date_used ?? "—"}
             {data?.meta?.read_context_is_fallback ? " (fallback)" : ""}
@@ -1302,9 +1428,11 @@ export default function IdeasWorkspaceClient({
           <span className="surface-chip px-2.5 py-1">
             Slots: {data?.capacity?.slots_left ?? 0}
           </span>
+            </>
+          )}
         </div>
       </div>
-      {runScanState.status !== "idle" ? (
+      {strategy !== "quality_dip" && runScanState.status !== "idle" ? (
         <div
           className={`mt-[-8px] rounded-xl border px-3 py-2 text-xs ${
             runScanState.status === "failed"
@@ -1358,10 +1486,13 @@ export default function IdeasWorkspaceClient({
           ) : null}
         </div>
       ) : null}
+      {strategy !== "quality_dip" ? (
       <div className="mt-[-8px] text-[11px] text-slate-500">
         Auto selects the latest populated universe for each strategy. Unavailable explicit universes are marked as not scanned yet.
       </div>
+      ) : null}
 
+      {strategy !== "quality_dip" ? (
       <div className="surface-card px-3.5 py-3">
         <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Signal Funnel</div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
@@ -1398,6 +1529,7 @@ export default function IdeasWorkspaceClient({
           Counts scope: {funnel.scope}. Query limit: {funnel.queryLimit || allRows.length}. Displayed rows after ranking caps: {funnel.rowsDisplay}. Execution-stage counts are computed from loaded rows ({allRows.length}).
         </div>
       </div>
+      ) : null}
 
       {showDiagnostics ? (
         <div className="surface-card px-3.5 py-2.5 text-[11px] text-slate-600">
@@ -1443,7 +1575,11 @@ export default function IdeasWorkspaceClient({
           {" • "}read_context_is_fallback={String(Boolean(data?.meta?.read_context_is_fallback))}
           {" • "}read_context_matches_manual_scan={String(readContextMatchesLatestManualScan)}
           {" • "}ok={loading ? "loading" : lastLoadOk === null ? "unknown" : lastLoadOk ? "true" : "false"}
-          {" • "}api={lastApiUrl || "—"}
+          {" • "}api={strategy === "quality_dip" ? lastQualityApiUrl || lastApiUrl || "—" : lastApiUrl || "—"}
+          {" • "}quality_rows={qualityRows.length}
+          {" • "}quality_consider_buy={qualitySummary.consider_buy}
+          {" • "}quality_watch={qualitySummary.watch}
+          {" • "}quality_avoid={qualitySummary.avoid}
           {" • "}scan_status={runScanState.status}
           {" • "}scan_request_id={runScanState.requestId ?? "—"}
           {" • "}scan_rows_written={runScanState.rowsWritten}
@@ -1461,9 +1597,118 @@ export default function IdeasWorkspaceClient({
       ) : null}
 
       <div className="surface-panel overflow-hidden">
-        {loading ? <div className="p-5 text-sm text-slate-600">Loading ideas…</div> : null}
-        {!loading && !data?.ok ? <div className="p-5 text-sm text-rose-600">Failed: {data?.error ?? "Unknown error"}</div> : null}
-        {!loading && data?.ok ? (
+        {strategy === "quality_dip" ? (
+          <>
+            {loading ? <div className="p-5 text-sm text-slate-600">Loading Quality Dip watchlist…</div> : null}
+            {!loading && !qualityDipData?.ok ? (
+              <div className="p-5 text-sm text-rose-600">Failed: {qualityDipData?.error ?? "Unknown error"}</div>
+            ) : null}
+            {!loading && qualityDipData?.ok ? (
+              <>
+                <div className="border-b border-[#e2d2b7] bg-[#fffaf2] px-4 py-3">
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                      <div className="text-[11px] text-emerald-700">Consider Buy</div>
+                      <div className="text-lg font-semibold text-emerald-800">{qualitySummary.consider_buy}</div>
+                    </div>
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                      <div className="text-[11px] text-amber-700">Watch</div>
+                      <div className="text-lg font-semibold text-amber-800">{qualitySummary.watch}</div>
+                    </div>
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2">
+                      <div className="text-[11px] text-rose-700">Avoid</div>
+                      <div className="text-lg font-semibold text-rose-800">{qualitySummary.avoid}</div>
+                    </div>
+                  </div>
+                  {Array.isArray(qualityDipData?.meta?.missing_symbols) && qualityDipData.meta!.missing_symbols!.length > 0 ? (
+                    <div className="mt-2 text-[11px] text-slate-500">
+                      Missing/insufficient bars: {qualityDipData.meta!.missing_symbols!.join(", ")}
+                    </div>
+                  ) : null}
+                </div>
+                <table className="w-full text-sm leading-6">
+                  <thead className="text-left text-xs text-slate-500">
+                    <tr className="border-b border-[#e2d2b7]">
+                      <th className="px-4 py-3.5">Symbol</th>
+                      <th className="px-4 py-3.5">Company</th>
+                      <th className="px-4 py-3.5">Price</th>
+                      <th className="px-4 py-3.5">30D High</th>
+                      <th className="px-4 py-3.5">% Drop</th>
+                      <th className="px-4 py-3.5">Trend</th>
+                      <th className="px-4 py-3.5">Market</th>
+                      <th className="px-4 py-3.5">Signal</th>
+                      <th className="px-4 py-3.5">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {qualityGroupedRows.length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-5 text-sm text-slate-600" colSpan={9}>
+                          No Quality Dip rows available.
+                        </td>
+                      </tr>
+                    ) : null}
+                    {qualityGroupedRows.map((group) => (
+                      <Fragment key={group.group}>
+                        <tr className="border-b border-[#eee2cf] bg-[#fff7eb]">
+                          <td colSpan={9} className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                            {group.group}
+                          </td>
+                        </tr>
+                        {group.rows.map((row) => (
+                          <tr key={row.symbol} className="border-b border-[#efe5d6]">
+                            <td className="px-4 py-3.5 font-semibold tracking-tight">{row.symbol}</td>
+                            <td className="px-4 py-3.5">{row.name}</td>
+                            <td className="px-4 py-3.5">{row.current_price != null ? row.current_price.toFixed(2) : "—"}</td>
+                            <td className="px-4 py-3.5">{row.high_30d != null ? row.high_30d.toFixed(2) : "—"}</td>
+                            <td className="px-4 py-3.5">
+                              {row.drop_pct_from_30d_high != null ? `${row.drop_pct_from_30d_high.toFixed(2)}%` : "—"}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                                  row.stock_above_sma200 == null
+                                    ? "border-slate-200 bg-slate-50 text-slate-600"
+                                    : row.stock_above_sma200
+                                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                      : "border-rose-200 bg-rose-50 text-rose-700"
+                                }`}
+                              >
+                                {row.stock_above_sma200 == null ? "SMA200 N/A" : row.stock_above_sma200 ? "Above SMA200" : "Below SMA200"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                                  row.market_spy_above_sma200
+                                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                    : "border-amber-200 bg-amber-50 text-amber-700"
+                                }`}
+                              >
+                                {row.market_spy_above_sma200 ? "SPY Healthy" : "SPY Weak"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${qualitySignalPill(row.signal)}`}>
+                                {row.signal === "CONSIDER_BUY" ? "Consider Buy" : row.signal}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5 text-xs text-slate-600">{row.reason_summary}</td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            ) : null}
+          </>
+        ) : null}
+        {strategy !== "quality_dip" ? (
+          <>
+            {loading ? <div className="p-5 text-sm text-slate-600">Loading ideas…</div> : null}
+            {!loading && !data?.ok ? <div className="p-5 text-sm text-rose-600">Failed: {data?.error ?? "Unknown error"}</div> : null}
+            {!loading && data?.ok ? (
           <>
             <div className="border-b border-[#e2d2b7] bg-[#fffaf2] px-4 py-2.5">
               <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -1641,6 +1886,8 @@ export default function IdeasWorkspaceClient({
               })}
               </tbody>
             </table>
+          </>
+        ) : null}
           </>
         ) : null}
       </div>
