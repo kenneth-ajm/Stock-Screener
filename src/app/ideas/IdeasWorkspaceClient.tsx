@@ -1269,9 +1269,9 @@ export default function IdeasWorkspaceClient({
   function toQualityDipTradeRow(row: QualityDipRow): IdeaRow | null {
     const entry = Number(row.current_price ?? 0);
     if (!Number.isFinite(entry) || entry <= 0) return null;
-    const stop = round2(entry * 0.92);
-    const tp1 = round2(entry * 1.05);
-    const tp2 = round2(entry * 1.1);
+    const stop = round2(entry * 0.94);
+    const tp1 = round2(entry * 1.06);
+    const tp2 = round2(entry * 1.12);
     const mappedSignal: "BUY" | "WATCH" | "AVOID" =
       row.signal === "CONSIDER_BUY" ? "BUY" : row.signal === "WATCH" ? "WATCH" : "AVOID";
     const riskPerShare = Math.max(0, entry - stop);
@@ -1825,8 +1825,8 @@ export default function IdeasWorkspaceClient({
                             <td className="px-3 py-2.5 text-[11px] text-slate-600 whitespace-nowrap">
                               {row.current_price != null ? (
                                 <>
-                                  E {row.current_price.toFixed(2)} · S {(row.current_price * 0.92).toFixed(2)}
-                                  <div>TP { (row.current_price * 1.05).toFixed(2)} / {(row.current_price * 1.1).toFixed(2)}</div>
+                                  E {row.current_price.toFixed(2)} · S {(row.current_price * 0.94).toFixed(2)}
+                                  <div>TP { (row.current_price * 1.06).toFixed(2)} / {(row.current_price * 1.12).toFixed(2)}</div>
                                 </>
                               ) : (
                                 "—"
