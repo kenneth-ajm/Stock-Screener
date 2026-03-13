@@ -1745,29 +1745,23 @@ export default function IdeasWorkspaceClient({
                     </div>
                   ) : null}
                 </div>
-                <table className="w-full text-sm leading-6">
-                  <thead className="text-left text-xs text-slate-500">
+                <table className="w-full table-fixed text-sm leading-5">
+                  <thead className="text-left text-[11px] text-slate-500">
                     <tr className="border-b border-[#e2d2b7]">
-                      <th className="px-4 py-3.5">Symbol</th>
-                      <th className="px-4 py-3.5">Company</th>
-                      <th className="px-4 py-3.5">Price</th>
-                      <th className="px-4 py-3.5">30D High</th>
-                      <th className="px-4 py-3.5">% Drop</th>
-                      <th className="px-4 py-3.5">Trend</th>
-                      <th className="px-4 py-3.5">Market</th>
-                      <th className="px-4 py-3.5">Entry</th>
-                      <th className="px-4 py-3.5">Stop</th>
-                      <th className="px-4 py-3.5">TP1</th>
-                      <th className="px-4 py-3.5">TP2</th>
-                      <th className="px-4 py-3.5">Signal</th>
-                      <th className="px-4 py-3.5">Reason</th>
-                      <th className="px-4 py-3.5">Action</th>
+                      <th className="px-3 py-2.5">Symbol</th>
+                      <th className="px-3 py-2.5">Company</th>
+                      <th className="px-3 py-2.5">Price</th>
+                      <th className="px-3 py-2.5">% Drop</th>
+                      <th className="px-3 py-2.5">Context</th>
+                      <th className="px-3 py-2.5">Signal</th>
+                      <th className="px-3 py-2.5">Trade Levels</th>
+                      <th className="px-3 py-2.5">Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {qualityGroupedRows.length === 0 ? (
                       <tr>
-                        <td className="px-4 py-5 text-sm text-slate-600" colSpan={14}>
+                        <td className="px-3 py-4 text-sm text-slate-600" colSpan={8}>
                           No Quality Dip rows available.
                         </td>
                       </tr>
@@ -1775,60 +1769,70 @@ export default function IdeasWorkspaceClient({
                     {qualityGroupedRows.map((group) => (
                       <Fragment key={group.group}>
                         <tr className="border-b border-[#eee2cf] bg-[#fff7eb]">
-                          <td colSpan={14} className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                          <td colSpan={8} className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
                             {group.group}
                           </td>
                         </tr>
                         {group.rows.map((row) => (
                           <tr key={row.symbol} className="border-b border-[#efe5d6]">
-                            <td className="px-4 py-3.5 font-semibold tracking-tight">{row.symbol}</td>
-                            <td className="px-4 py-3.5">{row.name}</td>
-                            <td className="px-4 py-3.5">{row.current_price != null ? row.current_price.toFixed(2) : "—"}</td>
-                            <td className="px-4 py-3.5">{row.high_30d != null ? row.high_30d.toFixed(2) : "—"}</td>
-                            <td className="px-4 py-3.5">
-                              {row.drop_pct_from_30d_high != null ? `${row.drop_pct_from_30d_high.toFixed(2)}%` : "—"}
+                            <td className="px-3 py-2.5 font-semibold tracking-tight">{row.symbol}</td>
+                            <td className="px-3 py-2.5">
+                              <div className="truncate text-slate-800" title={row.name}>
+                                {row.name}
+                              </div>
+                              <div className="truncate text-[11px] text-slate-500" title={row.reason_summary}>
+                                {row.reason_summary}
+                              </div>
                             </td>
-                            <td className="px-4 py-3.5">
-                              <span
-                                className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                            <td className="px-3 py-2.5">{row.current_price != null ? row.current_price.toFixed(2) : "—"}</td>
+                            <td className="px-3 py-2.5">
+                              {row.drop_pct_from_30d_high != null ? `${row.drop_pct_from_30d_high.toFixed(2)}%` : "—"}
+                              {row.high_30d != null ? (
+                                <div className="text-[10px] text-slate-500" title="30-day high">
+                                  high {row.high_30d.toFixed(2)}
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <div className="flex flex-col gap-1">
+                                <span
+                                  className={`w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${
                                   row.stock_above_sma200 == null
                                     ? "border-slate-200 bg-slate-50 text-slate-600"
                                     : row.stock_above_sma200
                                       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                                       : "border-rose-200 bg-rose-50 text-rose-700"
-                                }`}
-                              >
-                                {row.stock_above_sma200 == null ? "SMA200 N/A" : row.stock_above_sma200 ? "Above SMA200" : "Below SMA200"}
-                              </span>
+                                  }`}
+                                >
+                                  {row.stock_above_sma200 == null ? "SMA200 N/A" : row.stock_above_sma200 ? "Above SMA200" : "Below SMA200"}
+                                </span>
+                                <span
+                                  className={`w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${
+                                    row.market_spy_above_sma200
+                                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                      : "border-amber-200 bg-amber-50 text-amber-700"
+                                  }`}
+                                >
+                                  {row.market_spy_above_sma200 ? "SPY Healthy" : "SPY Weak"}
+                                </span>
+                              </div>
                             </td>
-                            <td className="px-4 py-3.5">
-                              <span
-                                className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                                  row.market_spy_above_sma200
-                                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                    : "border-amber-200 bg-amber-50 text-amber-700"
-                                }`}
-                              >
-                                {row.market_spy_above_sma200 ? "SPY Healthy" : "SPY Weak"}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3.5">{row.current_price != null ? row.current_price.toFixed(2) : "—"}</td>
-                            <td className="px-4 py-3.5">
-                              {row.current_price != null ? (row.current_price * 0.92).toFixed(2) : "—"}
-                            </td>
-                            <td className="px-4 py-3.5">
-                              {row.current_price != null ? (row.current_price * 1.05).toFixed(2) : "—"}
-                            </td>
-                            <td className="px-4 py-3.5">
-                              {row.current_price != null ? (row.current_price * 1.1).toFixed(2) : "—"}
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${qualitySignalPill(row.signal)}`}>
+                            <td className="px-3 py-2.5">
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${qualitySignalPill(row.signal)}`}>
                                 {row.signal === "CONSIDER_BUY" ? "Consider Buy" : row.signal}
                               </span>
                             </td>
-                            <td className="px-4 py-3.5 text-xs text-slate-600">{row.reason_summary}</td>
-                            <td className="px-4 py-3.5">
+                            <td className="px-3 py-2.5 text-[11px] text-slate-600 whitespace-nowrap">
+                              {row.current_price != null ? (
+                                <>
+                                  E {row.current_price.toFixed(2)} · S {(row.current_price * 0.92).toFixed(2)}
+                                  <div>TP { (row.current_price * 1.05).toFixed(2)} / {(row.current_price * 1.1).toFixed(2)}</div>
+                                </>
+                              ) : (
+                                "—"
+                              )}
+                            </td>
+                            <td className="px-3 py-2.5">
                               {row.signal !== "AVOID" ? (
                                 <button
                                   type="button"
@@ -1837,7 +1841,7 @@ export default function IdeasWorkspaceClient({
                                     if (!mapped) return;
                                     openTradeTicket(mapped);
                                   }}
-                                  className="rounded-lg border border-[#dcc9aa] bg-[#f8f0e2] px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-[#f2e6d4]"
+                                  className="rounded-lg border border-[#dcc9aa] bg-[#f8f0e2] px-2.5 py-1 text-[10px] font-semibold text-slate-700 whitespace-nowrap hover:bg-[#f2e6d4]"
                                 >
                                   {row.signal === "CONSIDER_BUY" ? "Paper Trade" : "Prepare Trade"}
                                 </button>
