@@ -1788,7 +1788,7 @@ export default function IdeasWorkspaceClient({
                             <td className="px-3 py-2.5">
                               {row.drop_pct_from_30d_high != null ? `${row.drop_pct_from_30d_high.toFixed(2)}%` : "—"}
                               {row.high_30d != null ? (
-                                <div className="text-[10px] text-slate-500" title="30-day high">
+                                <div className="text-[10px] text-slate-500" title="30-bar high">
                                   high {row.high_30d.toFixed(2)}
                                 </div>
                               ) : null}

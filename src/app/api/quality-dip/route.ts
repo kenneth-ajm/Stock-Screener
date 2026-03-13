@@ -41,7 +41,7 @@ function round2(n: number | null) {
 async function fetchBars(supa: any, symbol: string, limit = 260) {
   const { data, error } = await supa
     .from("price_bars")
-    .select("date,close")
+    .select("date,high,close")
     .eq("symbol", symbol)
     .order("date", { ascending: false })
     .limit(limit);
@@ -50,12 +50,13 @@ async function fetchBars(supa: any, symbol: string, limit = 260) {
   return rows
     .map((row: any) => ({
       date: typeof row?.date === "string" ? row.date : null,
+      high: toNumber(row?.high),
       close: toNumber(row?.close),
     }))
-    .filter((row) => row.date && row.close != null) as Array<{ date: string; close: number }>;
+    .filter((row) => row.date && row.close != null && row.high != null) as Array<{ date: string; high: number; close: number }>;
 }
 
-function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; close: number }>, spyAboveSma200: boolean): QualityDipRow {
+function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; high: number; close: number }>, spyAboveSma200: boolean): QualityDipRow {
   if (!Array.isArray(barsDesc) || barsDesc.length < 30) {
     return {
       symbol: item.symbol,
@@ -76,7 +77,8 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
   const asc = [...barsDesc].reverse();
   const closes = asc.map((b) => b.close);
   const latest = barsDesc[0];
-  const high30 = Math.max(...barsDesc.slice(0, 30).map((b) => b.close));
+  const recent30Bars = barsDesc.slice(0, 30);
+  const high30 = Math.max(...recent30Bars.map((b) => b.high));
   const sma200 = sma(closes, 200);
 
   const current = latest.close;
@@ -100,7 +102,7 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
   const trendText =
     stockAboveSma200 == null ? "stock SMA200 unknown" : stockAboveSma200 ? "stock above SMA200" : "stock below SMA200";
   const marketText = marketStrong ? "SPY healthy" : "SPY weak";
-  const dropText = `${round2(dropPct)}% below 30d high`;
+  const dropText = `${round2(dropPct)}% below 30-bar high`;
 
   return {
     symbol: item.symbol,
