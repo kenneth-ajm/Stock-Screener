@@ -146,6 +146,8 @@ type QualityDipPayload = {
   };
   error?: string;
 };
+type QualityDipFilter = "all" | "consider_buy" | "watch" | "avoid";
+type QualityDipSort = "signal" | "drop" | "price" | "symbol";
 
 type QuoteMap = Record<
   string,
@@ -266,6 +268,8 @@ export default function IdeasWorkspaceClient({
   const [tp2Price, setTp2Price] = useState("");
   const [tp2SizePct, setTp2SizePct] = useState("50");
   const [selectedFilter, setSelectedFilter] = useState<IdeasFilter>("all");
+  const [qualityFilter, setQualityFilter] = useState<QualityDipFilter>("all");
+  const [qualitySort, setQualitySort] = useState<QualityDipSort>("signal");
   const [scanDateHintByStrategy, setScanDateHintByStrategy] = useState<Partial<Record<StrategyVersion, string>>>({});
   const [runScanState, setRunScanState] = useState<ManualScanState>({
     status: "idle",
@@ -528,15 +532,50 @@ export default function IdeasWorkspaceClient({
 
   const allRows = useMemo(() => data?.rows ?? [], [data]);
   const qualityRows = useMemo(() => qualityDipData?.rows ?? [], [qualityDipData]);
+  const qualityRowsView = useMemo(() => {
+    const filtered = qualityRows.filter((row) => {
+      if (qualityFilter === "all") return true;
+      if (qualityFilter === "consider_buy") return row.signal === "CONSIDER_BUY";
+      if (qualityFilter === "watch") return row.signal === "WATCH";
+      return row.signal === "AVOID";
+    });
+    const signalOrder: Record<QualityDipSignal, number> = {
+      CONSIDER_BUY: 0,
+      WATCH: 1,
+      AVOID: 2,
+    };
+    const toDrop = (row: QualityDipRow) => Number(row.drop_pct_from_30d_high ?? -999);
+    const toPrice = (row: QualityDipRow) => Number(row.current_price ?? -999);
+    return [...filtered].sort((a, b) => {
+      if (qualitySort === "symbol") {
+        return a.symbol.localeCompare(b.symbol);
+      }
+      if (qualitySort === "drop") {
+        const d = toDrop(b) - toDrop(a);
+        if (d !== 0) return d;
+        return a.symbol.localeCompare(b.symbol);
+      }
+      if (qualitySort === "price") {
+        const d = toPrice(b) - toPrice(a);
+        if (d !== 0) return d;
+        return a.symbol.localeCompare(b.symbol);
+      }
+      const sig = signalOrder[a.signal] - signalOrder[b.signal];
+      if (sig !== 0) return sig;
+      const drop = toDrop(b) - toDrop(a);
+      if (drop !== 0) return drop;
+      return a.symbol.localeCompare(b.symbol);
+    });
+  }, [qualityRows, qualityFilter, qualitySort]);
   const qualityGroupedRows = useMemo(() => {
     const order = ["Leaders", "Quality Cyclicals", "Financials", "Industrials & Defense", "ETF Anchors"];
     return order
       .map((group) => ({
         group,
-        rows: qualityRows.filter((r) => r.group === group),
+        rows: qualityRowsView.filter((r) => r.group === group),
       }))
       .filter((g) => g.rows.length > 0);
-  }, [qualityRows]);
+  }, [qualityRowsView]);
   const qualitySummary = useMemo(
     () =>
       qualityDipData?.summary ?? {
@@ -729,7 +768,7 @@ export default function IdeasWorkspaceClient({
 
   async function openDetails() {
     if (!selected || detailsLoading || details) return;
-    if (strategy === "v1_sector_momentum" && selected.reason_json) {
+    if ((strategy === "v1_sector_momentum" || strategy === "quality_dip") && selected.reason_json) {
       setDetails({ ok: true, row: selected, source: "sector_momentum_inline" });
       return;
     }
@@ -1227,6 +1266,53 @@ export default function IdeasWorkspaceClient({
     return "border-rose-200 bg-rose-50 text-rose-700";
   }
 
+  function toQualityDipTradeRow(row: QualityDipRow): IdeaRow | null {
+    const entry = Number(row.current_price ?? 0);
+    if (!Number.isFinite(entry) || entry <= 0) return null;
+    const stop = round2(entry * 0.92);
+    const tp1 = round2(entry * 1.05);
+    const tp2 = round2(entry * 1.1);
+    const mappedSignal: "BUY" | "WATCH" | "AVOID" =
+      row.signal === "CONSIDER_BUY" ? "BUY" : row.signal === "WATCH" ? "WATCH" : "AVOID";
+    const riskPerShare = Math.max(0, entry - stop);
+    const cashAvailable = Number(data?.capacity?.cash_available ?? 0);
+    const sharesByCash = entry > 0 ? Math.floor(cashAvailable / entry) : 0;
+    const shares = Math.max(0, sharesByCash);
+    return {
+      symbol: row.symbol,
+      signal: mappedSignal,
+      confidence: mappedSignal === "BUY" ? 70 : mappedSignal === "WATCH" ? 60 : 40,
+      rank: null,
+      rank_score: null,
+      entry,
+      stop,
+      tp1,
+      tp2,
+      reason_summary: `Quality Dip ${row.signal.replace("_", " ")} • ${row.reason_summary}`,
+      reason_json: {
+        strategy: "quality_dip_v1",
+        quality_dip: {
+          drop_pct_from_30d_high: row.drop_pct_from_30d_high,
+          stock_above_sma200: row.stock_above_sma200,
+          market_spy_above_sma200: row.market_spy_above_sma200,
+        },
+      },
+      universe_slug: "quality_dip_watchlist",
+      source_scan_date: row.source_date,
+      sizing: {
+        shares,
+        est_cost: round2(shares * entry),
+        risk_per_share: round2(riskPerShare),
+        risk_budget: round2(riskPerShare * shares),
+        shares_by_risk: shares,
+        shares_by_cash: sharesByCash,
+        shares_by_portfolio_cap: null,
+        limiting_factor: "cash",
+        sizing_mode: "cash_only",
+      },
+    };
+  }
+
   function actionPill(action: "BUY NOW" | "WAIT" | "SKIP") {
     if (action === "BUY NOW") return "border-emerald-200 bg-emerald-50 text-emerald-700";
     if (action === "WAIT") return "border-amber-200 bg-amber-50 text-amber-700";
@@ -1620,6 +1706,39 @@ export default function IdeasWorkspaceClient({
                       <div className="text-lg font-semibold text-rose-800">{qualitySummary.avoid}</div>
                     </div>
                   </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-slate-500">Filter:</span>
+                    {([
+                      { key: "all", label: "All" },
+                      { key: "consider_buy", label: "Consider Buy" },
+                      { key: "watch", label: "Watch" },
+                      { key: "avoid", label: "Avoid" },
+                    ] as Array<{ key: QualityDipFilter; label: string }>).map((f) => (
+                      <button
+                        key={f.key}
+                        type="button"
+                        onClick={() => setQualityFilter(f.key)}
+                        className={`rounded-full border px-2.5 py-1 font-medium transition ${
+                          qualityFilter === f.key
+                            ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900"
+                            : "border-[#e4d5be] bg-[#fffdf8] text-slate-600 hover:bg-[#f7efe1]"
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                    <span className="ml-2 text-slate-500">Sort:</span>
+                    <select
+                      value={qualitySort}
+                      onChange={(e) => setQualitySort(e.target.value as QualityDipSort)}
+                      className="rounded-lg border border-[#dcc9aa] bg-white px-2 py-1 text-xs text-slate-700"
+                    >
+                      <option value="signal">Signal</option>
+                      <option value="drop">% Drop</option>
+                      <option value="price">Price</option>
+                      <option value="symbol">Symbol</option>
+                    </select>
+                  </div>
                   {Array.isArray(qualityDipData?.meta?.missing_symbols) && qualityDipData.meta!.missing_symbols!.length > 0 ? (
                     <div className="mt-2 text-[11px] text-slate-500">
                       Missing/insufficient bars: {qualityDipData.meta!.missing_symbols!.join(", ")}
@@ -1636,14 +1755,19 @@ export default function IdeasWorkspaceClient({
                       <th className="px-4 py-3.5">% Drop</th>
                       <th className="px-4 py-3.5">Trend</th>
                       <th className="px-4 py-3.5">Market</th>
+                      <th className="px-4 py-3.5">Entry</th>
+                      <th className="px-4 py-3.5">Stop</th>
+                      <th className="px-4 py-3.5">TP1</th>
+                      <th className="px-4 py-3.5">TP2</th>
                       <th className="px-4 py-3.5">Signal</th>
                       <th className="px-4 py-3.5">Reason</th>
+                      <th className="px-4 py-3.5">Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {qualityGroupedRows.length === 0 ? (
                       <tr>
-                        <td className="px-4 py-5 text-sm text-slate-600" colSpan={9}>
+                        <td className="px-4 py-5 text-sm text-slate-600" colSpan={14}>
                           No Quality Dip rows available.
                         </td>
                       </tr>
@@ -1651,7 +1775,7 @@ export default function IdeasWorkspaceClient({
                     {qualityGroupedRows.map((group) => (
                       <Fragment key={group.group}>
                         <tr className="border-b border-[#eee2cf] bg-[#fff7eb]">
-                          <td colSpan={9} className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                          <td colSpan={14} className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
                             {group.group}
                           </td>
                         </tr>
@@ -1688,12 +1812,39 @@ export default function IdeasWorkspaceClient({
                                 {row.market_spy_above_sma200 ? "SPY Healthy" : "SPY Weak"}
                               </span>
                             </td>
+                            <td className="px-4 py-3.5">{row.current_price != null ? row.current_price.toFixed(2) : "—"}</td>
+                            <td className="px-4 py-3.5">
+                              {row.current_price != null ? (row.current_price * 0.92).toFixed(2) : "—"}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              {row.current_price != null ? (row.current_price * 1.05).toFixed(2) : "—"}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              {row.current_price != null ? (row.current_price * 1.1).toFixed(2) : "—"}
+                            </td>
                             <td className="px-4 py-3.5">
                               <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${qualitySignalPill(row.signal)}`}>
                                 {row.signal === "CONSIDER_BUY" ? "Consider Buy" : row.signal}
                               </span>
                             </td>
                             <td className="px-4 py-3.5 text-xs text-slate-600">{row.reason_summary}</td>
+                            <td className="px-4 py-3.5">
+                              {row.signal !== "AVOID" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const mapped = toQualityDipTradeRow(row);
+                                    if (!mapped) return;
+                                    openTradeTicket(mapped);
+                                  }}
+                                  className="rounded-lg border border-[#dcc9aa] bg-[#f8f0e2] px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-[#f2e6d4]"
+                                >
+                                  {row.signal === "CONSIDER_BUY" ? "Paper Trade" : "Prepare Trade"}
+                                </button>
+                              ) : (
+                                <span className="text-slate-300">—</span>
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </Fragment>
@@ -1904,7 +2055,13 @@ export default function IdeasWorkspaceClient({
               <div>
                 <div className="text-lg font-semibold">{selected.symbol}</div>
                 <div className="text-xs text-slate-500">
-                  {strategy === "v1_trend_hold" ? "Trend Hold" : strategy === "v1_sector_momentum" ? "Sector Momentum" : "Momentum Swing"}
+                  {strategy === "v1_trend_hold"
+                    ? "Trend Hold"
+                    : strategy === "v1_sector_momentum"
+                    ? "Sector Momentum"
+                    : strategy === "quality_dip"
+                    ? "Quality Dip"
+                    : "Momentum Swing"}
                 </div>
               </div>
               <button onClick={() => setSelected(null)} className="rounded-lg border border-[#dcc9aa] bg-[#f3e7d3] px-2.5 py-1 text-xs font-medium">
