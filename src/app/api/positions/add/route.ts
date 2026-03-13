@@ -366,7 +366,7 @@ export async function POST(req: Request) {
       entry_date,
       entry_price,
       shares,
-      stop,
+      stop_price: stop,
       strategy_version,
       max_hold_days,
       tp_model,

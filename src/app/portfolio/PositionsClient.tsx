@@ -24,6 +24,7 @@ type PositionRow = {
   entry_price: number | null;
   entry_fee?: number | null;
   stop_price?: number | null;
+  stop?: number | null;
 
   shares?: number | null;
   quantity?: number | null;
@@ -97,6 +98,13 @@ function resolveQty(p: PositionRow): number {
     (typeof p.position_size === "number" ? p.position_size : null) ??
     0;
   return Number.isFinite(v) ? v : 0;
+}
+
+function resolveStopPrice(p: PositionRow): number | null {
+  const value =
+    (typeof p.stop_price === "number" ? p.stop_price : null) ??
+    (typeof p.stop === "number" ? p.stop : null);
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function strategyLabel(version: string | null | undefined) {
@@ -1037,13 +1045,13 @@ export default function PositionsClient({
                       const lots = g.lotIds.map((id) => openById.get(id)).filter(Boolean) as PositionRow[];
                       const weightedStopNumer = lots.reduce((sum, p) => {
                         const q = resolveQty(p);
-                        const st = p.stop_price;
+                        const st = resolveStopPrice(p);
                         if (q <= 0 || typeof st !== "number" || !Number.isFinite(st) || st <= 0) return sum;
                         return sum + st * q;
                       }, 0);
                       const weightedStopDenom = lots.reduce((sum, p) => {
                         const q = resolveQty(p);
-                        const st = p.stop_price;
+                        const st = resolveStopPrice(p);
                         if (q <= 0 || typeof st !== "number" || !Number.isFinite(st) || st <= 0) return sum;
                         return sum + q;
                       }, 0);
@@ -1112,7 +1120,7 @@ export default function PositionsClient({
                             {typeof g.unrealPct === "number" ? formatPct(g.unrealPct) : "—"}
                           </td>
                           <td className="p-3 text-xs text-slate-700">
-                            <div>Stop: {typeof intel.toStopPct === "number" ? formatPct(intel.toStopPct) : "—"}</div>
+                            <div>Stop: {formatMoney(groupedStop)}</div>
                             <div>TP1: {typeof intel.toTp1Pct === "number" ? formatPct(intel.toTp1Pct) : "—"}</div>
                             <div>R now: {typeof intel.rNow === "number" && Number.isFinite(intel.rNow) ? formatNum(intel.rNow) : "—"}</div>
                           </td>
@@ -1252,7 +1260,7 @@ export default function PositionsClient({
                           : "text-slate-500";
                       const intel = riskIntel({
                         entry: p.entry_price,
-                        stop: p.stop_price ?? null,
+                        stop: resolveStopPrice(p),
                         last,
                         tp1: maybeTpPriceForPosition(p, "tp1"),
                         tp2: maybeTpPriceForPosition(p, "tp2"),
@@ -1290,7 +1298,7 @@ export default function PositionsClient({
                             {typeof unrealPct === "number" ? formatPct(unrealPct) : "—"}
                           </td>
                           <td className="p-3 text-xs text-slate-700">
-                            <div>Stop: {typeof intel.toStopPct === "number" ? formatPct(intel.toStopPct) : "—"}</div>
+                            <div>Stop: {formatMoney(resolveStopPrice(p))}</div>
                             <div>TP1: {typeof intel.toTp1Pct === "number" ? formatPct(intel.toTp1Pct) : "—"}</div>
                             <div>R now: {typeof intel.rNow === "number" && Number.isFinite(intel.rNow) ? formatNum(intel.rNow) : "—"}</div>
                           </td>
