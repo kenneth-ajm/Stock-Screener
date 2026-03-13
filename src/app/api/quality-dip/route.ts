@@ -85,22 +85,37 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
   const dropPct = high30 > 0 ? ((high30 - current) / high30) * 100 : 0;
   const stockAboveSma200 = sma200 != null ? current > sma200 : null;
 
-  const inBuyDropRange = dropPct >= 5 && dropPct <= 10;
-  const inWatchDropRange = dropPct >= 3 && dropPct < 5;
+  const inIdealDipRange = dropPct >= 5 && dropPct <= 10;
+  const inShallowDipRange = dropPct >= 3 && dropPct < 5;
+  const inDeepButAcceptableWatchRange = dropPct > 10 && dropPct <= 12;
   const stockStrong = stockAboveSma200 === true;
   const marketStrong = spyAboveSma200;
+  const oneConfirmationWeak = (stockStrong && !marketStrong) || (!stockStrong && marketStrong);
 
   let signal: DipSignal = "AVOID";
-  if (inBuyDropRange && stockStrong && marketStrong) {
+  if (inIdealDipRange && stockStrong && marketStrong) {
     signal = "CONSIDER_BUY";
-  } else if (inWatchDropRange || (inBuyDropRange && (!stockStrong || !marketStrong))) {
+  } else if (
+    inShallowDipRange ||
+    (inDeepButAcceptableWatchRange && stockStrong && marketStrong) ||
+    ((inIdealDipRange || inDeepButAcceptableWatchRange) && oneConfirmationWeak)
+  ) {
     signal = "WATCH";
-  } else if (dropPct > 10 || stockAboveSma200 === false || (!stockStrong && !marketStrong)) {
+  } else if (dropPct > 12 || stockAboveSma200 === false || (!stockStrong && !marketStrong)) {
     signal = "AVOID";
   }
 
+  const dipText = inShallowDipRange
+    ? "shallow dip"
+    : inIdealDipRange
+      ? "ideal dip zone"
+      : inDeepButAcceptableWatchRange
+        ? "deep dip beyond preferred range"
+        : dropPct > 12
+          ? "deep dip beyond preferred range"
+          : "dip not in preferred zone";
   const trendText =
-    stockAboveSma200 == null ? "stock SMA200 unknown" : stockAboveSma200 ? "stock above SMA200" : "stock below SMA200";
+    stockAboveSma200 == null ? "trend unknown" : stockAboveSma200 ? "trend intact" : "broken trend";
   const marketText = marketStrong ? "SPY healthy" : "SPY weak";
   const dropText = `${round2(dropPct)}% below 30-bar high`;
 
@@ -114,7 +129,7 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
     stock_above_sma200: stockAboveSma200,
     market_spy_above_sma200: marketStrong,
     signal,
-    reason_summary: `${dropText} • ${trendText} • ${marketText}`,
+    reason_summary: `${dipText} • ${dropText} • ${trendText} • ${marketText}`,
     source_date: latest.date,
     bars_count: barsDesc.length,
   };
