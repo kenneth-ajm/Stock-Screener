@@ -193,6 +193,18 @@ type ManualScanState = {
   error: string | null;
 };
 
+type QualityRefreshState = {
+  status: "idle" | "running" | "completed" | "failed";
+  detail: string | null;
+  durationMs: number | null;
+  rowsUpserted: number;
+  symbolsSucceeded: number;
+  symbolsAttempted: number;
+  expectedMarketDate: string | null;
+  latestBarDate: string | null;
+  error: string | null;
+};
+
 function round1(n: number) {
   return Math.round(n * 10) / 10;
 }
@@ -301,6 +313,17 @@ export default function IdeasWorkspaceClient({
     durationMs: null,
     error: null,
   });
+  const [qualityRefreshState, setQualityRefreshState] = useState<QualityRefreshState>({
+    status: "idle",
+    detail: null,
+    durationMs: null,
+    rowsUpserted: 0,
+    symbolsSucceeded: 0,
+    symbolsAttempted: 0,
+    expectedMarketDate: null,
+    latestBarDate: null,
+    error: null,
+  });
   const [refreshNonce, setRefreshNonce] = useState(0);
   const tradeTicketRef = useRef<HTMLDivElement | null>(null);
   const entryInputRef = useRef<HTMLInputElement | null>(null);
@@ -309,6 +332,7 @@ export default function IdeasWorkspaceClient({
     breadthLabel: data?.meta?.breadth_label ?? "Breadth strong",
   } as const;
   const runScanBusy = runScanState.status === "starting" || runScanState.status === "running";
+  const qualityRefreshBusy = qualityRefreshState.status === "running";
 
   useEffect(() => {
     setStrategy(initialStrategy);
@@ -328,7 +352,7 @@ export default function IdeasWorkspaceClient({
     let mounted = true;
     setLoading(true);
     if (strategy === "quality_dip") {
-      const apiUrl = "/api/quality-dip";
+      const apiUrl = refreshNonce > 0 ? `/api/quality-dip?_bust=${refreshNonce}` : "/api/quality-dip";
       setLastQualityApiUrl(apiUrl);
       setLastApiUrl(apiUrl);
       setLastLoadOk(null);
@@ -395,6 +419,64 @@ export default function IdeasWorkspaceClient({
       mounted = false;
     };
   }, [strategy, universeMode, refreshNonce, scanDateHintByStrategy]);
+
+  async function runQualityDipRefresh() {
+    const startedAt = Date.now();
+    setQualityRefreshState({
+      status: "running",
+      detail: "Refreshing Quality Dip watchlist bars from Polygon...",
+      durationMs: null,
+      rowsUpserted: 0,
+      symbolsSucceeded: 0,
+      symbolsAttempted: 0,
+      expectedMarketDate: null,
+      latestBarDate: null,
+      error: null,
+    });
+    try {
+      const res = await fetch("/api/quality-dip/refresh", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload) {
+        throw new Error(String(payload?.error ?? `HTTP ${res.status}`));
+      }
+      const ok = Boolean(payload?.ok);
+      setQualityRefreshState({
+        status: ok ? "completed" : "failed",
+        detail: ok
+          ? `Refreshed ${Number(payload?.symbols_succeeded ?? 0)}/${Number(payload?.symbols_attempted ?? 0)} symbols.`
+          : `Refresh completed with gaps: ${String(payload?.status ?? "Unknown issue")}`,
+        durationMs: Number(payload?.duration_ms ?? Date.now() - startedAt),
+        rowsUpserted: Number(payload?.rows_upserted ?? 0),
+        symbolsSucceeded: Number(payload?.symbols_succeeded ?? 0),
+        symbolsAttempted: Number(payload?.symbols_attempted ?? 0),
+        expectedMarketDate: String(payload?.expected_market_date ?? "") || null,
+        latestBarDate: String(payload?.latest_bar_date ?? "") || null,
+        error:
+          ok || !Array.isArray(payload?.failures) || payload.failures.length === 0
+            ? null
+            : payload.failures
+                .map((f: any) => `${String(f?.symbol ?? "?")}: ${String(f?.error ?? "failed")}`)
+                .slice(0, 4)
+                .join("; "),
+      });
+      setRefreshNonce((n) => n + 1);
+    } catch (e: any) {
+      setQualityRefreshState({
+        status: "failed",
+        detail: `Refresh failed: ${String(e?.message ?? "Unknown error")}`,
+        durationMs: Date.now() - startedAt,
+        rowsUpserted: 0,
+        symbolsSucceeded: 0,
+        symbolsAttempted: 0,
+        expectedMarketDate: null,
+        latestBarDate: null,
+        error: String(e?.message ?? "Unknown error"),
+      });
+    }
+  }
 
   useEffect(() => {
     if (!(runScanState.status === "starting" || runScanState.status === "running")) return;
@@ -1489,6 +1571,14 @@ export default function IdeasWorkspaceClient({
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
           {strategy === "quality_dip" ? (
             <>
+              <button
+                type="button"
+                onClick={runQualityDipRefresh}
+                disabled={qualityRefreshBusy}
+                className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {qualityRefreshBusy ? "Refreshing..." : "Refresh Watchlist Bars"}
+              </button>
               <span className="surface-chip px-2.5 py-1">
                 Watchlist: {qualityDipData?.meta?.watchlist_size ?? qualityRows.length}
               </span>
@@ -1541,6 +1631,40 @@ export default function IdeasWorkspaceClient({
           )}
         </div>
       </div>
+      {strategy === "quality_dip" && qualityRefreshState.status !== "idle" ? (
+        <div
+          className={`mt-[-8px] rounded-xl border px-3 py-2 text-xs ${
+            qualityRefreshState.status === "failed"
+              ? "border-rose-200 bg-rose-50 text-rose-700"
+              : qualityRefreshState.status === "running"
+                ? "border-amber-200 bg-amber-50 text-amber-700"
+                : "border-emerald-200 bg-emerald-50 text-emerald-700"
+          }`}
+        >
+          <div className="font-medium">
+            {qualityRefreshState.status === "running"
+              ? "Quality Dip refresh running"
+              : qualityRefreshState.status === "completed"
+                ? "Quality Dip refresh completed"
+                : "Quality Dip refresh failed"}
+          </div>
+          <div className="mt-0.5">{qualityRefreshState.detail ?? "—"}</div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] opacity-90">
+            <span className="surface-chip px-2 py-0.5">
+              symbols: {qualityRefreshState.symbolsSucceeded}/{qualityRefreshState.symbolsAttempted}
+            </span>
+            <span className="surface-chip px-2 py-0.5">rows upserted: {qualityRefreshState.rowsUpserted}</span>
+            <span className="surface-chip px-2 py-0.5">
+              expected date: {qualityRefreshState.expectedMarketDate ?? "—"}
+            </span>
+            <span className="surface-chip px-2 py-0.5">latest bar: {qualityRefreshState.latestBarDate ?? "—"}</span>
+            <span className="surface-chip px-2 py-0.5">
+              duration: {qualityRefreshState.durationMs != null ? `${qualityRefreshState.durationMs}ms` : "—"}
+            </span>
+          </div>
+          {qualityRefreshState.error ? <div className="mt-1 text-[11px]">{qualityRefreshState.error}</div> : null}
+        </div>
+      ) : null}
       {strategy !== "quality_dip" && runScanState.status !== "idle" ? (
         <div
           className={`mt-[-8px] rounded-xl border px-3 py-2 text-xs ${
@@ -1694,6 +1818,10 @@ export default function IdeasWorkspaceClient({
           {" • "}quality_latest_symbol_date={qualityFreshness?.latest_symbol_date ?? "—"}
           {" • "}quality_oldest_symbol_date={qualityFreshness?.oldest_symbol_date ?? "—"}
           {" • "}quality_stale_symbols_count={qualityFreshness?.stale_symbols_count ?? 0}
+          {" • "}quality_refresh_status={qualityRefreshState.status}
+          {" • "}quality_refresh_rows_upserted={qualityRefreshState.rowsUpserted}
+          {" • "}quality_refresh_expected_date={qualityRefreshState.expectedMarketDate ?? "—"}
+          {" • "}quality_refresh_latest_bar={qualityRefreshState.latestBarDate ?? "—"}
           {" • "}scan_status={runScanState.status}
           {" • "}scan_request_id={runScanState.requestId ?? "—"}
           {" • "}scan_rows_written={runScanState.rowsWritten}
