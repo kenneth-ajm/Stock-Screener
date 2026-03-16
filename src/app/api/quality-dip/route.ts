@@ -21,6 +21,8 @@ type QualityDipRow = {
   bars_count: number;
 };
 
+type QualityDipFreshnessState = "current" | "mixed" | "stale";
+
 function toNumber(v: unknown): number | null {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;
@@ -163,11 +165,14 @@ export async function GET() {
 
     const rows: QualityDipRow[] = [];
     const missingSymbols: string[] = [];
+    const symbolDates: Array<{ symbol: string; source_date: string | null }> = [];
 
     for (const item of QUALITY_DIP_WATCHLIST) {
       const bars = await fetchBars(supabase, item.symbol, 260);
       if (bars.length < 30) missingSymbols.push(item.symbol);
-      rows.push(evaluateRow(item, bars, spyAboveSma200));
+      const evaluated = evaluateRow(item, bars, spyAboveSma200);
+      rows.push(evaluated);
+      symbolDates.push({ symbol: item.symbol, source_date: evaluated.source_date });
     }
 
     const counts = rows.reduce(
@@ -179,6 +184,22 @@ export async function GET() {
       },
       { consider_buy: 0, watch: 0, avoid: 0 }
     );
+    const expectedDate = spyBars[0]?.date ?? null;
+    const staleSymbols = symbolDates.filter(
+      (entry) => entry.source_date && expectedDate && entry.source_date < expectedDate
+    ) as Array<{ symbol: string; source_date: string }>;
+    const symbolDatesWithBars = symbolDates.filter((entry) => entry.source_date) as Array<{
+      symbol: string;
+      source_date: string;
+    }>;
+    const oldestSymbolDate =
+      symbolDatesWithBars.length > 0 ? [...symbolDatesWithBars].sort((a, b) => a.source_date.localeCompare(b.source_date))[0].source_date : null;
+    const freshnessState: QualityDipFreshnessState =
+      staleSymbols.length === 0
+        ? "current"
+        : staleSymbols.length === symbolDatesWithBars.length && staleSymbols.length > 0
+          ? "stale"
+          : "mixed";
 
     return NextResponse.json({
       ok: true,
@@ -196,6 +217,18 @@ export async function GET() {
           spy_sma200: round2(spySma200),
           spy_above_sma200: spyAboveSma200,
           source_date: spyBars[0]?.date ?? null,
+        },
+        freshness: {
+          expected_date: expectedDate,
+          latest_symbol_date: rows
+            .map((r) => r.source_date)
+            .filter(Boolean)
+            .sort()
+            .slice(-1)[0] ?? null,
+          oldest_symbol_date: oldestSymbolDate,
+          stale_symbols_count: staleSymbols.length,
+          stale_symbols: staleSymbols,
+          state: freshnessState,
         },
         missing_symbols: missingSymbols,
       },

@@ -136,6 +136,14 @@ type QualityDipPayload = {
   meta?: {
     watchlist_size?: number;
     source_date?: string | null;
+    freshness?: {
+      expected_date?: string | null;
+      latest_symbol_date?: string | null;
+      oldest_symbol_date?: string | null;
+      stale_symbols_count?: number;
+      stale_symbols?: Array<{ symbol: string; source_date: string }>;
+      state?: "current" | "mixed" | "stale";
+    };
     market?: {
       spy_close?: number | null;
       spy_sma200?: number | null;
@@ -532,6 +540,21 @@ export default function IdeasWorkspaceClient({
 
   const allRows = useMemo(() => data?.rows ?? [], [data]);
   const qualityRows = useMemo(() => qualityDipData?.rows ?? [], [qualityDipData]);
+  const qualityFreshness = qualityDipData?.meta?.freshness;
+  const qualityFreshnessChip =
+    qualityFreshness?.state === "current"
+      ? `Bars current: ${qualityFreshness.expected_date ?? qualityDipData?.meta?.source_date ?? "—"}`
+      : qualityFreshness?.state === "mixed"
+        ? `Bars mixed: ${qualityFreshness.expected_date ?? qualityDipData?.meta?.source_date ?? "—"}`
+        : `Bars stale: ${qualityFreshness?.oldest_symbol_date ?? qualityDipData?.meta?.source_date ?? "—"}`;
+  const staleQualitySymbols = Array.isArray(qualityFreshness?.stale_symbols) ? qualityFreshness.stale_symbols : [];
+  const staleQualityPreview =
+    staleQualitySymbols.length > 0
+      ? staleQualitySymbols
+          .slice(0, 6)
+          .map((entry) => `${entry.symbol} (${entry.source_date})`)
+          .join(", ")
+      : "";
   const qualityRowsView = useMemo(() => {
     const filtered = qualityRows.filter((row) => {
       if (qualityFilter === "all") return true;
@@ -1469,7 +1492,7 @@ export default function IdeasWorkspaceClient({
               <span className="surface-chip px-2.5 py-1">
                 Watchlist: {qualityDipData?.meta?.watchlist_size ?? qualityRows.length}
               </span>
-              <span className="surface-chip px-2.5 py-1">Latest bars: {qualityDipData?.meta?.source_date ?? "—"}</span>
+              <span className="surface-chip px-2.5 py-1">{qualityFreshnessChip}</span>
               <span className="surface-chip px-2.5 py-1">
                 SPY trend: {qualityDipData?.meta?.market?.spy_above_sma200 ? "Healthy" : "Weak"}
               </span>
@@ -1666,6 +1689,11 @@ export default function IdeasWorkspaceClient({
           {" • "}quality_consider_buy={qualitySummary.consider_buy}
           {" • "}quality_watch={qualitySummary.watch}
           {" • "}quality_avoid={qualitySummary.avoid}
+          {" • "}quality_freshness_state={qualityFreshness?.state ?? "—"}
+          {" • "}quality_expected_date={qualityFreshness?.expected_date ?? "—"}
+          {" • "}quality_latest_symbol_date={qualityFreshness?.latest_symbol_date ?? "—"}
+          {" • "}quality_oldest_symbol_date={qualityFreshness?.oldest_symbol_date ?? "—"}
+          {" • "}quality_stale_symbols_count={qualityFreshness?.stale_symbols_count ?? 0}
           {" • "}scan_status={runScanState.status}
           {" • "}scan_request_id={runScanState.requestId ?? "—"}
           {" • "}scan_rows_written={runScanState.rowsWritten}
@@ -1742,6 +1770,14 @@ export default function IdeasWorkspaceClient({
                   {Array.isArray(qualityDipData?.meta?.missing_symbols) && qualityDipData.meta!.missing_symbols!.length > 0 ? (
                     <div className="mt-2 text-[11px] text-slate-500">
                       Missing/insufficient bars: {qualityDipData.meta!.missing_symbols!.join(", ")}
+                    </div>
+                  ) : null}
+                  {qualityFreshness?.state && qualityFreshness.state !== "current" ? (
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      {qualityFreshness.state === "mixed"
+                        ? `Mixed freshness: ${qualityFreshness.stale_symbols_count ?? 0} symbols are behind SPY ${qualityFreshness.expected_date ?? "—"}`
+                        : `Freshness stale: watchlist bars lag SPY ${qualityFreshness.expected_date ?? "—"}`}
+                      {staleQualityPreview ? ` (${staleQualityPreview}${staleQualitySymbols.length > 6 ? ", …" : ""})` : ""}
                     </div>
                   ) : null}
                 </div>
