@@ -152,6 +152,57 @@ export async function loadUniverseSymbols(opts: {
   return { ok: true, symbols, error: null };
 }
 
+async function loadBarsForSymbols(opts: {
+  supabase: ScanEngineClient;
+  symbols: string[];
+  scanDate: string;
+}) {
+  const supa = opts.supabase as any;
+  if (!opts.symbols.length) {
+    return {
+      ok: true,
+      barsBySymbol: new Map<string, Array<{ date: string; open: number; high: number; low: number; close: number; volume: number }>>(),
+      error: null,
+    };
+  }
+
+  const { data, error } = await supa
+    .from("price_bars")
+    .select("symbol,date,open,high,low,close,volume")
+    .in("symbol", opts.symbols)
+    .eq("source", "polygon")
+    .lte("date", opts.scanDate)
+    .order("symbol", { ascending: true })
+    .order("date", { ascending: false });
+
+  if (error) {
+    return {
+      ok: false,
+      barsBySymbol: new Map<string, Array<{ date: string; open: number; high: number; low: number; close: number; volume: number }>>(),
+      error: error.message,
+    };
+  }
+
+  const grouped = new Map<string, Array<{ date: string; open: number; high: number; low: number; close: number; volume: number }>>();
+  for (const row of Array.isArray(data) ? data : []) {
+    const symbol = String((row as any)?.symbol ?? "").toUpperCase();
+    if (!symbol) continue;
+    const existing = grouped.get(symbol) ?? [];
+    if (existing.length >= 300) continue;
+    existing.push({
+      date: String((row as any).date),
+      open: Number((row as any).open),
+      high: Number((row as any).high),
+      low: Number((row as any).low),
+      close: Number((row as any).close),
+      volume: Number((row as any).volume),
+    });
+    grouped.set(symbol, existing);
+  }
+
+  return { ok: true, barsBySymbol: grouped, error: null };
+}
+
 export async function loadRegimeState(opts: {
   supabase: ScanEngineClient;
   scan_date_used: string;
@@ -354,6 +405,20 @@ export async function runScanPipeline(opts: {
     };
   }
 
+  const barsResult = await loadBarsForSymbols({
+    supabase: supa,
+    symbols,
+    scanDate,
+  });
+  if (!barsResult.ok) {
+    return {
+      ok: false,
+      error: barsResult.error ?? "Unable to load bars for symbol batch",
+      scan_date_used: scanDate,
+      lctd_source: dateResolved.lctd_source,
+    };
+  }
+
   const regime = await loadRegimeState({ supabase: supa, scan_date_used: scanDate });
   let spy252Return: number | null = null;
   if (strategy_version === TREND_HOLD_DEFAULT_VERSION) {
@@ -378,94 +443,75 @@ export async function runScanPipeline(opts: {
   const rows: ScanRowPayload[] = [];
   let processed = 0;
   let scored = 0;
-  const concurrency = 12;
-  const workers = Array.from({ length: Math.min(concurrency, symbols.length) }).map(async (_, workerIdx) => {
-    for (let idx = workerIdx; idx < symbols.length; idx += concurrency) {
-      const symbol = symbols[idx];
-      processed += 1;
-      const { data: bars, error: bErr } = await supa
-        .from("price_bars")
-        .select("date,open,high,low,close,volume")
-        .eq("symbol", symbol)
-        .eq("source", "polygon")
-        .lte("date", scanDate)
-        .order("date", { ascending: false })
-        .limit(300);
-      if (bErr || !bars || bars.length < 260) continue;
-      const barsAsc = [...bars].reverse();
+  for (const symbol of symbols) {
+    processed += 1;
+    const bars = barsResult.barsBySymbol.get(symbol) ?? [];
+    if (bars.length < 260) continue;
+    const barsAsc = [...bars].reverse();
 
-      const scoredRow = scoreSymbol({
-        symbol,
-        bars: barsAsc.map((bar: any) => ({
-          date: String(bar.date),
-          open: Number(bar.open),
-          high: Number(bar.high),
-          low: Number(bar.low),
-          close: Number(bar.close),
-          volume: Number(bar.volume),
-        })),
-        regime_state: regime.regime_state,
-        strategy_version,
-        spy252Return,
-      });
-      if (!scoredRow) continue;
-      scored += 1;
+    const scoredRow = scoreSymbol({
+      symbol,
+      bars: barsAsc,
+      regime_state: regime.regime_state,
+      strategy_version,
+      spy252Return,
+    });
+    if (!scoredRow) continue;
+    scored += 1;
 
-      const reasonJson = scoredRow.reason_json && typeof scoredRow.reason_json === "object" ? (scoredRow.reason_json as any) : {};
-      const rankScore = computeRankScore(strategy_version, scoredRow.confidence, reasonJson);
-      const quality = scoreSignalQuality({
-        strategy_version,
-        signal: scoredRow.signal,
-        confidence: scoredRow.confidence,
+    const reasonJson = scoredRow.reason_json && typeof scoredRow.reason_json === "object" ? (scoredRow.reason_json as any) : {};
+    const rankScore = computeRankScore(strategy_version, scoredRow.confidence, reasonJson);
+    const quality = scoreSignalQuality({
+      strategy_version,
+      signal: scoredRow.signal,
+      confidence: scoredRow.confidence,
+      rank_score: rankScore,
+      regime_state: regime.regime_state,
+      reason_json: reasonJson,
+      entry: scoredRow.entry,
+      stop: scoredRow.stop,
+    });
+    const tradeRisk = buildTradeRiskLayer({
+      strategy_version,
+      signal: scoredRow.signal,
+      quality_score: quality.quality_score,
+      risk_grade: quality.risk_grade,
+      confidence: scoredRow.confidence,
+      entry: scoredRow.entry,
+      stop: scoredRow.stop,
+      tp1: scoredRow.tp1,
+      tp2: scoredRow.tp2,
+      max_holding_days: (scoredRow as any)?.max_holding_days ?? null,
+    });
+    rows.push({
+      date: scanDate,
+      universe_slug,
+      strategy_version,
+      symbol,
+      signal: scoredRow.signal,
+      confidence: scoredRow.confidence,
+      rank_score: rankScore,
+      rank: null,
+      entry: scoredRow.entry,
+      stop: scoredRow.stop,
+      tp1: scoredRow.tp1,
+      tp2: scoredRow.tp2,
+      reason_summary: scoredRow.reason_summary,
+      reason_json: {
+        ...reasonJson,
         rank_score: rankScore,
-        regime_state: regime.regime_state,
-        reason_json: reasonJson,
-        entry: scoredRow.entry,
-        stop: scoredRow.stop,
-      });
-      const tradeRisk = buildTradeRiskLayer({
-        strategy_version,
-        signal: scoredRow.signal,
-        quality_score: quality.quality_score,
-        risk_grade: quality.risk_grade,
-        confidence: scoredRow.confidence,
-        entry: scoredRow.entry,
-        stop: scoredRow.stop,
-        tp1: scoredRow.tp1,
-        tp2: scoredRow.tp2,
-        max_holding_days: (scoredRow as any)?.max_holding_days ?? null,
-      });
-      rows.push({
-        date: scanDate,
-        universe_slug,
-        strategy_version,
-        symbol,
-        signal: scoredRow.signal,
-        confidence: scoredRow.confidence,
-        rank_score: rankScore,
-        rank: null,
-        entry: scoredRow.entry,
-        stop: scoredRow.stop,
-        tp1: scoredRow.tp1,
-        tp2: scoredRow.tp2,
-        reason_summary: scoredRow.reason_summary,
-        reason_json: {
-          ...reasonJson,
-          rank_score: rankScore,
-          signal_quality: {
-            quality_score: quality.quality_score,
-            risk_grade: quality.risk_grade,
-            quality_signal: quality.quality_signal,
-            components: quality.components,
-            summary: quality.quality_summary,
-          },
-          trade_risk_layer: tradeRisk,
-        } as RuleEvaluation["reason_json"],
-        updated_at: new Date().toISOString(),
-      });
-    }
-  });
-  await Promise.all(workers);
+        signal_quality: {
+          quality_score: quality.quality_score,
+          risk_grade: quality.risk_grade,
+          quality_signal: quality.quality_signal,
+          components: quality.components,
+          summary: quality.quality_summary,
+        },
+        trade_risk_layer: tradeRisk,
+      } as RuleEvaluation["reason_json"],
+      updated_at: new Date().toISOString(),
+    });
+  }
 
   const futureRows = rows.filter((row) => String(row.date) > scanDate);
   if (futureRows.length > 0) {

@@ -1152,7 +1152,7 @@ export default function IdeasWorkspaceClient({
         return payload?.scan_status ?? null;
       };
       const tryBatch = async (strategy_version: StrategyVersion, universe_slug: string, offset: number) => {
-        const batchCandidates = [200, 120, 80];
+        const batchCandidates = [25, 15, 10];
         let lastErr: Error | null = null;
         for (const size of batchCandidates) {
           const { res, payload } = await postWithTimeout(
@@ -1164,7 +1164,7 @@ export default function IdeasWorkspaceClient({
               offset,
               batch_size: size,
             },
-            58000
+            28000
           );
           if (res.ok && payload?.ok) return { res, payload };
           const msg = String(payload?.error ?? payload?.status ?? `HTTP ${res.status}`);

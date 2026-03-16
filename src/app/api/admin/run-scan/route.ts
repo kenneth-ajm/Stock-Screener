@@ -638,8 +638,8 @@ async function runByMode(req: Request, body: any) {
       universe,
       scanDate,
       offset: 0,
-      batchSize: 200,
-      timeoutMs: 55_000,
+      batchSize: 25,
+      timeoutMs: 25_000,
     });
     const response = {
       ...single,
@@ -669,8 +669,8 @@ async function runByMode(req: Request, body: any) {
 
   if (mode === "batch") {
     const offset = Math.max(0, Number(body?.offset ?? 0) || 0);
-    const batchSizeRaw = Number(body?.batch_size ?? 200) || 200;
-    const batchSize = Math.min(250, Math.max(50, batchSizeRaw));
+    const batchSizeRaw = Number(body?.batch_size ?? 25) || 25;
+    const batchSize = Math.min(40, Math.max(10, batchSizeRaw));
     const out = await runChunkedBatch({
       supabase,
       strategy,
@@ -678,7 +678,7 @@ async function runByMode(req: Request, body: any) {
       scanDate,
       offset,
       batchSize,
-      timeoutMs: 55_000,
+      timeoutMs: 25_000,
     });
     const response = {
       ...out,
