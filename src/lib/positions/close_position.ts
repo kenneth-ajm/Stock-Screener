@@ -95,6 +95,57 @@ function cloneClosedRow(row: PositionRecord, closedQty: number, exitPrice: numbe
   };
 }
 
+function stripUnsupportedCloseColumns<T extends Record<string, unknown>>(payload: T, message: string) {
+  const next = { ...payload };
+  const msg = String(message ?? "");
+  if (/exit_date/i.test(msg)) delete (next as any).exit_date;
+  if (/exit_reason/i.test(msg)) delete (next as any).exit_reason;
+  if (/exit_fee/i.test(msg)) delete (next as any).exit_fee;
+  return next;
+}
+
+async function safeUpdateClosedPosition(opts: {
+  supabase: any;
+  userId: string;
+  positionId: string;
+  patch: Record<string, unknown>;
+}) {
+  const attempt = async (patch: Record<string, unknown>) =>
+    opts.supabase
+      .from("portfolio_positions")
+      .update(patch)
+      .eq("id", opts.positionId)
+      .eq("user_id", opts.userId)
+      .select("id,status,closed_at,exit_price,quantity,shares,position_size")
+      .maybeSingle();
+
+  let result = await attempt(opts.patch);
+  if (result.error && /exit_date|exit_reason|exit_fee/i.test(result.error.message ?? "")) {
+    result = await attempt(stripUnsupportedCloseColumns(opts.patch, result.error.message ?? ""));
+  }
+  if (result.error) throw new Error(result.error.message);
+  return result.data ?? null;
+}
+
+async function safeInsertClosedPosition(opts: {
+  supabase: any;
+  row: Record<string, unknown>;
+}) {
+  const attempt = async (row: Record<string, unknown>) =>
+    opts.supabase
+      .from("portfolio_positions")
+      .insert(row)
+      .select("id,status,closed_at,exit_price,quantity,shares,position_size")
+      .maybeSingle();
+
+  let result = await attempt(opts.row);
+  if (result.error && /exit_date|exit_reason|exit_fee/i.test(result.error.message ?? "")) {
+    result = await attempt(stripUnsupportedCloseColumns(opts.row, result.error.message ?? ""));
+  }
+  if (result.error) throw new Error(result.error.message);
+  return result.data ?? null;
+}
+
 async function fetchOpenPosition(supabase: any, userId: string, positionId: string) {
   const { data, error } = await supabase
     .from("portfolio_positions")
@@ -132,21 +183,19 @@ export async function closeSinglePosition(opts: {
   const fullClose = Math.abs(opts.closeQuantity - totalQty) <= 0.0001;
 
   if (fullClose) {
-    const { data, error } = await opts.supabase
-      .from("portfolio_positions")
-      .update({
+    const data = await safeUpdateClosedPosition({
+      supabase: opts.supabase,
+      userId: opts.userId,
+      positionId: row.id,
+      patch: {
         status: "CLOSED",
         closed_at: closedAt,
         exit_price: opts.exitPrice,
         exit_fee: opts.exitFee,
         exit_reason: opts.exitReason,
         exit_date: exitDate,
-      })
-      .eq("id", row.id)
-      .eq("user_id", opts.userId)
-      .select("id,status,closed_at,exit_price,exit_fee,exit_reason,exit_date,quantity,shares,position_size")
-      .maybeSingle();
-    if (error) throw new Error(error.message);
+      },
+    });
     return {
       mode: "full" as const,
       closed_count: 1,
@@ -183,13 +232,13 @@ export async function closeSinglePosition(opts: {
     splitFees.closedFee
   );
 
-  const { data: inserted, error: insertError } = await opts.supabase
-    .from("portfolio_positions")
-    .insert(closedRow)
-    .select("id,status,closed_at,exit_price,exit_fee,exit_reason,exit_date,quantity,shares,position_size")
-    .maybeSingle();
-
-  if (insertError) {
+  let inserted: any = null;
+  try {
+    inserted = await safeInsertClosedPosition({
+      supabase: opts.supabase,
+      row: closedRow,
+    });
+  } catch (error: any) {
     await opts.supabase
       .from("portfolio_positions")
       .update({
@@ -198,7 +247,7 @@ export async function closeSinglePosition(opts: {
       })
       .eq("id", row.id)
       .eq("user_id", opts.userId);
-    throw new Error(insertError.message);
+    throw error;
   }
 
   return {
