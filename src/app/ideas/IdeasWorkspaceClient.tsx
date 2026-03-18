@@ -102,6 +102,14 @@ type Payload = {
     breadth_label?: string | null;
     pct_above_sma50?: number | null;
     pct_above_sma200?: number | null;
+    market_data_status?: {
+      is_stale?: boolean;
+      reasons?: string[] | null;
+      expected_latest_trading_day?: string | null;
+      scheduler_last_run_at?: string | null;
+      scheduler_last_scan_date?: string | null;
+      scheduler_last_ok?: boolean | null;
+    } | null;
   };
   capacity?: {
     cash_available: number;
@@ -205,6 +213,14 @@ type QualityRefreshState = {
   error: string | null;
 };
 
+type MarketRefreshState = {
+  status: "idle" | "running" | "completed" | "failed";
+  detail: string | null;
+  durationMs: number | null;
+  scanDate: string | null;
+  error: string | null;
+};
+
 function round1(n: number) {
   return Math.round(n * 10) / 10;
 }
@@ -224,6 +240,20 @@ function fmtSignedPct(v: number | null) {
   if (v === null || !Number.isFinite(v)) return "—";
   const sign = v > 0 ? "+" : "";
   return `${sign}${v.toFixed(1)}%`;
+}
+
+function formatCompactDateTime(value: string | null | undefined) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return new Intl.DateTimeFormat("en-SG", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(parsed);
 }
 
 export default function IdeasWorkspaceClient({
@@ -324,6 +354,13 @@ export default function IdeasWorkspaceClient({
     latestBarDate: null,
     error: null,
   });
+  const [marketRefreshState, setMarketRefreshState] = useState<MarketRefreshState>({
+    status: "idle",
+    detail: null,
+    durationMs: null,
+    scanDate: null,
+    error: null,
+  });
   const [refreshNonce, setRefreshNonce] = useState(0);
   const tradeTicketRef = useRef<HTMLDivElement | null>(null);
   const entryInputRef = useRef<HTMLInputElement | null>(null);
@@ -333,6 +370,7 @@ export default function IdeasWorkspaceClient({
   } as const;
   const runScanBusy = runScanState.status === "starting" || runScanState.status === "running";
   const qualityRefreshBusy = qualityRefreshState.status === "running";
+  const marketRefreshBusy = marketRefreshState.status === "running";
 
   useEffect(() => {
     setStrategy(initialStrategy);
@@ -473,6 +511,55 @@ export default function IdeasWorkspaceClient({
         symbolsAttempted: 0,
         expectedMarketDate: null,
         latestBarDate: null,
+        error: String(e?.message ?? "Unknown error"),
+      });
+    }
+  }
+
+  async function runMarketDataRefresh() {
+    const startedAt = Date.now();
+    setMarketRefreshState({
+      status: "running",
+      detail: "Refreshing official daily market data pipeline...",
+      durationMs: null,
+      scanDate: null,
+      error: null,
+    });
+    try {
+      const res = await fetch("/api/admin/refresh-market-data", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload) {
+        throw new Error(String(payload?.error ?? `HTTP ${res.status}`));
+      }
+      const ok = Boolean(payload?.ok);
+      const scanDate = String(payload?.scan_date_used ?? "") || null;
+      setMarketRefreshState({
+        status: ok ? "completed" : "failed",
+        detail: ok
+          ? `Market data refresh completed${scanDate ? ` for ${scanDate}` : ""}.`
+          : `Market data refresh failed: ${String(payload?.error ?? "Unknown error")}`,
+        durationMs: Number(payload?.duration_ms ?? Date.now() - startedAt),
+        scanDate,
+        error: ok ? null : String(payload?.error ?? "Unknown error"),
+      });
+      if (ok && scanDate) {
+        setScanDateHintByStrategy((prev) => ({
+          ...prev,
+          v1: scanDate,
+          v1_trend_hold: scanDate,
+          v1_sector_momentum: scanDate,
+        }));
+      }
+      if (ok) setRefreshNonce((n) => n + 1);
+    } catch (e: any) {
+      setMarketRefreshState({
+        status: "failed",
+        detail: `Market data refresh failed: ${String(e?.message ?? "Unknown error")}`,
+        durationMs: Date.now() - startedAt,
+        scanDate: null,
         error: String(e?.message ?? "Unknown error"),
       });
     }
@@ -816,6 +903,14 @@ export default function IdeasWorkspaceClient({
     runScanState.status === "completed_zero" &&
     readContextMatchesLatestManualScan &&
     Number(data?.meta?.rows_display_count ?? 0) > 0;
+  const marketDataStatus = data?.meta?.market_data_status ?? null;
+  const marketDataIsStale = strategy !== "quality_dip" && Boolean(marketDataStatus?.is_stale);
+  const marketDataReasonSummary =
+    Array.isArray(marketDataStatus?.reasons) && marketDataStatus.reasons.length > 0
+      ? marketDataStatus.reasons.join(" • ")
+      : "Underlying price bars are stale.";
+  const marketDataLastRunLabel = formatCompactDateTime(marketDataStatus?.scheduler_last_run_at ?? null);
+  const marketDataRefreshDetail = marketRefreshState.detail ?? "—";
   const fillNum = Number(fill);
   const stopNum = Number(selected?.stop ?? 0);
   const riskPerShare = fillNum > 0 && stopNum > 0 ? fillNum - stopNum : 0;
@@ -1544,6 +1639,14 @@ export default function IdeasWorkspaceClient({
         <div className="flex items-center gap-2">
           <button
             type="button"
+            onClick={runMarketDataRefresh}
+            disabled={marketRefreshBusy || runScanBusy}
+            className="rounded-xl border border-[#d8c8aa] bg-white px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#f8f1e4] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {marketRefreshBusy ? "Refreshing bars..." : "Refresh Market Data"}
+          </button>
+          <button
+            type="button"
             onClick={() => runStrategyScan("v1", "Momentum Scan")}
             disabled={runScanBusy}
             className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
@@ -1590,6 +1693,15 @@ export default function IdeasWorkspaceClient({
           ) : (
             <>
               <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
+          {marketDataIsStale ? (
+            <span className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 font-semibold text-rose-700">
+              Market data stale
+            </span>
+          ) : (
+            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700">
+              Market data current
+            </span>
+          )}
           <span className="surface-chip px-2.5 py-1">
             Latest scan: {data?.meta?.date_used ?? "—"}
             {data?.meta?.read_context_is_fallback ? " (fallback)" : ""}
@@ -1631,6 +1743,56 @@ export default function IdeasWorkspaceClient({
           )}
         </div>
       </div>
+      {strategy !== "quality_dip" && marketDataIsStale ? (
+        <div className="mt-[-8px] rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+          <div className="font-medium">Market data is stale</div>
+          <div className="mt-0.5">
+            Ideas is rescanning cached bars, so running a manual scan will not make dates newer until Polygon daily bars are refreshed.
+          </div>
+          <div className="mt-1">{marketDataReasonSummary}</div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] opacity-90">
+            <span className="surface-chip px-2 py-0.5">
+              expected latest trading day: {marketDataStatus?.expected_latest_trading_day ?? "—"}
+            </span>
+            <span className="surface-chip px-2 py-0.5">
+              scheduler last run: {marketDataLastRunLabel}
+            </span>
+            <span className="surface-chip px-2 py-0.5">
+              scheduler last scan date: {marketDataStatus?.scheduler_last_scan_date ?? "—"}
+            </span>
+            <span className="surface-chip px-2 py-0.5">
+              scheduler ok: {marketDataStatus?.scheduler_last_ok ? "yes" : "no"}
+            </span>
+          </div>
+        </div>
+      ) : null}
+      {strategy !== "quality_dip" && marketRefreshState.status !== "idle" ? (
+        <div
+          className={`mt-[-8px] rounded-xl border px-3 py-2 text-xs ${
+            marketRefreshState.status === "failed"
+              ? "border-rose-200 bg-rose-50 text-rose-700"
+              : marketRefreshState.status === "running"
+                ? "border-amber-200 bg-amber-50 text-amber-700"
+                : "border-emerald-200 bg-emerald-50 text-emerald-700"
+          }`}
+        >
+          <div className="font-medium">
+            {marketRefreshState.status === "running"
+              ? "Market data refresh running"
+              : marketRefreshState.status === "completed"
+                ? "Market data refresh completed"
+                : "Market data refresh failed"}
+          </div>
+          <div className="mt-0.5">{marketDataRefreshDetail}</div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] opacity-90">
+            <span className="surface-chip px-2 py-0.5">scan date: {marketRefreshState.scanDate ?? "—"}</span>
+            <span className="surface-chip px-2 py-0.5">
+              duration: {marketRefreshState.durationMs != null ? `${marketRefreshState.durationMs}ms` : "—"}
+            </span>
+          </div>
+          {marketRefreshState.error ? <div className="mt-1 text-[11px]">{marketRefreshState.error}</div> : null}
+        </div>
+      ) : null}
       {strategy === "quality_dip" && qualityRefreshState.status !== "idle" ? (
         <div
           className={`mt-[-8px] rounded-xl border px-3 py-2 text-xs ${
@@ -1835,6 +1997,15 @@ export default function IdeasWorkspaceClient({
           {" • "}scan_error={runScanState.error ?? "—"}
           {" • "}strategy_date_hint={scanDateHintByStrategy[strategy] ?? "—"}
           {" • "}cache_bust={data?.meta?.cache_bust ?? "—"}
+          {" • "}market_data_stale={String(Boolean(data?.meta?.market_data_status?.is_stale))}
+          {" • "}market_data_reasons={(data?.meta?.market_data_status?.reasons ?? []).join(" > ") || "none"}
+          {" • "}market_data_expected={data?.meta?.market_data_status?.expected_latest_trading_day ?? "—"}
+          {" • "}market_scheduler_last_run={data?.meta?.market_data_status?.scheduler_last_run_at ?? "—"}
+          {" • "}market_scheduler_last_scan={data?.meta?.market_data_status?.scheduler_last_scan_date ?? "—"}
+          {" • "}market_scheduler_ok={String(Boolean(data?.meta?.market_data_status?.scheduler_last_ok))}
+          {" • "}market_refresh_status={marketRefreshState.status}
+          {" • "}market_refresh_scan_date={marketRefreshState.scanDate ?? "—"}
+          {" • "}market_refresh_error={marketRefreshState.error ?? "—"}
         </div>
       ) : null}
 

@@ -13,6 +13,7 @@ import {
   SECTOR_MOMENTUM_STRATEGY_VERSION,
 } from "@/lib/sector_momentum";
 import { allowedUniversesForStrategy, defaultUniverseForStrategy } from "@/lib/strategy_universe";
+import { OBS_KEYS } from "@/lib/observability";
 
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY = "v1";
@@ -133,6 +134,39 @@ function classifyBreadth(regimeState: string | null, pct50: number, pct200: numb
   if (favorable && pct50 >= 60 && pct200 >= 50) return { breadthState: "STRONG" as const, breadthLabel: "Breadth strong" };
   if (!favorable || pct50 < 40 || pct200 < 35) return { breadthState: "WEAK" as const, breadthLabel: "Breadth weak" };
   return { breadthState: "MIXED" as const, breadthLabel: "Breadth mixed" };
+}
+
+function shiftDate(date: string, days: number) {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function previousWeekday(date: string) {
+  let current = date;
+  while (true) {
+    current = shiftDate(current, -1);
+    const day = new Date(`${current}T00:00:00Z`).getUTCDay();
+    if (day >= 1 && day <= 5) return current;
+  }
+}
+
+function latestCompletedUsTradingDay() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const today = `${get("year")}-${get("month")}-${get("day")}`;
+  const hour = Number(get("hour") || "0");
+  const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
+  if (weekday === 0) return previousWeekday(today);
+  if (weekday === 6) return previousWeekday(today);
+  return hour >= 18 ? today : previousWeekday(today);
 }
 
 function computeSectorBreadth(rows: ScanRow[], regimeState: string | null) {
@@ -481,6 +515,26 @@ const loadScreenerDataCached = unstable_cache(
       latestUniverseStats(supabase as any, strategyVersion, "liquid_2000"),
       latestUniverseStats(supabase as any, strategyVersion, "growth_1500"),
     ]);
+    const { data: schedulerStatus } = await (supabase as any)
+      .from("system_status")
+      .select("updated_at,value")
+      .eq("key", OBS_KEYS.scheduler)
+      .maybeSingle();
+    const schedulerValue = (schedulerStatus?.value ?? null) as any;
+    const schedulerUpdatedAt = schedulerStatus?.updated_at ? String(schedulerStatus.updated_at) : null;
+    const schedulerScanDate = schedulerValue?.scan_date_used ? String(schedulerValue.scan_date_used) : null;
+    const expectedLatestTradingDay = latestCompletedUsTradingDay();
+    const marketDataReasons: string[] = [];
+    if (!lctd.lctd) {
+      marketDataReasons.push("No price_bars LCTD available");
+    } else if (lctd.lctd < expectedLatestTradingDay) {
+      marketDataReasons.push(`LCTD ${lctd.lctd} is behind expected ${expectedLatestTradingDay}`);
+    }
+    if (!schedulerUpdatedAt) {
+      marketDataReasons.push("No recent daily scheduler status found");
+    } else if (schedulerScanDate && schedulerScanDate < expectedLatestTradingDay) {
+      marketDataReasons.push(`Scheduler scan date ${schedulerScanDate} is behind expected ${expectedLatestTradingDay}`);
+    }
 
     return {
       ok: true,
@@ -539,6 +593,14 @@ const loadScreenerDataCached = unstable_cache(
         pct_above_sma50: breadth.pctAboveSma50,
         pct_above_sma200: breadth.pctAboveSma200,
         breadth_sample_size: breadth.sampleSize,
+        market_data_status: {
+          is_stale: marketDataReasons.length > 0,
+          reasons: marketDataReasons,
+          expected_latest_trading_day: expectedLatestTradingDay,
+          scheduler_last_run_at: schedulerUpdatedAt,
+          scheduler_last_scan_date: schedulerScanDate,
+          scheduler_last_ok: schedulerValue?.ok === true,
+        },
       },
       capacity,
       universe_slug: mappedUniverse,

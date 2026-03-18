@@ -96,7 +96,7 @@ async function runStage(name: string, fn: () => Promise<Record<string, unknown>>
   }
 }
 
-async function runWorkflow(opts: { dry_run?: boolean; trigger?: Record<string, unknown> }) {
+export async function runWorkflow(opts: { dry_run?: boolean; trigger?: Record<string, unknown> }) {
   const startedAt = Date.now();
   const startedAtIso = nowIso();
   const dry_run = opts.dry_run === true;
