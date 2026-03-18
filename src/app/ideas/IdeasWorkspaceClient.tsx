@@ -2065,6 +2065,9 @@ export default function IdeasWorkspaceClient({
                       <option value="price">Price</option>
                       <option value="symbol">Symbol</option>
                     </select>
+                    <span className="ml-2 text-[11px] text-slate-500">
+                      Dip reference uses the highest high from the last 30 trading bars.
+                    </span>
                   </div>
                   {Array.isArray(qualityDipData?.meta?.missing_symbols) && qualityDipData.meta!.missing_symbols!.length > 0 ? (
                     <div className="mt-2 text-[11px] text-slate-500">
@@ -2123,8 +2126,8 @@ export default function IdeasWorkspaceClient({
                             <td className="px-3 py-2.5">
                               {row.drop_pct_from_30d_high != null ? `${row.drop_pct_from_30d_high.toFixed(2)}%` : "—"}
                               {row.high_30d != null ? (
-                                <div className="text-[10px] text-slate-500" title="30-bar high">
-                                  high {row.high_30d.toFixed(2)}
+                                <div className="text-[10px] text-slate-500" title="Highest high across the last 30 trading bars">
+                                  30-bar high {row.high_30d.toFixed(2)}
                                 </div>
                               ) : null}
                             </td>
