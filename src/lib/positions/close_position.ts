@@ -119,9 +119,13 @@ async function safeUpdateClosedPosition(opts: {
       .select("id,status,closed_at,exit_price,quantity,shares,position_size")
       .maybeSingle();
 
-  let result = await attempt(opts.patch);
-  if (result.error && /exit_date|exit_reason|exit_fee/i.test(result.error.message ?? "")) {
-    result = await attempt(stripUnsupportedCloseColumns(opts.patch, result.error.message ?? ""));
+  let patch = { ...opts.patch };
+  let result = await attempt(patch);
+  while (result.error && /exit_date|exit_reason|exit_fee/i.test(result.error.message ?? "")) {
+    const nextPatch = stripUnsupportedCloseColumns(patch, result.error.message ?? "");
+    if (JSON.stringify(nextPatch) === JSON.stringify(patch)) break;
+    patch = nextPatch;
+    result = await attempt(patch);
   }
   if (result.error) throw new Error(result.error.message);
   return result.data ?? null;
@@ -138,9 +142,13 @@ async function safeInsertClosedPosition(opts: {
       .select("id,status,closed_at,exit_price,quantity,shares,position_size")
       .maybeSingle();
 
-  let result = await attempt(opts.row);
-  if (result.error && /exit_date|exit_reason|exit_fee/i.test(result.error.message ?? "")) {
-    result = await attempt(stripUnsupportedCloseColumns(opts.row, result.error.message ?? ""));
+  let row = { ...opts.row };
+  let result = await attempt(row);
+  while (result.error && /exit_date|exit_reason|exit_fee/i.test(result.error.message ?? "")) {
+    const nextRow = stripUnsupportedCloseColumns(row, result.error.message ?? "");
+    if (JSON.stringify(nextRow) === JSON.stringify(row)) break;
+    row = nextRow;
+    result = await attempt(row);
   }
   if (result.error) throw new Error(result.error.message);
   return result.data ?? null;

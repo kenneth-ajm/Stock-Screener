@@ -32,17 +32,39 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "id is required" }, { status: 400 });
   }
 
-  const { data: updated, error } = await supabase
-    .from("portfolio_positions")
-    .update({
-      exit_reason: exitReason,
-      notes,
-    })
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .eq("status", "CLOSED")
-    .select("id, exit_reason, notes")
-    .maybeSingle();
+  const attempt = async (patch: Record<string, unknown>, selectCols: string) =>
+    supabase
+      .from("portfolio_positions")
+      .update(patch)
+      .eq("id", id)
+      .eq("user_id", user.id)
+      .eq("status", "CLOSED")
+      .select(selectCols)
+      .maybeSingle();
+
+  let patch: Record<string, unknown> = {
+    exit_reason: exitReason,
+    notes,
+  };
+  let selectCols = "id, exit_reason, notes";
+  let { data: updated, error } = await attempt(patch, selectCols);
+  while (error && /exit_reason|notes/i.test(error.message ?? "")) {
+    if (/exit_reason/i.test(error.message ?? "")) {
+      delete patch.exit_reason;
+      selectCols = selectCols.replace(", exit_reason", "").replace("exit_reason, ", "");
+    }
+    if (/notes/i.test(error.message ?? "")) {
+      delete patch.notes;
+      selectCols = selectCols.replace(", notes", "").replace("notes, ", "");
+    }
+    if (Object.keys(patch).length === 0) {
+      return NextResponse.json({ ok: false, error: "Review fields are not available in this schema yet" }, { status: 400 });
+    }
+    const retried = await attempt(patch, selectCols);
+    updated = retried.data;
+    error = retried.error;
+    if (!error) break;
+  }
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
@@ -53,4 +75,3 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok: true, trade: updated });
 }
-

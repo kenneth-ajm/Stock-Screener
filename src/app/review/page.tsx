@@ -29,21 +29,38 @@ function diffDays(start: string | null | undefined, end: string | null | undefin
 
 export const dynamic = "force-dynamic";
 
+async function loadClosedRowsWithFallback(supabase: any, portfolioId: string) {
+  const primary = await supabase
+    .from("portfolio_positions")
+    .select(
+      "id,symbol,strategy_version,entry_price,exit_price,stop_price,shares,quantity,position_size,entry_date,exit_date,created_at,closed_at,entry_fee,exit_fee,exit_reason,notes"
+    )
+    .eq("portfolio_id", portfolioId)
+    .eq("status", "CLOSED")
+    .order("closed_at", { ascending: false })
+    .limit(300);
+
+  if (!primary.error) return primary;
+  if (!/exit_date|exit_reason|notes/i.test(primary.error.message ?? "")) return primary;
+
+  return await supabase
+    .from("portfolio_positions")
+    .select(
+      "id,symbol,strategy_version,entry_price,exit_price,stop_price,shares,quantity,position_size,entry_date,created_at,closed_at,entry_fee,exit_fee"
+    )
+    .eq("portfolio_id", portfolioId)
+    .eq("status", "CLOSED")
+    .order("closed_at", { ascending: false })
+    .limit(300);
+}
+
 export default async function ReviewPage() {
   const { supabase, user, portfolios, defaultPortfolio } = await getWorkspaceContext("/review");
   const portfolioId = String(defaultPortfolio?.id ?? "");
 
   const { data: closedRows } =
     portfolioId
-      ? await supabase
-          .from("portfolio_positions")
-          .select(
-            "id,symbol,strategy_version,entry_price,exit_price,stop_price,shares,quantity,position_size,entry_date,exit_date,created_at,closed_at,entry_fee,exit_fee,exit_reason,notes"
-          )
-          .eq("portfolio_id", portfolioId)
-          .eq("status", "CLOSED")
-          .order("closed_at", { ascending: false })
-          .limit(300)
+      ? await loadClosedRowsWithFallback(supabase, portfolioId)
       : ({ data: [] } as any);
   const closed = (closedRows ?? []).map((row: any) => {
     const symbol = String(row?.symbol ?? "").trim().toUpperCase();
