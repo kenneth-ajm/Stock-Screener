@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { closeGroupedSymbol } from "@/lib/positions/close_position";
 
 export async function POST(req: Request) {
   const cookieStore = await cookies();
@@ -31,12 +32,30 @@ export async function POST(req: Request) {
   const portfolioId = String(body?.portfolio_id ?? "").trim();
   const symbolRaw = String(body?.symbol ?? "").trim();
   const symbolUpper = symbolRaw.toUpperCase();
+  const exitPrice = Number(body?.exit_price);
+  const exitFeeRaw = body?.exit_fee;
+  const exitFee = exitFeeRaw == null || exitFeeRaw === "" ? null : Number(exitFeeRaw);
+  const exitReason = String(body?.exit_reason ?? "MANUAL").trim().toUpperCase();
+  const closeQuantity = Number(body?.close_quantity);
+  const allowedReasons = new Set(["TP1", "TP2", "STOP", "MANUAL", "TIME"]);
 
   if (!portfolioId) {
     return NextResponse.json({ ok: false, error: "portfolio_id is required" }, { status: 400 });
   }
   if (!symbolUpper) {
     return NextResponse.json({ ok: false, error: "symbol is required" }, { status: 400 });
+  }
+  if (!Number.isFinite(exitPrice) || exitPrice <= 0) {
+    return NextResponse.json({ ok: false, error: "exit_price is required and must be > 0" }, { status: 400 });
+  }
+  if (exitFee !== null && (!Number.isFinite(exitFee) || exitFee < 0)) {
+    return NextResponse.json({ ok: false, error: "exit_fee is invalid (must be >= 0)" }, { status: 400 });
+  }
+  if (!allowedReasons.has(exitReason)) {
+    return NextResponse.json({ ok: false, error: "Invalid exit_reason" }, { status: 400 });
+  }
+  if (!Number.isFinite(closeQuantity) || closeQuantity <= 0) {
+    return NextResponse.json({ ok: false, error: "close_quantity is required and must be > 0" }, { status: 400 });
   }
 
   const { data: portfolio, error: portfolioErr } = await supabase
@@ -53,50 +72,32 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "Portfolio not found for current user" }, { status: 404 });
   }
 
-  const { data: openRows, error: readErr } = await supabase
-    .from("portfolio_positions")
-    .select("id,symbol,status")
-    .eq("user_id", user.id)
-    .eq("portfolio_id", portfolioId)
-    .eq("status", "OPEN");
-  if (readErr) {
-    return NextResponse.json({ ok: false, error: readErr.message }, { status: 500 });
+  try {
+    const result = await closeGroupedSymbol({
+      supabase,
+      userId: user.id,
+      portfolioId,
+      symbol: symbolUpper,
+      exitPrice,
+      exitFee,
+      exitReason,
+      closeQuantity,
+    });
+    return NextResponse.json({
+      ok: true,
+      portfolio_id: portfolioId,
+      symbol: symbolUpper,
+      mode: result.mode,
+      closed_count: result.closed_count,
+      closed_quantity: result.closed_quantity,
+      remaining_quantity: result.remaining_quantity,
+    });
+  } catch (error: any) {
+    const message = String(error?.message ?? "Close symbol failed");
+    const status =
+      /not found/i.test(message) ? 404 :
+      /positive number|exceeds open quantity|invalid/i.test(message) ? 400 :
+      500;
+    return NextResponse.json({ ok: false, error: message }, { status });
   }
-
-  const targetIds = (openRows ?? [])
-    .filter((row: any) => String(row?.symbol ?? "").toUpperCase() === symbolUpper)
-    .map((row: any) => row.id)
-    .filter(Boolean);
-  if (targetIds.length === 0) {
-    return NextResponse.json(
-      { ok: false, error: `No OPEN lots found for ${symbolUpper}` },
-      { status: 404 }
-    );
-  }
-
-  const closedAt = new Date().toISOString();
-  const exitDate = closedAt.slice(0, 10);
-
-  const { data: updated, error: closeErr } = await supabase
-    .from("portfolio_positions")
-    .update({
-      status: "CLOSED",
-      closed_at: closedAt,
-      exit_price: null,
-      exit_reason: "MANUAL",
-      exit_date: exitDate,
-    })
-    .in("id", targetIds)
-    .eq("user_id", user.id)
-    .select("id");
-  if (closeErr) {
-    return NextResponse.json({ ok: false, error: closeErr.message }, { status: 500 });
-  }
-
-  return NextResponse.json({
-    ok: true,
-    portfolio_id: portfolioId,
-    symbol: symbolUpper,
-    closed_count: Array.isArray(updated) ? updated.length : 0,
-  });
 }

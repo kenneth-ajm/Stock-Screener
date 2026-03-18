@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { closeSinglePosition } from "@/lib/positions/close_position";
 
 export async function POST(req: Request) {
   const cookieStore = await cookies();
@@ -38,6 +39,8 @@ export async function POST(req: Request) {
   const exitPrice = Number(exitPriceRaw);
   const exitFeeRaw = body?.exit_fee;
   const exitFee = exitFeeRaw == null || exitFeeRaw === "" ? null : Number(exitFeeRaw);
+  const closeQuantityRaw = body?.close_quantity;
+  const closeQuantity = Number(closeQuantityRaw);
 
   if (!positionId) {
     return NextResponse.json({ ok: false, error: "position_id is required" }, { status: 400 });
@@ -55,6 +58,12 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
+  if (!Number.isFinite(closeQuantity) || closeQuantity <= 0) {
+    return NextResponse.json(
+      { ok: false, error: "close_quantity is required and must be a positive number" },
+      { status: 400 }
+    );
+  }
 
   if (!allowedReasons.has(exitReason)) {
     return NextResponse.json(
@@ -67,65 +76,30 @@ export async function POST(req: Request) {
     );
   }
 
-  // Optional safety: only close OPEN positions
-  const { data: existing, error: readErr } = await supabase
-    .from("portfolio_positions")
-    .select("id, status")
-    .eq("id", positionId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (readErr) {
-    return NextResponse.json({ ok: false, error: readErr.message }, { status: 500 });
+  try {
+    const result = await closeSinglePosition({
+      supabase,
+      userId: user.id,
+      positionId,
+      exitPrice,
+      exitFee,
+      exitReason,
+      closeQuantity,
+    });
+    return NextResponse.json({
+      ok: true,
+      mode: result.mode,
+      closed_count: result.closed_count,
+      closed_quantity: result.closed_quantity,
+      remaining_quantity: result.remaining_quantity,
+      position: result.position,
+    });
+  } catch (error: any) {
+    const message = String(error?.message ?? "Close failed");
+    const status =
+      /not found/i.test(message) ? 404 :
+      /not open|exceeds open quantity|positive number|invalid/i.test(message) ? 400 :
+      500;
+    return NextResponse.json({ ok: false, error: message }, { status });
   }
-
-  if (!existing) {
-    return NextResponse.json({ ok: false, error: "Position not found" }, { status: 404 });
-  }
-
-  if (existing.status !== "OPEN") {
-    return NextResponse.json(
-      { ok: false, error: "Position is not OPEN" },
-      { status: 400 }
-    );
-  }
-
-  const closedAt = new Date().toISOString();
-  const exitDate = closedAt.slice(0, 10);
-
-  const attempt = async (withNewColumns: boolean) => {
-    const patch: Record<string, unknown> = {
-      status: "CLOSED",
-      closed_at: closedAt,
-      exit_price: exitPrice,
-    };
-    if (withNewColumns) {
-      patch.exit_reason = exitReason;
-      patch.exit_date = exitDate;
-      patch.exit_fee = exitFee;
-    }
-    const query = supabase
-      .from("portfolio_positions")
-      .update(patch)
-      .eq("id", positionId)
-      .eq("user_id", user.id);
-    return withNewColumns
-      ? query.select("id, status, closed_at, exit_price, exit_fee, exit_reason, exit_date").maybeSingle()
-      : query.select("id, status, closed_at, exit_price").maybeSingle();
-  };
-
-  let { data: updated, error } = await attempt(true);
-
-  // Backward compatibility: if DB migration not yet applied, retry without new columns.
-  if (error && /exit_reason|exit_date|exit_fee/i.test(error.message ?? "")) {
-    const legacy = await attempt(false);
-    updated = legacy.data;
-    error = legacy.error;
-  }
-
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ ok: true, position: updated, exit_reason: exitReason, exit_date: exitDate });
 }

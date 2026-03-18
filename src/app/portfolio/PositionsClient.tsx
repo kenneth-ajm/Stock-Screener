@@ -292,12 +292,13 @@ export default function PositionsClient({
   // Close modal state (still closes a single lot for now)
   const [closeModalOpen, setCloseModalOpen] = useState(false);
   const [activePosition, setActivePosition] = useState<PositionRow | null>(null);
+  const [activeGroupedRow, setActiveGroupedRow] = useState<GroupedOpenRow | null>(null);
   const [exitPriceInput, setExitPriceInput] = useState("");
+  const [closeQtyInput, setCloseQtyInput] = useState("");
   const [exitFeeInput, setExitFeeInput] = useState("");
   const [exitReasonInput, setExitReasonInput] = useState<"TP1" | "TP2" | "STOP" | "MANUAL" | "TIME">("MANUAL");
   const [closeError, setCloseError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
-  const [closingGroupKey, setClosingGroupKey] = useState<string | null>(null);
 
   // Manual add modal state
   const [manualOpen, setManualOpen] = useState(false);
@@ -354,7 +355,24 @@ export default function PositionsClient({
 
   function openCloseModal(p: PositionRow) {
     setActivePosition(p);
+    setActiveGroupedRow(null);
     setExitPriceInput("");
+    setCloseQtyInput(String(resolveQty(p)));
+    setExitFeeInput(
+      typeof defaultFeePerOrder === "number" && Number.isFinite(defaultFeePerOrder)
+        ? defaultFeePerOrder.toFixed(2)
+        : ""
+    );
+    setExitReasonInput("MANUAL");
+    setCloseError(null);
+    setCloseModalOpen(true);
+  }
+
+  function openCloseGroupedModal(row: GroupedOpenRow) {
+    setActiveGroupedRow(row);
+    setActivePosition(null);
+    setExitPriceInput("");
+    setCloseQtyInput(String(row.qty));
     setExitFeeInput(
       typeof defaultFeePerOrder === "number" && Number.isFinite(defaultFeePerOrder)
         ? defaultFeePerOrder.toFixed(2)
@@ -369,19 +387,31 @@ export default function PositionsClient({
     if (closing) return;
     setCloseModalOpen(false);
     setActivePosition(null);
+    setActiveGroupedRow(null);
     setExitPriceInput("");
+    setCloseQtyInput("");
     setExitFeeInput("");
     setExitReasonInput("MANUAL");
     setCloseError(null);
   }
 
   async function submitClose() {
-    if (!activePosition) return;
+    if (!activePosition && !activeGroupedRow) return;
 
     const exitPrice = Number(exitPriceInput);
+    const closeQty = Number(closeQtyInput);
     const exitFee = Number(exitFeeInput);
+    const maxQty = activePosition ? resolveQty(activePosition) : activeGroupedRow ? activeGroupedRow.qty : 0;
     if (!Number.isFinite(exitPrice) || exitPrice <= 0) {
       setCloseError("Please enter a valid positive exit price.");
+      return;
+    }
+    if (!Number.isFinite(closeQty) || closeQty <= 0) {
+      setCloseError("Please enter a valid quantity to close.");
+      return;
+    }
+    if (closeQty - maxQty > 0.0001) {
+      setCloseError(`Close quantity exceeds open quantity (${formatInt(maxQty)}).`);
       return;
     }
     if (exitFeeInput.trim() && (!Number.isFinite(exitFee) || exitFee < 0)) {
@@ -393,15 +423,27 @@ export default function PositionsClient({
       setClosing(true);
       setCloseError(null);
 
-      const res = await fetch("/api/positions/close", {
+      const endpoint = activePosition ? "/api/positions/close" : "/api/portfolio/close-symbol";
+      const body = activePosition
+        ? {
+            position_id: activePosition.id,
+            exit_price: exitPrice,
+            exit_fee: exitFeeInput.trim() ? exitFee : null,
+            exit_reason: exitReasonInput,
+            close_quantity: closeQty,
+          }
+        : {
+            portfolio_id: String(activeGroupedRow?.portfolio_id ?? ""),
+            symbol: activeGroupedRow?.symbol,
+            exit_price: exitPrice,
+            exit_fee: exitFeeInput.trim() ? exitFee : null,
+            exit_reason: exitReasonInput,
+            close_quantity: closeQty,
+          };
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          position_id: activePosition.id,
-          exit_price: exitPrice,
-          exit_fee: exitFeeInput.trim() ? exitFee : null,
-          exit_reason: exitReasonInput,
-        }),
+        body: JSON.stringify(body),
       });
 
       const payload = await res.json().catch(() => null);
@@ -410,50 +452,18 @@ export default function PositionsClient({
       }
 
       closeCloseModal();
-      showToast("Position closed ✅");
+      const remainingQty = Number(payload?.remaining_quantity ?? Math.max(0, maxQty - closeQty));
+      const partiallyClosed = remainingQty > 0.0001;
+      showToast(
+        partiallyClosed
+          ? `Closed ${formatInt(closeQty)} share(s); ${formatInt(remainingQty)} remaining ✅`
+          : "Position closed ✅"
+      );
       setTimeout(() => window.location.reload(), 650);
     } catch (e: any) {
       setCloseError(e?.message ?? "Close failed.");
     } finally {
       setClosing(false);
-    }
-  }
-
-  async function submitCloseGrouped(row: GroupedOpenRow) {
-    const portfolioId = String(row.portfolio_id ?? "").trim();
-    if (!portfolioId) {
-      showToast("Missing portfolio id for grouped position.");
-      return;
-    }
-    const lotsCount = row.lotIds.length;
-    const ok = window.confirm(
-      `Close all lots for ${row.symbol} (${lotsCount} lot${lotsCount === 1 ? "" : "s"}, total qty ${Math.round(
-        row.qty
-      )})?`
-    );
-    if (!ok) return;
-
-    const groupKey = `${row.portfolio_id ?? ""}:${row.symbol}`;
-    try {
-      setClosingGroupKey(groupKey);
-      const res = await fetch("/api/portfolio/close-symbol", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          portfolio_id: portfolioId,
-          symbol: row.symbol,
-        }),
-      });
-      const payload = await res.json().catch(() => null);
-      if (!res.ok || !payload?.ok) {
-        throw new Error(payload?.error || "Close symbol failed.");
-      }
-      showToast(`Closed ${payload?.closed_count ?? lotsCount} lot(s) for ${row.symbol} ✅`);
-      setTimeout(() => window.location.reload(), 500);
-    } catch (e: any) {
-      showToast(e?.message ?? "Close symbol failed.");
-    } finally {
-      setClosingGroupKey(null);
     }
   }
 
@@ -1169,11 +1179,10 @@ export default function PositionsClient({
                               </button>
                               <button
                                 className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
-                                onClick={() => submitCloseGrouped(g)}
-                                disabled={closingGroupKey === `${g.portfolio_id ?? ""}:${g.symbol}`}
-                                title="Close all open lots for this symbol"
+                                onClick={() => openCloseGroupedModal(g)}
+                                title="Close part or all of this grouped position"
                               >
-                                {closingGroupKey === `${g.portfolio_id ?? ""}:${g.symbol}` ? "Closing..." : "Close"}
+                                Close
                               </button>
                               <span className="self-center">
                                 {g.lotIds.length} lot{g.lotIds.length === 1 ? "" : "s"}
@@ -1355,12 +1364,56 @@ export default function PositionsClient({
           {/* Close modal */}
           <Modal
             open={closeModalOpen}
-            title={activePosition ? `Close Position: ${activePosition.symbol}` : "Close Position"}
+            title={
+              activePosition
+                ? `Close Position: ${activePosition.symbol}`
+                : activeGroupedRow
+                  ? `Close Position: ${activeGroupedRow.symbol}`
+                  : "Close Position"
+            }
             onClose={closeCloseModal}
           >
             <div className="space-y-3">
               <div className="text-sm text-slate-600">
-                Enter the exit price you sold at. This is saved for closed-trade history and P/L.
+                Enter the quantity and exit price sold. This is saved for closed-trade history and P/L.
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs text-slate-500">
+                  Quantity to close
+                  {activePosition ? ` (max ${formatInt(resolveQty(activePosition))})` : ""}
+                  {activeGroupedRow ? ` (max ${formatInt(activeGroupedRow.qty)})` : ""}
+                </label>
+                <input
+                  value={closeQtyInput}
+                  onChange={(e) => setCloseQtyInput(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="e.g. 10"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                  disabled={closing}
+                />
+                <div className="flex flex-wrap gap-2 text-[11px]">
+                  {[25, 50, 100].map((pct) => {
+                    const maxQty = activePosition ? resolveQty(activePosition) : activeGroupedRow ? activeGroupedRow.qty : 0;
+                    const suggested = pct === 100 ? maxQty : Math.max(1, Math.floor(maxQty * (pct / 100)));
+                    return (
+                      <button
+                        key={pct}
+                        type="button"
+                        onClick={() => setCloseQtyInput(String(suggested))}
+                        className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-50"
+                        disabled={closing || !(maxQty > 0)}
+                      >
+                        {pct}%
+                      </button>
+                    );
+                  })}
+                </div>
+                {activeGroupedRow && activeGroupedRow.lotIds.length > 1 ? (
+                  <div className="text-[11px] text-slate-500">
+                    Grouped partial closes apply FIFO across lots for this symbol.
+                  </div>
+                ) : null}
               </div>
 
               <div className="space-y-2">
