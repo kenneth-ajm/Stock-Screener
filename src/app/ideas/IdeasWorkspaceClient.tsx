@@ -435,6 +435,11 @@ function fmtSignedPct(v: number | null) {
   return `${sign}${v.toFixed(1)}%`;
 }
 
+function fmtMaybeNumber(v: number | null | undefined, digits = 2) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+  return v.toFixed(digits);
+}
+
 function formatCompactDateTime(value: string | null | undefined) {
   if (!value) return "—";
   const parsed = new Date(value);
@@ -855,6 +860,12 @@ export default function IdeasWorkspaceClient({
   }, [selected, quoteBySymbol]);
 
   useEffect(() => {
+    if (!selected || strategy === "quality_dip") return;
+    if (detailsLoading || details) return;
+    void openDetails();
+  }, [selected?.symbol, selected?.source_scan_date, strategy]);
+
+  useEffect(() => {
     const symbol = String(selected?.symbol ?? "").trim().toUpperCase();
     if (!symbol || profileBySymbol[symbol] !== undefined) return;
     let mounted = true;
@@ -1240,7 +1251,7 @@ export default function IdeasWorkspaceClient({
         symbol: selected.symbol,
         strategy_version: strategy,
         universe_slug: universeMode === "auto" ? data?.meta?.universe_slug ?? defaultUniverseForStrategy(strategy) : universeMode,
-        date: data?.meta?.lctd ?? "",
+        date: selected.source_scan_date ?? data?.meta?.date_used ?? data?.meta?.lctd ?? "",
       });
       const res = await fetch(`/api/scan-row-detail?${query.toString()}`, { cache: "no-store" });
       const payload = await res.json().catch(() => null);
@@ -3696,17 +3707,91 @@ function changePill(status: string | null | undefined) {
               </div>
 
               <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
-                <button
-                  onClick={openDetails}
-                  className="text-xs text-slate-600 underline"
-                  disabled={detailsLoading}
-                >
-                  {detailsLoading ? "Loading details…" : "Load details / explainability"}
-                </button>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Recent idea history</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">
+                      {detailsLoading
+                        ? "Loading dossier details…"
+                        : details?.recent_history?.length
+                        ? "Recent scan context for this exact strategy + universe"
+                        : "No extra history loaded yet"}
+                    </div>
+                  </div>
+                  <button
+                    onClick={openDetails}
+                    className="rounded-lg border border-[#dcc9aa] bg-[#f8f0e2] px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-[#f2e6d4] disabled:opacity-50"
+                    disabled={detailsLoading}
+                  >
+                    {detailsLoading ? "Loading…" : details ? "Refresh details" : "Load details"}
+                  </button>
+                </div>
                 {details ? (
-                  <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-slate-950 p-2 text-[11px] text-slate-100">
-{JSON.stringify(details, null, 2)}
-                  </pre>
+                  <div className="mt-3 space-y-3">
+                    <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                      <div>Scan close: {fmtMaybeNumber(details?.scan_close ?? null)}</div>
+                      <div>Live price: {fmtMaybeNumber(details?.live_price ?? null)}</div>
+                      <div>Divergence: {fmtSignedPct(typeof details?.divergence_pct === "number" ? details.divergence_pct * 100 : null)}</div>
+                      <div>Latest bar: {details?.price_context?.latest_bar_date ?? "—"}</div>
+                      <div>5D return: {fmtSignedPct(details?.price_context?.return_5d_pct ?? null)}</div>
+                      <div>20D return: {fmtSignedPct(details?.price_context?.return_20d_pct ?? null)}</div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                      <div>20-bar high: {fmtMaybeNumber(details?.price_context?.high_20bar ?? null)}</div>
+                      <div>20-bar low: {fmtMaybeNumber(details?.price_context?.low_20bar ?? null)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-medium text-slate-500">Recent scan history</div>
+                      <div className="mt-2 space-y-2">
+                        {Array.isArray(details?.recent_history) && details.recent_history.length > 0 ? (
+                          details.recent_history.slice(0, 5).map((item: any) => (
+                            <div key={`${item?.date}-${item?.signal}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-[11px] font-semibold text-slate-900">{item?.date ?? "—"}</div>
+                                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${signalPill(item?.signal ?? "AVOID")}`}>
+                                  {item?.signal ?? "—"}
+                                </span>
+                              </div>
+                              <div className="mt-1 text-[11px] text-slate-600">
+                                {item?.reason_summary ?? "No summary"}
+                              </div>
+                              <div className="mt-1 text-[10px] text-slate-500">
+                                confidence {fmtMaybeNumber(item?.confidence ?? null, 0)}
+                                {typeof item?.quality_score === "number" ? ` • quality ${fmtMaybeNumber(item.quality_score, 0)}` : ""}
+                                {typeof item?.rank === "number" ? ` • rank ${item.rank}` : ""}
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-[11px] text-slate-500">No recent scan history available for this symbol and strategy.</div>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-medium text-slate-500">Explainability checks</div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {Array.isArray(details?.explainability_checks) && details.explainability_checks.length > 0 ? (
+                          details.explainability_checks.slice(0, 10).map((check: any) => (
+                            <span
+                              key={`${check?.key}-${check?.detail}`}
+                              title={check?.detail ?? ""}
+                              className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                check?.ok === true
+                                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                  : check?.ok === false
+                                  ? "border-rose-200 bg-rose-50 text-rose-700"
+                                  : "border-slate-200 bg-slate-50 text-slate-700"
+                              }`}
+                            >
+                              {check?.key ?? "check"}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-[11px] text-slate-500">No explainability checks returned.</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 ) : null}
               </div>
               {error ? <div className="text-sm text-rose-600">{error}</div> : null}

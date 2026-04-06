@@ -65,7 +65,7 @@ export async function GET(req: Request) {
 
     const { data: row, error } = await supabase
       .from("daily_scans")
-      .select("symbol,signal,confidence,entry,stop,tp1,tp2,reason_summary,reason_json")
+      .select("symbol,signal,confidence,entry,stop,tp1,tp2,rank,rank_score,quality_score,reason_summary,reason_json")
       .eq("symbol", symbol)
       .eq("date", date)
       .eq("universe_slug", universe)
@@ -80,6 +80,63 @@ export async function GET(req: Request) {
       scanClose !== null && livePrice !== null && scanClose > 0
         ? Math.abs(livePrice - scanClose) / scanClose
         : null;
+    const { data: historyRows } = await supabase
+      .from("daily_scans")
+      .select("date,signal,confidence,rank,rank_score,quality_score,reason_summary")
+      .eq("symbol", symbol)
+      .eq("strategy_version", version)
+      .eq("universe_slug", universe)
+      .order("date", { ascending: false })
+      .limit(8);
+    const recentHistory = (historyRows ?? []).map((item: any) => ({
+      date: item?.date ? String(item.date) : null,
+      signal:
+        item?.signal === "BUY" || item?.signal === "WATCH" || item?.signal === "AVOID"
+          ? item.signal
+          : null,
+      confidence: toNumber(item?.confidence),
+      rank: toNumber(item?.rank),
+      rank_score: toNumber(item?.rank_score),
+      quality_score: toNumber(item?.quality_score),
+      reason_summary: item?.reason_summary ? String(item.reason_summary) : null,
+    }));
+
+    const { data: barRows } = await supabase
+      .from("price_bars")
+      .select("date,open,high,low,close,volume")
+      .eq("symbol", symbol)
+      .eq("source", "polygon")
+      .lte("date", date)
+      .order("date", { ascending: false })
+      .limit(30);
+    const barsDesc = Array.isArray(barRows) ? barRows : [];
+    const barsAsc = [...barsDesc].reverse();
+    const latestBar = barsAsc.length > 0 ? barsAsc[barsAsc.length - 1] : null;
+    const close5 = barsAsc.length >= 6 ? toNumber(barsAsc[barsAsc.length - 6]?.close) : null;
+    const close20 = barsAsc.length >= 21 ? toNumber(barsAsc[barsAsc.length - 21]?.close) : null;
+    const latestClose = toNumber(latestBar?.close);
+    const ret5 =
+      latestClose != null && close5 != null && close5 > 0 ? ((latestClose - close5) / close5) * 100 : null;
+    const ret20 =
+      latestClose != null && close20 != null && close20 > 0 ? ((latestClose - close20) / close20) * 100 : null;
+    const high20 =
+      barsAsc.length >= 20
+        ? Math.max(...barsAsc.slice(Math.max(0, barsAsc.length - 20)).map((bar: any) => Number(bar?.high ?? 0)))
+        : null;
+    const low20 =
+      barsAsc.length >= 20
+        ? Math.min(...barsAsc.slice(Math.max(0, barsAsc.length - 20)).map((bar: any) => Number(bar?.low ?? 0)))
+        : null;
+    const checks = Array.isArray((row as any)?.reason_json?.checks)
+      ? (row as any).reason_json.checks
+          .map((check: any) => ({
+            key: check?.key ? String(check.key) : check?.id ? String(check.id) : null,
+            category: check?.category ? String(check.category) : null,
+            ok: typeof check?.ok === "boolean" ? check.ok : null,
+            detail: check?.detail ? String(check.detail) : null,
+          }))
+          .filter((check: any) => check.key)
+      : [];
 
     return NextResponse.json({
       ok: true,
@@ -87,6 +144,16 @@ export async function GET(req: Request) {
       scan_close: scanClose,
       live_price: livePrice,
       divergence_pct: divergencePct,
+      recent_history: recentHistory,
+      price_context: {
+        latest_bar_date: latestBar?.date ? String(latestBar.date) : null,
+        latest_close: latestClose,
+        return_5d_pct: ret5,
+        return_20d_pct: ret20,
+        high_20bar: Number.isFinite(Number(high20)) && high20 != null ? high20 : null,
+        low_20bar: Number.isFinite(Number(low20)) && low20 != null ? low20 : null,
+      },
+      explainability_checks: checks,
     });
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
@@ -94,4 +161,3 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: false, error, detail }, { status: 500 });
   }
 }
-
