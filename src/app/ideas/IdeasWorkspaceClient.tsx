@@ -326,6 +326,15 @@ type QuoteMap = Record<
   } | null
 >;
 type EarningsRiskMap = Record<string, EarningsRisk>;
+type NewsItem = {
+  id: string | null;
+  title: string | null;
+  article_url: string | null;
+  published_utc: string | null;
+  description: string | null;
+  author: string | null;
+  publisher_name: string | null;
+};
 const PRICE_MISMATCH_THRESHOLD_PCT = 0.6;
 
 type ManualScanStatus = "idle" | "starting" | "running" | "completed" | "completed_zero" | "failed";
@@ -506,6 +515,7 @@ export default function IdeasWorkspaceClient({
   const [quoteBySymbol, setQuoteBySymbol] = useState<QuoteMap>({});
   const [earningsBySymbol, setEarningsBySymbol] = useState<EarningsRiskMap>({});
   const [profileBySymbol, setProfileBySymbol] = useState<Record<string, TickerProfile | null>>({});
+  const [newsBySymbol, setNewsBySymbol] = useState<Record<string, NewsItem[]>>({});
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [entryFee, setEntryFee] = useState("");
   const [exitFee, setExitFee] = useState("");
@@ -888,6 +898,28 @@ export default function IdeasWorkspaceClient({
   }, [selected?.symbol, profileBySymbol]);
 
   useEffect(() => {
+    const symbol = String(selected?.symbol ?? "").trim().toUpperCase();
+    if (!symbol || newsBySymbol[symbol] !== undefined) return;
+    let mounted = true;
+    fetch(`/api/ticker-news?symbol=${encodeURIComponent(symbol)}`, { cache: "no-store" })
+      .then((r) => r.json().catch(() => null))
+      .then((payload) => {
+        if (!mounted) return;
+        setNewsBySymbol((prev) => ({
+          ...prev,
+          [symbol]: Array.isArray(payload?.news) ? (payload.news as NewsItem[]) : [],
+        }));
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setNewsBySymbol((prev) => ({ ...prev, [symbol]: [] }));
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [selected?.symbol, newsBySymbol]);
+
+  useEffect(() => {
     if (!initialSymbol || !data?.rows) return;
     const target = String(initialSymbol).trim().toUpperCase();
     const found = (data.rows ?? []).find((r) => String(r.symbol ?? "").trim().toUpperCase() === target);
@@ -1238,6 +1270,10 @@ export default function IdeasWorkspaceClient({
       profile: profileBySymbol[symbol] ?? null,
     });
   }, [selected, earningsBySymbol, profileBySymbol]);
+  const selectedNews = useMemo(() => {
+    const symbol = String(selected?.symbol ?? "").trim().toUpperCase();
+    return symbol ? newsBySymbol[symbol] ?? [] : [];
+  }, [selected?.symbol, newsBySymbol]);
 
   async function openDetails() {
     if (!selected || detailsLoading || details) return;
@@ -3208,6 +3244,53 @@ function changePill(status: string | null | undefined) {
                     {profileBySymbol[String(selected.symbol ?? "").trim().toUpperCase()]?.description}
                   </div>
                 ) : null}
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Recent headlines</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">
+                      {selectedNews.length > 0
+                        ? `${selectedNews.length} recent headline${selectedNews.length === 1 ? "" : "s"} for ${selected.symbol}`
+                        : "No recent headlines loaded"}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-2 space-y-2">
+                  {selectedNews.length > 0 ? (
+                    selectedNews.slice(0, 4).map((item) => (
+                      <div key={`${item.id ?? item.article_url ?? item.title}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-[11px] font-semibold text-slate-900">
+                            {item.article_url ? (
+                              <a href={item.article_url} target="_blank" rel="noreferrer" className="hover:underline">
+                                {item.title ?? "Untitled headline"}
+                              </a>
+                            ) : (
+                              item.title ?? "Untitled headline"
+                            )}
+                          </div>
+                          <div className="text-[10px] text-slate-500 whitespace-nowrap">
+                            {item.published_utc ? formatCompactDateTime(item.published_utc) : "—"}
+                          </div>
+                        </div>
+                        <div className="mt-1 text-[10px] text-slate-500">
+                          {[item.publisher_name, item.author].filter(Boolean).join(" • ") || "Source unavailable"}
+                        </div>
+                        {item.description ? (
+                          <div className="mt-1 text-[11px] leading-5 text-slate-600">
+                            {item.description}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-[11px] text-slate-500">
+                      No recent Polygon headlines were returned for this symbol.
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
