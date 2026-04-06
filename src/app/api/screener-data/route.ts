@@ -9,6 +9,7 @@ import { computePortfolioAwareAction } from "@/lib/execution_action";
 import { computeMarketBreadth } from "@/lib/market_breadth";
 import { scoreSignalQuality } from "@/lib/signal_quality";
 import { buildTradeRiskLayer } from "@/lib/trade_risk_layer";
+import { buildIdeaDossier } from "@/lib/idea_dossier";
 import {
   SECTOR_MOMENTUM_STRATEGY_VERSION,
 } from "@/lib/sector_momentum";
@@ -53,6 +54,12 @@ type ScanRow = {
   trade_risk_layer?: Record<string, unknown> | null;
   industry_group?: string | null;
   theme?: string | null;
+  setup_type?: string | null;
+  candidate_state?: string | null;
+  candidate_state_label?: string | null;
+  blockers?: string[] | null;
+  watch_items?: string[] | null;
+  dossier_summary?: string | null;
 };
 
 async function latestUniverseStats(supabase: any, strategyVersion: string, universeSlug: string) {
@@ -450,6 +457,31 @@ const loadScreenerDataCached = unstable_cache(
         row.reason_json && typeof row.reason_json === "object"
           ? ((row.reason_json as Record<string, unknown>).trade_risk_layer as Record<string, unknown> | undefined)
           : undefined;
+      const dossier = buildIdeaDossier({
+        strategy_version: strategyVersion,
+        signal: row.signal,
+        quality_score:
+          typeof persistedSignalQuality?.quality_score === "number"
+            ? Number(persistedSignalQuality.quality_score)
+            : Number(quality.quality_score ?? 0),
+        quality_signal:
+          persistedSignalQuality?.quality_signal === "BUY" ||
+          persistedSignalQuality?.quality_signal === "WATCH" ||
+          persistedSignalQuality?.quality_signal === "AVOID"
+            ? persistedSignalQuality.quality_signal
+            : (quality as any).quality_signal ?? null,
+        quality_summary:
+          typeof persistedSignalQuality?.summary === "string"
+            ? persistedSignalQuality.summary
+            : typeof (quality as any).quality_summary === "string"
+              ? (quality as any).quality_summary
+              : null,
+        action: action.action,
+        action_reason: action.action_reason,
+        trade_risk_layer: (persistedTradeRisk as any) ?? tradeRisk,
+        reason_summary: row.reason_summary ?? null,
+        reason_json: row.reason_json ?? null,
+      });
       return {
         symbol: row.symbol,
         universe_slug: String((row as any).universe_slug ?? mappedUniverse ?? "").trim() || null,
@@ -471,6 +503,12 @@ const loadScreenerDataCached = unstable_cache(
         reason_json: row.reason_json ?? null,
         industry_group: row.industry_group ?? null,
         theme: row.theme ?? null,
+        setup_type: dossier.setup_type,
+        candidate_state: dossier.candidate_state,
+        candidate_state_label: dossier.candidate_state_label,
+        blockers: dossier.blockers,
+        watch_items: dossier.watch_items,
+        dossier_summary: dossier.dossier_summary,
         atr14: null,
         event_risk: false,
         news_risk: false,

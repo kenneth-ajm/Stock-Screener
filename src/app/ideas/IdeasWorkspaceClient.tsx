@@ -40,6 +40,12 @@ type IdeaRow = {
   reason_json?: Record<string, unknown> | null;
   industry_group?: string | null;
   theme?: string | null;
+  setup_type?: string | null;
+  candidate_state?: string | null;
+  candidate_state_label?: string | null;
+  blockers?: string[] | null;
+  watch_items?: string[] | null;
+  dossier_summary?: string | null;
   action?: "BUY_NOW" | "WAIT" | "SKIP";
   sizing?: {
     shares: number;
@@ -1515,9 +1521,26 @@ export default function IdeasWorkspaceClient({
 
   function actionPill(action: "BUY NOW" | "WAIT" | "SKIP") {
     if (action === "BUY NOW") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-    if (action === "WAIT") return "border-amber-200 bg-amber-50 text-amber-700";
-    return "border-rose-200 bg-rose-50 text-rose-700";
+  if (action === "WAIT") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-rose-200 bg-rose-50 text-rose-700";
+}
+
+function candidateStatePill(state: string | null | undefined) {
+  switch (state) {
+    case "ACTIONABLE_TODAY":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "NEAR_ENTRY":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+    case "QUALITY_WATCH":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    case "EXTENDED_LEADER":
+      return "border-violet-200 bg-violet-50 text-violet-700";
+    case "BLOCKED":
+      return "border-rose-200 bg-rose-50 text-rose-700";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-600";
   }
+}
 
   return (
     <div className="space-y-5">
@@ -2296,8 +2319,18 @@ export default function IdeasWorkspaceClient({
                   >
                     <td className="px-4 py-3.5 font-semibold tracking-tight">
                       <div>{row.symbol}</div>
+                      {row.candidate_state_label ? (
+                        <div className="mt-1">
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${candidateStatePill(row.candidate_state)}`}>
+                            {row.candidate_state_label}
+                          </span>
+                        </div>
+                      ) : null}
                       {row.industry_group ? (
                         <div className="mt-0.5 text-[10px] font-normal text-slate-500">{row.industry_group}</div>
+                      ) : null}
+                      {row.setup_type ? (
+                        <div className="mt-0.5 text-[10px] font-normal text-slate-500">{row.setup_type}</div>
                       ) : null}
                     </td>
                     <td className="px-4 py-3.5">
@@ -2311,6 +2344,11 @@ export default function IdeasWorkspaceClient({
                       <div className="text-[10px] text-slate-500">
                         {row.risk_grade ? `Risk ${row.risk_grade}` : "Risk —"}
                       </div>
+                      {row.dossier_summary ? (
+                        <div className="mt-1 max-w-[16rem] text-[10px] leading-4 text-slate-500">
+                          {row.dossier_summary}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3.5">{entry.toFixed(2)}</td>
                     <td className="px-4 py-3.5">
@@ -2420,6 +2458,54 @@ export default function IdeasWorkspaceClient({
                   <div className="text-xs text-slate-500">Stop</div>
                   <div className="mt-1 font-semibold">{selected.stop.toFixed(2)}</div>
                 </div>
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Idea dossier</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">
+                      {selected.setup_type ?? "Setup context unavailable"}
+                    </div>
+                  </div>
+                  {selected.candidate_state_label ? (
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${candidateStatePill(
+                        selected.candidate_state
+                      )}`}
+                    >
+                      {selected.candidate_state_label}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-2 text-xs leading-5 text-slate-600">
+                  {selected.dossier_summary ?? selected.reason_summary ?? "No dossier summary available."}
+                </div>
+                {Array.isArray(selected.blockers) && selected.blockers.length > 0 ? (
+                  <div className="mt-2">
+                    <div className="text-[11px] font-medium text-slate-500">Current blockers</div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {selected.blockers.slice(0, 4).map((blocker) => (
+                        <span
+                          key={blocker}
+                          className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700"
+                        >
+                          {blocker}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {Array.isArray(selected.watch_items) && selected.watch_items.length > 0 ? (
+                  <div className="mt-2">
+                    <div className="text-[11px] font-medium text-slate-500">What to watch</div>
+                    <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
+                      {selected.watch_items.slice(0, 3).map((item) => (
+                        <li key={item}>• {item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </div>
 
               <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
