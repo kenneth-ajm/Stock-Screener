@@ -12,6 +12,7 @@ type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold" | "quality_
 type IdeasFilter = "all" | "buy" | "watch" | "actionable";
 type PortfolioFitState = "GOOD_FIT" | "ALREADY_HELD" | "CAPACITY_LIMITED" | "CROWDED" | "REVIEW";
 type LeadershipState = "LEADING" | "IMPROVING" | "WEAK" | "UNKNOWN";
+type BuyReadinessState = "READY" | "NEAR" | "WAIT" | "BLOCKED";
 
 type IdeaRow = {
   symbol: string;
@@ -429,6 +430,128 @@ function leadershipPill(state: LeadershipState | null | undefined) {
     default:
       return "border-slate-200 bg-slate-50 text-slate-700";
   }
+}
+
+function buyReadinessPill(state: BuyReadinessState | null | undefined) {
+  switch (state) {
+    case "READY":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "NEAR":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+    case "WAIT":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    default:
+      return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+}
+
+function uniqueStrings(items: Array<string | null | undefined>) {
+  return [...new Set(items.filter((item): item is string => Boolean(item && String(item).trim())).map((item) => String(item).trim()))];
+}
+
+function buildBuyReadinessSummary(row: IdeaRow | null) {
+  if (!row) return null;
+  const blockers = Array.isArray(row.blockers) ? row.blockers : [];
+  const fitBlockers = Array.isArray(row.portfolio_fit?.blockers) ? row.portfolio_fit?.blockers : [];
+  const triggers = Array.isArray(row.transition_plan?.triggers_to_buy) ? row.transition_plan?.triggers_to_buy : [];
+  const strengths = Array.isArray(row.transition_plan?.strengths_now) ? row.transition_plan?.strengths_now : [];
+  const reasons = uniqueStrings([...blockers, ...fitBlockers]).slice(0, 4);
+  const supportive = uniqueStrings([
+    row.dossier_summary ? null : null,
+    ...strengths,
+    row.leadership_context?.summary ?? null,
+    row.portfolio_fit?.fit_state === "GOOD_FIT" ? row.portfolio_fit.summary : null,
+  ]).slice(0, 4);
+
+  const hasMarketBlock = reasons.some((item) => /market regime/i.test(item));
+  const hasEarningsBlock = reasons.some((item) => /earnings/i.test(item));
+  const hasExtensionBlock = reasons.some((item) => /extended|pullback into the buy zone/i.test(item));
+  const hasCapacityBlock = reasons.some((item) => /cash|slot|capacity/i.test(item));
+  const hasCrowdingBlock = reasons.some((item) => /crowded|stacked|overlap|holding this symbol/i.test(item));
+  const isBuyNow = row.action === "BUY_NOW";
+  const candidateState = String(row.candidate_state ?? "");
+  const signal = String(row.signal ?? "WATCH").toUpperCase();
+
+  if (isBuyNow && reasons.length === 0 && row.portfolio_fit?.fit_state !== "ALREADY_HELD") {
+    return {
+      state: "READY" as BuyReadinessState,
+      label: "Buy-ready",
+      headline: "This setup is buy-ready under the current rules.",
+      reasons: supportive.length > 0 ? supportive : ["No major timing or portfolio blocker is active right now."],
+      supportive,
+    };
+  }
+
+  if (hasMarketBlock) {
+    return {
+      state: "BLOCKED" as BuyReadinessState,
+      label: "Market blocked",
+      headline: "Not BUY now because market regime is not supportive.",
+      reasons: uniqueStrings([reasons.find((item) => /market regime/i.test(item)) ?? null, triggers[0] ?? null, row.transition_plan?.summary ?? null]).slice(0, 3),
+      supportive,
+    };
+  }
+  if (hasEarningsBlock) {
+    return {
+      state: "BLOCKED" as BuyReadinessState,
+      label: "Earnings blocked",
+      headline: "Not BUY now because earnings risk is too close.",
+      reasons: uniqueStrings([reasons.find((item) => /earnings/i.test(item)) ?? null, triggers[0] ?? null, row.transition_plan?.summary ?? null]).slice(0, 3),
+      supportive,
+    };
+  }
+  if (hasCapacityBlock) {
+    return {
+      state: "WAIT" as BuyReadinessState,
+      label: "Capacity limited",
+      headline: "Not BUY now because portfolio capacity is tight.",
+      reasons: uniqueStrings([reasons.find((item) => /cash|slot|capacity/i.test(item)) ?? null, row.portfolio_fit?.summary ?? null, triggers[0] ?? null]).slice(0, 3),
+      supportive,
+    };
+  }
+  if (hasCrowdingBlock) {
+    return {
+      state: "WAIT" as BuyReadinessState,
+      label: "Exposure crowded",
+      headline: "Not BUY now because the portfolio is already crowded in this area.",
+      reasons: uniqueStrings([reasons.find((item) => /crowded|stacked|overlap|holding this symbol/i.test(item)) ?? null, row.portfolio_fit?.summary ?? null, triggers[0] ?? null]).slice(0, 3),
+      supportive,
+    };
+  }
+  if (hasExtensionBlock) {
+    return {
+      state: "NEAR" as BuyReadinessState,
+      label: "Needs pullback",
+      headline: "Not BUY now because timing still needs a better pullback.",
+      reasons: uniqueStrings([reasons.find((item) => /extended|pullback into the buy zone/i.test(item)) ?? null, triggers[0] ?? null, row.transition_plan?.summary ?? null]).slice(0, 3),
+      supportive,
+    };
+  }
+  if (candidateState == "NEAR_ENTRY" || signal === "BUY") {
+    return {
+      state: "NEAR" as BuyReadinessState,
+      label: "Close to ready",
+      headline: "Close, but not fully BUY-ready yet.",
+      reasons: uniqueStrings([triggers[0] ?? null, row.transition_plan?.summary ?? null, reasons[0] ?? null]).slice(0, 3),
+      supportive,
+    };
+  }
+  if (candidateState == "QUALITY_WATCH" || signal === "WATCH") {
+    return {
+      state: "WAIT" as BuyReadinessState,
+      label: "Watch setup",
+      headline: "Not BUY now because the setup still needs another improvement.",
+      reasons: uniqueStrings([triggers[0] ?? null, row.transition_plan?.summary ?? null, reasons[0] ?? null]).slice(0, 3),
+      supportive,
+    };
+  }
+  return {
+    state: "BLOCKED" as BuyReadinessState,
+    label: "Defensive",
+    headline: "Not BUY now because the setup is currently defensive.",
+    reasons: uniqueStrings([reasons[0] ?? null, row.dossier_summary ?? null, row.transition_plan?.summary ?? null]).slice(0, 3),
+    supportive,
+  };
 }
 
 function parseNullableNumber(v: string) {
@@ -1270,6 +1393,7 @@ export default function IdeasWorkspaceClient({
       profile: profileBySymbol[symbol] ?? null,
     });
   }, [selected, earningsBySymbol, profileBySymbol]);
+  const selectedBuyReadiness = useMemo(() => buildBuyReadinessSummary(selected), [selected]);
   const selectedNews = useMemo(() => {
     const symbol = String(selected?.symbol ?? "").trim().toUpperCase();
     return symbol ? newsBySymbol[symbol] ?? [] : [];
@@ -3065,6 +3189,38 @@ function changePill(status: string | null | undefined) {
                   <div className="mt-1 font-semibold">{selected.stop.toFixed(2)}</div>
                 </div>
               </div>
+
+              {selectedBuyReadiness ? (
+                <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs text-slate-500">Buy readiness</div>
+                      <div className="mt-1 text-sm font-medium text-slate-900">
+                        {selectedBuyReadiness.headline}
+                      </div>
+                    </div>
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${buyReadinessPill(selectedBuyReadiness.state)}`}>
+                      {selectedBuyReadiness.label}
+                    </span>
+                  </div>
+                  {selectedBuyReadiness.reasons.length > 0 ? (
+                    <ul className="mt-2 space-y-1 text-[11px] text-slate-600">
+                      {selectedBuyReadiness.reasons.slice(0, 3).map((item) => (
+                        <li key={item}>• {item}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {selectedBuyReadiness.supportive.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {selectedBuyReadiness.supportive.slice(0, 3).map((item) => (
+                        <span key={item} className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                 <div className="flex items-start justify-between gap-3">
