@@ -12,6 +12,7 @@ type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold" | "quality_
 type IdeasFilter = "all" | "buy" | "watch" | "actionable";
 type PortfolioFitState = "GOOD_FIT" | "ALREADY_HELD" | "CAPACITY_LIMITED" | "CROWDED" | "REVIEW";
 type LeadershipState = "LEADING" | "IMPROVING" | "WEAK" | "UNKNOWN";
+type CorrelationState = "LOW" | "MODERATE" | "HIGH" | "VERY_HIGH" | "UNKNOWN";
 type BuyReadinessState = "READY" | "NEAR" | "WAIT" | "BLOCKED";
 
 type IdeaRow = {
@@ -111,6 +112,19 @@ type IdeaRow = {
     theme: string | null;
     group_rank_score: number | null;
   } | null;
+  correlation_context?: {
+    state: CorrelationState;
+    label: string;
+    summary: string;
+    avg_correlation: number | null;
+    max_correlation: number | null;
+    correlated_holdings_count: number;
+    compared_holdings_count: number;
+    same_industry_count: number;
+    same_theme_count: number;
+    top_overlap_symbols: string[];
+    warnings: string[];
+  } | null;
   stalking_candidate?: {
     stalking_score: number;
     stalking_label: string;
@@ -205,6 +219,21 @@ type Payload = {
       improving?: number;
       weak?: number;
       unknown?: number;
+    } | null;
+    correlation_summary?: {
+      counts?: {
+        low?: number;
+        moderate?: number;
+        high?: number;
+        very_high?: number;
+        unknown?: number;
+      } | null;
+      top_overlap?: Array<{
+        symbol: string;
+        state?: CorrelationState | null;
+        label?: string | null;
+        summary?: string | null;
+      }> | null;
     } | null;
     stalking_summary?: {
       ready_tomorrow?: number;
@@ -426,6 +455,21 @@ function leadershipPill(state: LeadershipState | null | undefined) {
     case "IMPROVING":
       return "border-sky-200 bg-sky-50 text-sky-700";
     case "WEAK":
+      return "border-rose-200 bg-rose-50 text-rose-700";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-700";
+  }
+}
+
+function correlationPill(state: CorrelationState | null | undefined) {
+  switch (state) {
+    case "LOW":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "MODERATE":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+    case "HIGH":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    case "VERY_HIGH":
       return "border-rose-200 bg-rose-50 text-rose-700";
     default:
       return "border-slate-200 bg-slate-50 text-slate-700";
@@ -1172,6 +1216,9 @@ export default function IdeasWorkspaceClient({
   const portfolioContext = data?.meta?.portfolio_context ?? null;
   const transitionSummary = data?.meta?.transition_summary ?? null;
   const leadershipSummary = data?.meta?.leadership_summary ?? null;
+  const correlationSummary = data?.meta?.correlation_summary ?? null;
+  const correlationCounts = correlationSummary?.counts ?? null;
+  const topOverlapIdeas = correlationSummary?.top_overlap ?? [];
   const stalkingSummary = data?.meta?.stalking_summary ?? null;
   const stalkingQueue = data?.meta?.stalking_queue ?? [];
   const filteredRows = useMemo(() => {
@@ -2534,6 +2581,56 @@ function changePill(status: string | null | undefined) {
             </div>
           </div>
         </div>
+        <div className="mt-2 grid gap-2 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Portfolio Overlap</div>
+              <div className="text-[10px] text-slate-500">Recent-return and theme overlap versus current holdings</div>
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-5">
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Low</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(correlationCounts?.low ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Moderate</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(correlationCounts?.moderate ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">High</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(correlationCounts?.high ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Very high</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(correlationCounts?.very_high ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Unknown</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(correlationCounts?.unknown ?? 0)}</div>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Top overlap watch</div>
+            <div className="mt-2 space-y-2">
+              {topOverlapIdeas.length === 0 ? (
+                <div className="text-[11px] text-slate-500">No overlap context available for the loaded set yet.</div>
+              ) : (
+                topOverlapIdeas.slice(0, 3).map((row) => (
+                  <div key={`${row.symbol}-${row.state}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${correlationPill(row.state)}`}>
+                        {row.label ?? row.state ?? "—"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-600">{row.summary ?? "—"}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
         <div className="mt-2 rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
           <div className="flex items-center justify-between gap-3">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Catalyst Watch</div>
@@ -3527,6 +3624,55 @@ function changePill(status: string | null | undefined) {
                     <div>Stalking score: {selected.stalking_candidate.stalking_score.toFixed(1)}</div>
                     <div>Next trigger: {selected.stalking_candidate.next_trigger ?? "—"}</div>
                   </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Portfolio overlap</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">
+                      {selected.correlation_context?.summary ?? "Overlap context unavailable for this row."}
+                    </div>
+                  </div>
+                  {selected.correlation_context ? (
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${correlationPill(selected.correlation_context.state)}`}>
+                      {selected.correlation_context.label}
+                    </span>
+                  ) : null}
+                </div>
+                {selected.correlation_context ? (
+                  <>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                      <div>Avg corr: {selected.correlation_context.avg_correlation != null ? selected.correlation_context.avg_correlation.toFixed(2) : "—"}</div>
+                      <div>Max corr: {selected.correlation_context.max_correlation != null ? selected.correlation_context.max_correlation.toFixed(2) : "—"}</div>
+                      <div>Compared holdings: {selected.correlation_context.compared_holdings_count}</div>
+                      <div>Correlated holdings: {selected.correlation_context.correlated_holdings_count}</div>
+                      <div>Same industry: {selected.correlation_context.same_industry_count}</div>
+                      <div>Same theme: {selected.correlation_context.same_theme_count}</div>
+                    </div>
+                    {selected.correlation_context.top_overlap_symbols.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {selected.correlation_context.top_overlap_symbols.map((item) => (
+                          <span key={item} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                            {item}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {Array.isArray(selected.correlation_context.warnings) && selected.correlation_context.warnings.length > 0 ? (
+                      <div className="mt-2">
+                        <div className="text-[11px] font-medium text-slate-500">Overlap warnings</div>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {selected.correlation_context.warnings.slice(0, 4).map((item) => (
+                            <span key={item} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                              {item}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
 

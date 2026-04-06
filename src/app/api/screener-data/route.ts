@@ -13,6 +13,7 @@ import { buildIdeaDossier } from "@/lib/idea_dossier";
 import { computeDailySymbolFact } from "@/lib/daily_symbol_facts";
 import { blockerCounts, compareIdeaProgress, sortClosestToActionable } from "@/lib/idea_progress";
 import { buildPortfolioFit, summarizePortfolioFit, type HeldPositionContext } from "@/lib/portfolio_fit";
+import { buildPortfolioCorrelation, summarizePortfolioCorrelation } from "@/lib/portfolio_correlation";
 import { buildIdeaTransitionPlan } from "@/lib/idea_transition";
 import { buildIdeaLeadershipContext } from "@/lib/idea_leadership";
 import { buildStalkingQueue } from "@/lib/idea_stalking";
@@ -118,6 +119,19 @@ type ScanRow = {
     industry_group: string | null;
     theme: string | null;
     group_rank_score: number | null;
+  } | null;
+  correlation_context?: {
+    state: "LOW" | "MODERATE" | "HIGH" | "VERY_HIGH" | "UNKNOWN";
+    label: string;
+    summary: string;
+    avg_correlation: number | null;
+    max_correlation: number | null;
+    correlated_holdings_count: number;
+    compared_holdings_count: number;
+    same_industry_count: number;
+    same_theme_count: number;
+    top_overlap_symbols: string[];
+    warnings: string[];
   } | null;
   stalking_candidate?: {
     stalking_score: number;
@@ -539,6 +553,35 @@ const loadScreenerDataCached = unstable_cache(
       });
     }
 
+    const overlapSymbols = Array.from(
+      new Set(
+        [...entryValidatedRows.map((row) => String(row.symbol ?? "").trim().toUpperCase()), ...heldPositions.map((row) => String(row.symbol ?? "").trim().toUpperCase())]
+          .filter(Boolean)
+      )
+    );
+    const priceHistoryBySymbol = new Map<string, Array<{ date: string; close: number }>>();
+    if (resolvedDateUsed && overlapSymbols.length > 0) {
+      const startDate = shiftDate(resolvedDateUsed, -45);
+      const { data: overlapBars } = await (supabase as any)
+        .from("price_bars")
+        .select("symbol,date,close")
+        .in("symbol", overlapSymbols)
+        .eq("source", "polygon")
+        .gte("date", startDate)
+        .lte("date", resolvedDateUsed)
+        .order("symbol", { ascending: true })
+        .order("date", { ascending: true });
+      for (const row of Array.isArray(overlapBars) ? overlapBars : []) {
+        const symbol = String((row as any)?.symbol ?? "").trim().toUpperCase();
+        const date = String((row as any)?.date ?? "").trim();
+        const close = Number((row as any)?.close ?? 0);
+        if (!symbol || !date || !Number.isFinite(close) || close <= 0) continue;
+        const existing = priceHistoryBySymbol.get(symbol) ?? [];
+        existing.push({ date, close });
+        priceHistoryBySymbol.set(symbol, existing);
+      }
+    }
+
     let factsBySymbol = new Map<string, Record<string, unknown>>();
     if (resolvedDateUsed && entryValidatedRows.length > 0) {
       const factSymbols = Array.from(
@@ -899,6 +942,18 @@ const loadScreenerDataCached = unstable_cache(
         theme,
       };
     });
+    rowsFinal = rowsFinal.map((row) => ({
+      ...row,
+      correlation_context: buildPortfolioCorrelation(
+        {
+          symbol: row.symbol,
+          industry_group: row.industry_group ?? null,
+          theme: row.theme ?? null,
+        },
+        heldPositions,
+        priceHistoryBySymbol
+      ),
+    }));
 
     const rawSignalCounts = {
       buy: rawRows.filter((r) => r.signal === "BUY").length,
@@ -976,6 +1031,7 @@ const loadScreenerDataCached = unstable_cache(
       weak: rowsFinal.filter((row) => row.leadership_context?.state === "WEAK").length,
       unknown: rowsFinal.filter((row) => row.leadership_context?.state === "UNKNOWN" || !row.leadership_context).length,
     };
+    const correlationSummary = summarizePortfolioCorrelation(rowsFinal as Array<{ symbol: string; correlation_context?: any }>);
     const stalking = buildStalkingQueue(rowsFinal as any);
     rowsFinal = rowsFinal.map((row) => ({
       ...row,
@@ -1034,6 +1090,7 @@ const loadScreenerDataCached = unstable_cache(
         portfolio_fit_summary: portfolioFitSummary,
         transition_summary: transitionSummary,
         leadership_summary: leadershipSummary,
+        correlation_summary: correlationSummary,
         stalking_summary: stalking.summary,
         stalking_queue: stalking.queue,
         rows_count_scope: "loaded_rows_limit",
