@@ -11,6 +11,7 @@ import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold" | "quality_dip";
 type IdeasFilter = "all" | "buy" | "watch" | "actionable";
 type PortfolioFitState = "GOOD_FIT" | "ALREADY_HELD" | "CAPACITY_LIMITED" | "CROWDED" | "REVIEW";
+type LeadershipState = "LEADING" | "IMPROVING" | "WEAK" | "UNKNOWN";
 
 type IdeaRow = {
   symbol: string;
@@ -99,6 +100,16 @@ type IdeaRow = {
     strengths_now: string[];
     invalidation_watch: string[];
   } | null;
+  leadership_context?: {
+    state: LeadershipState;
+    label: string;
+    summary: string;
+    strengths: string[];
+    warnings: string[];
+    industry_group: string | null;
+    theme: string | null;
+    group_rank_score: number | null;
+  } | null;
   action?: "BUY_NOW" | "WAIT" | "SKIP";
   sizing?: {
     shares: number;
@@ -181,6 +192,12 @@ type Payload = {
       needs_regime?: number;
       needs_pullback?: number;
       needs_capacity?: number;
+    } | null;
+    leadership_summary?: {
+      leading?: number;
+      improving?: number;
+      weak?: number;
+      unknown?: number;
     } | null;
     rows_count_scope?: string | null;
     rows_query_limit?: number | null;
@@ -368,6 +385,19 @@ function catalystPill(state: "ACTIVE" | "QUIET" | "RISK" | "IMPROVING" | null | 
       return "border-rose-200 bg-rose-50 text-rose-700";
     case "ACTIVE":
       return "border-amber-200 bg-amber-50 text-amber-700";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-700";
+  }
+}
+
+function leadershipPill(state: LeadershipState | null | undefined) {
+  switch (state) {
+    case "LEADING":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "IMPROVING":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+    case "WEAK":
+      return "border-rose-200 bg-rose-50 text-rose-700";
     default:
       return "border-slate-200 bg-slate-50 text-slate-700";
   }
@@ -956,6 +986,7 @@ export default function IdeasWorkspaceClient({
   const overlapSummary = portfolioFitSummary?.overlap_summary ?? [];
   const portfolioContext = data?.meta?.portfolio_context ?? null;
   const transitionSummary = data?.meta?.transition_summary ?? null;
+  const leadershipSummary = data?.meta?.leadership_summary ?? null;
   const filteredRows = useMemo(() => {
     if (selectedFilter === "all") return rows;
     if (selectedFilter === "buy") return rows.filter((r) => r.signal === "BUY");
@@ -2335,6 +2366,30 @@ function changePill(status: string | null | undefined) {
             </div>
           </div>
         </div>
+        <div className="mt-2 rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Sector / Theme Leadership</div>
+            <div className="text-[10px] text-slate-500">How aligned the loaded ideas are with current leadership</div>
+          </div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-4">
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Leading</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(leadershipSummary?.leading ?? 0)}</div>
+            </div>
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Improving</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(leadershipSummary?.improving ?? 0)}</div>
+            </div>
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Weak</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(leadershipSummary?.weak ?? 0)}</div>
+            </div>
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Unknown</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(leadershipSummary?.unknown ?? 0)}</div>
+            </div>
+          </div>
+        </div>
       </div>
       ) : null}
 
@@ -3071,6 +3126,65 @@ function changePill(status: string | null | undefined) {
                 {profileBySymbol[String(selected.symbol ?? "").trim().toUpperCase()]?.description ? (
                   <div className="mt-2 text-[11px] leading-5 text-slate-600">
                     {profileBySymbol[String(selected.symbol ?? "").trim().toUpperCase()]?.description}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Sector / theme leadership</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">
+                      {selected.leadership_context?.summary ?? "Leadership context unavailable"}
+                    </div>
+                  </div>
+                  {selected.leadership_context ? (
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${leadershipPill(selected.leadership_context.state)}`}>
+                      {selected.leadership_context.label}
+                    </span>
+                  ) : null}
+                </div>
+                {selected.leadership_context?.industry_group || selected.leadership_context?.theme ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {selected.leadership_context.industry_group ? (
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                        {selected.leadership_context.industry_group}
+                      </span>
+                    ) : null}
+                    {selected.leadership_context.theme ? (
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                        {selected.leadership_context.theme}
+                      </span>
+                    ) : null}
+                    {selected.leadership_context.group_rank_score != null ? (
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                        Group rank {selected.leadership_context.group_rank_score.toFixed(0)}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {Array.isArray(selected.leadership_context?.strengths) && selected.leadership_context.strengths.length > 0 ? (
+                  <div className="mt-2">
+                    <div className="text-[11px] font-medium text-slate-500">Supportive signs</div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {selected.leadership_context.strengths.slice(0, 4).map((item) => (
+                        <span key={item} className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {Array.isArray(selected.leadership_context?.warnings) && selected.leadership_context.warnings.length > 0 ? (
+                  <div className="mt-2">
+                    <div className="text-[11px] font-medium text-slate-500">Leadership warnings</div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {selected.leadership_context.warnings.slice(0, 4).map((item) => (
+                        <span key={item} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
               </div>

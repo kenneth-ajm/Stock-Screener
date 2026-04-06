@@ -14,8 +14,11 @@ import { computeDailySymbolFact } from "@/lib/daily_symbol_facts";
 import { blockerCounts, compareIdeaProgress, sortClosestToActionable } from "@/lib/idea_progress";
 import { buildPortfolioFit, summarizePortfolioFit, type HeldPositionContext } from "@/lib/portfolio_fit";
 import { buildIdeaTransitionPlan } from "@/lib/idea_transition";
+import { buildIdeaLeadershipContext } from "@/lib/idea_leadership";
 import {
   SECTOR_MOMENTUM_STRATEGY_VERSION,
+  computeSectorMomentum,
+  INDUSTRY_GROUPS,
 } from "@/lib/sector_momentum";
 import { allowedUniversesForStrategy, defaultUniverseForStrategy } from "@/lib/strategy_universe";
 import { OBS_KEYS } from "@/lib/observability";
@@ -104,6 +107,16 @@ type ScanRow = {
     triggers_to_buy: string[];
     strengths_now: string[];
     invalidation_watch: string[];
+  } | null;
+  leadership_context?: {
+    state: "LEADING" | "IMPROVING" | "WEAK" | "UNKNOWN";
+    label: string;
+    summary: string;
+    strengths: string[];
+    warnings: string[];
+    industry_group: string | null;
+    theme: string | null;
+    group_rank_score: number | null;
   } | null;
 };
 
@@ -412,6 +425,22 @@ const loadScreenerDataCached = unstable_cache(
           strategy_version: strategyVersion,
           regime_state: regimeState,
         });
+    const sectorLeadership = await computeSectorMomentum({
+      supabase: supabase as any,
+      scan_date: resolvedDateUsed ?? null,
+      lctd_source: lctd.source as any,
+    });
+    const sectorGroupByName = new Map(
+      (Array.isArray(sectorLeadership.groups) ? sectorLeadership.groups : []).map((group) => [group.name, group] as const)
+    );
+    const industryGroupBySymbol = new Map<string, { name: string; theme: string }>();
+    for (const group of INDUSTRY_GROUPS) {
+      for (const symbol of group.symbols) {
+        const sym = String(symbol ?? "").trim().toUpperCase();
+        if (!sym || industryGroupBySymbol.has(sym)) continue;
+        industryGroupBySymbol.set(sym, { name: group.name, theme: group.theme });
+      }
+    }
 
     const capacity = await getActivePortfolioCapacity({
       supabase: supabase as any,
@@ -735,6 +764,7 @@ const loadScreenerDataCached = unstable_cache(
         action: action.action,
         action_reason: action.action_reason,
         sizing: action.sizing,
+        leadership_context: null,
       };
     });
 
@@ -845,6 +875,23 @@ const loadScreenerDataCached = unstable_cache(
         portfolio_fit: (row.portfolio_fit as any) ?? null,
       }),
     }));
+    rowsFinal = rowsFinal.map((row) => {
+      const symbol = String(row.symbol ?? "").trim().toUpperCase();
+      const fallbackGroup = industryGroupBySymbol.get(symbol);
+      const industryGroup = row.industry_group ?? fallbackGroup?.name ?? null;
+      const theme = row.theme ?? fallbackGroup?.theme ?? null;
+      const leadershipGroup = industryGroup ? sectorGroupByName.get(industryGroup) ?? null : null;
+      return {
+        ...row,
+        leadership_context: buildIdeaLeadershipContext({
+          industry_group: industryGroup,
+          theme,
+          group: leadershipGroup,
+        }),
+        industry_group: industryGroup,
+        theme,
+      };
+    });
 
     const rawSignalCounts = {
       buy: rawRows.filter((r) => r.signal === "BUY").length,
@@ -916,6 +963,12 @@ const loadScreenerDataCached = unstable_cache(
       needs_pullback: rowsFinal.filter((row) => row.transition_plan?.triggers_to_buy?.some((item) => /pullback|buy zone/i.test(item))).length,
       needs_capacity: rowsFinal.filter((row) => row.transition_plan?.triggers_to_buy?.some((item) => /cash|slot/i.test(item))).length,
     };
+    const leadershipSummary = {
+      leading: rowsFinal.filter((row) => row.leadership_context?.state === "LEADING").length,
+      improving: rowsFinal.filter((row) => row.leadership_context?.state === "IMPROVING").length,
+      weak: rowsFinal.filter((row) => row.leadership_context?.state === "WEAK").length,
+      unknown: rowsFinal.filter((row) => row.leadership_context?.state === "UNKNOWN" || !row.leadership_context).length,
+    };
     const [coreStats, midcapStats, liquidStats, growthStats] = await Promise.all([
       latestUniverseStats(supabase as any, strategyVersion, "core_800"),
       latestUniverseStats(supabase as any, strategyVersion, "midcap_1000"),
@@ -968,6 +1021,7 @@ const loadScreenerDataCached = unstable_cache(
         change_summary: changeSummary,
         portfolio_fit_summary: portfolioFitSummary,
         transition_summary: transitionSummary,
+        leadership_summary: leadershipSummary,
         rows_count_scope: "loaded_rows_limit",
         rows_query_limit: MAX_ROWS,
         selected_universe_has_rows: rawRows.length > 0,
