@@ -12,6 +12,7 @@ import { buildTradeRiskLayer } from "@/lib/trade_risk_layer";
 import { buildIdeaDossier } from "@/lib/idea_dossier";
 import { computeDailySymbolFact } from "@/lib/daily_symbol_facts";
 import { blockerCounts, compareIdeaProgress, sortClosestToActionable } from "@/lib/idea_progress";
+import { buildIdeaEvolution, summarizeIdeaEvolution } from "@/lib/idea_evolution";
 import { buildPortfolioFit, summarizePortfolioFit, type HeldPositionContext } from "@/lib/portfolio_fit";
 import { buildPortfolioCorrelation, summarizePortfolioCorrelation } from "@/lib/portfolio_correlation";
 import { buildIdeaTransitionPlan } from "@/lib/idea_transition";
@@ -75,6 +76,7 @@ type ScanRow = {
   prior_signal?: "BUY" | "WATCH" | "AVOID" | null;
   prior_quality_score?: number | null;
   prior_date?: string | null;
+  quality_delta?: number | null;
   action?: "BUY_NOW" | "WAIT" | "SKIP";
   action_reason?: string | null;
   sizing?: {
@@ -132,6 +134,14 @@ type ScanRow = {
     same_theme_count: number;
     top_overlap_symbols: string[];
     warnings: string[];
+  } | null;
+  evolution_context?: {
+    state: "NEW" | "IMPROVING" | "STABLE" | "AT_RISK";
+    label: string;
+    summary: string;
+    key_change: string;
+    watch_items: string[];
+    momentum_score: number;
   } | null;
   stalking_candidate?: {
     stalking_score: number;
@@ -891,6 +901,7 @@ const loadScreenerDataCached = unstable_cache(
         prior_signal: progress.prior_signal,
         prior_quality_score: progress.prior_quality_score,
         prior_date: progress.prior_date,
+        quality_delta: progress.quality_delta,
       };
     });
     rowsFinal = rowsFinal.map((row) => ({
@@ -1009,6 +1020,22 @@ const loadScreenerDataCached = unstable_cache(
         candidate_state_label: row.candidate_state_label ?? null,
         quality_score: row.quality_score ?? null,
       }));
+    rowsFinal = rowsFinal.map((row) => ({
+      ...row,
+      evolution_context: buildIdeaEvolution({
+        symbol: row.symbol,
+        signal: row.signal,
+        candidate_state: row.candidate_state ?? null,
+        change_status: row.change_status ?? null,
+        change_label: row.change_label ?? null,
+        prior_signal: row.prior_signal ?? null,
+        prior_quality_score: row.prior_quality_score ?? null,
+        prior_date: row.prior_date ?? null,
+        quality_score: row.quality_score ?? null,
+        quality_delta: row.quality_delta ?? null,
+        blockers: row.blockers ?? [],
+      }),
+    }));
     const blockerSummary = blockerCounts(rowsFinal)
       .slice(0, 5)
       .map((row) => ({ label: row.label, count: row.count }));
@@ -1018,6 +1045,7 @@ const loadScreenerDataCached = unstable_cache(
       unchanged_count: rowsFinal.filter((row) => row.change_status === "UNCHANGED").length,
       downgraded_count: rowsFinal.filter((row) => row.change_status === "DOWNGRADED").length,
     };
+    const evolutionSummary = summarizeIdeaEvolution(rowsFinal as Array<{ symbol: string; evolution_context?: any }>);
     const portfolioFitSummary = summarizePortfolioFit(rowsFinal as Array<{ symbol: string; portfolio_fit?: any }>, heldPositions);
     const transitionSummary = {
       ready_now: rowsFinal.filter((row) => row.transition_plan?.next_action === "Ready to plan or paper trade now").length,
@@ -1087,6 +1115,7 @@ const loadScreenerDataCached = unstable_cache(
         improving_rows: improvingRows,
         blocker_summary: blockerSummary,
         change_summary: changeSummary,
+        evolution_summary: evolutionSummary,
         portfolio_fit_summary: portfolioFitSummary,
         transition_summary: transitionSummary,
         leadership_summary: leadershipSummary,

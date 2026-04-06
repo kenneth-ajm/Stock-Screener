@@ -80,6 +80,7 @@ type IdeaRow = {
   prior_signal?: "BUY" | "WATCH" | "AVOID" | null;
   prior_quality_score?: number | null;
   prior_date?: string | null;
+  quality_delta?: number | null;
   portfolio_fit?: {
     fit_state: PortfolioFitState;
     fit_label: string;
@@ -124,6 +125,14 @@ type IdeaRow = {
     same_theme_count: number;
     top_overlap_symbols: string[];
     warnings: string[];
+  } | null;
+  evolution_context?: {
+    state: "NEW" | "IMPROVING" | "STABLE" | "AT_RISK";
+    label: string;
+    summary: string;
+    key_change: string;
+    watch_items: string[];
+    momentum_score: number;
   } | null;
   stalking_candidate?: {
     stalking_score: number;
@@ -191,6 +200,24 @@ type Payload = {
       upgraded_count?: number;
       unchanged_count?: number;
       downgraded_count?: number;
+    } | null;
+    evolution_summary?: {
+      counts?: {
+        new?: number;
+        improving?: number;
+        stable?: number;
+        at_risk?: number;
+      } | null;
+      top_improvers?: Array<{
+        symbol: string;
+        label?: string | null;
+        summary?: string | null;
+      }> | null;
+      top_at_risk?: Array<{
+        symbol: string;
+        label?: string | null;
+        summary?: string | null;
+      }> | null;
     } | null;
     portfolio_fit_summary?: {
       counts?: {
@@ -1209,6 +1236,10 @@ export default function IdeasWorkspaceClient({
   const improvingRows = data?.meta?.improving_rows ?? [];
   const blockerSummary = data?.meta?.blocker_summary ?? [];
   const changeSummary = data?.meta?.change_summary ?? null;
+  const evolutionSummary = data?.meta?.evolution_summary ?? null;
+  const evolutionCounts = evolutionSummary?.counts ?? null;
+  const topImprovers = evolutionSummary?.top_improvers ?? [];
+  const topAtRisk = evolutionSummary?.top_at_risk ?? [];
   const portfolioFitSummary = data?.meta?.portfolio_fit_summary ?? null;
   const portfolioFitCounts = portfolioFitSummary?.counts ?? null;
   const bestPortfolioFits = portfolioFitSummary?.best_fits ?? [];
@@ -2453,40 +2484,69 @@ function changePill(status: string | null | undefined) {
             </div>
           </div>
           <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Change Vs Prior Scan</div>
-            <div className="mt-2 space-y-2">
-              {improvingRows.length === 0 ? (
-                <div className="text-[11px] text-slate-500">No new or upgraded names in the loaded set.</div>
-              ) : (
-                improvingRows.slice(0, 3).map((row) => (
-                  <div key={`${row.symbol}-${row.change_status}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
-                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${changePill(row.change_status)}`}>
-                        {row.change_status ?? "—"}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-[11px] text-slate-600">{row.change_label ?? "—"}</div>
-                    <div className="mt-1 text-[10px] text-slate-500">
-                      {row.candidate_state_label ?? "State —"}
-                      {typeof row.quality_score === "number" ? ` • quality ${row.quality_score.toFixed(0)}` : ""}
-                    </div>
-                  </div>
-                ))
-              )}
-              {blockerSummary.length > 0 ? (
-                <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Top blockers</div>
-                  <div className="mt-1 flex flex-wrap gap-1.5">
-                    {blockerSummary.slice(0, 4).map((item) => (
-                      <span key={item.label} className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
-                        {item.label} ({item.count})
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Idea Evolution</div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-4">
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">New</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(evolutionCounts?.new ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Improving</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(evolutionCounts?.improving ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Stable</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(evolutionCounts?.stable ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">At risk</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(evolutionCounts?.at_risk ?? 0)}</div>
+              </div>
             </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Top improvers</div>
+                <div className="mt-2 space-y-2">
+                  {topImprovers.length === 0 ? (
+                    <div className="text-[11px] text-slate-500">No improving names in the loaded set.</div>
+                  ) : (
+                    topImprovers.slice(0, 3).map((row) => (
+                      <div key={`${row.symbol}-${row.label}`}>
+                        <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                        <div className="text-[11px] text-slate-600">{row.summary ?? row.label ?? "—"}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">At risk</div>
+                <div className="mt-2 space-y-2">
+                  {topAtRisk.length === 0 ? (
+                    <div className="text-[11px] text-slate-500">No names are clearly deteriorating in the loaded set.</div>
+                  ) : (
+                    topAtRisk.slice(0, 3).map((row) => (
+                      <div key={`${row.symbol}-${row.label}`}>
+                        <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                        <div className="text-[11px] text-slate-600">{row.summary ?? row.label ?? "—"}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+            {blockerSummary.length > 0 ? (
+              <div className="mt-2 rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Top blockers</div>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {blockerSummary.slice(0, 4).map((item) => (
+                    <span key={item.label} className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+                      {item.label} ({item.count})
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
         <div className="mt-2 grid gap-2 lg:grid-cols-[1.1fr_1fr]">
@@ -3378,6 +3438,45 @@ function changePill(status: string | null | undefined) {
                       <div className="mt-1 text-[11px] text-slate-500">{selected.change_label}</div>
                     ) : null}
                   </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Idea evolution</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">
+                      {selected.evolution_context?.summary ?? "Evolution context unavailable for this row."}
+                    </div>
+                  </div>
+                  {selected.evolution_context ? (
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${changePill(selected.change_status ?? (selected.evolution_context.state === "AT_RISK" ? "DOWNGRADED" : selected.evolution_context.state === "IMPROVING" || selected.evolution_context.state === "NEW" ? "UPGRADED" : "UNCHANGED"))}`}>
+                      {selected.evolution_context.label}
+                    </span>
+                  ) : null}
+                </div>
+                {selected.evolution_context ? (
+                  <>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                      <div>Prior signal: {selected.prior_signal ?? "—"}</div>
+                      <div>Prior date: {selected.prior_date ?? "—"}</div>
+                      <div>Quality now: {typeof selected.quality_score === "number" ? selected.quality_score.toFixed(0) : "—"}</div>
+                      <div>Quality delta: {typeof selected.quality_delta === "number" ? `${selected.quality_delta > 0 ? "+" : ""}${selected.quality_delta.toFixed(1)}` : "—"}</div>
+                    </div>
+                    <div className="mt-2 text-[11px] text-slate-600">{selected.evolution_context.key_change}</div>
+                    {selected.evolution_context.watch_items.length > 0 ? (
+                      <div className="mt-2">
+                        <div className="text-[11px] font-medium text-slate-500">Main watch</div>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {selected.evolution_context.watch_items.slice(0, 3).map((item) => (
+                            <span key={item} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                              {item}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
 
