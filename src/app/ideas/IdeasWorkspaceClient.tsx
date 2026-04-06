@@ -110,6 +110,12 @@ type IdeaRow = {
     theme: string | null;
     group_rank_score: number | null;
   } | null;
+  stalking_candidate?: {
+    stalking_score: number;
+    stalking_label: string;
+    summary: string;
+    next_trigger: string | null;
+  } | null;
   action?: "BUY_NOW" | "WAIT" | "SKIP";
   sizing?: {
     shares: number;
@@ -199,6 +205,19 @@ type Payload = {
       weak?: number;
       unknown?: number;
     } | null;
+    stalking_summary?: {
+      ready_tomorrow?: number;
+      close_watch?: number;
+      blocked_by_market?: number;
+      blocked_by_capacity?: number;
+    } | null;
+    stalking_queue?: Array<{
+      symbol: string;
+      stalking_score?: number;
+      stalking_label?: string | null;
+      summary?: string | null;
+      next_trigger?: string | null;
+    }> | null;
     rows_count_scope?: string | null;
     rows_query_limit?: number | null;
     selected_universe_has_rows?: boolean | null;
@@ -987,6 +1006,8 @@ export default function IdeasWorkspaceClient({
   const portfolioContext = data?.meta?.portfolio_context ?? null;
   const transitionSummary = data?.meta?.transition_summary ?? null;
   const leadershipSummary = data?.meta?.leadership_summary ?? null;
+  const stalkingSummary = data?.meta?.stalking_summary ?? null;
+  const stalkingQueue = data?.meta?.stalking_queue ?? [];
   const filteredRows = useMemo(() => {
     if (selectedFilter === "all") return rows;
     if (selectedFilter === "buy") return rows.filter((r) => r.signal === "BUY");
@@ -2390,6 +2411,54 @@ function changePill(status: string | null | undefined) {
             </div>
           </div>
         </div>
+        <div className="mt-2 rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Tomorrow Setup Queue</div>
+            <div className="text-[10px] text-slate-500">High-quality names to stalk if they are not buy-ready yet</div>
+          </div>
+          <div className="mt-2 grid gap-2 lg:grid-cols-[0.9fr_1.1fr]">
+            <div className="grid gap-2 sm:grid-cols-4">
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Ready tomorrow</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(stalkingSummary?.ready_tomorrow ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Close watch</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(stalkingSummary?.close_watch ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Blocked by market</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(stalkingSummary?.blocked_by_market ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Blocked by capacity</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(stalkingSummary?.blocked_by_capacity ?? 0)}</div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {stalkingQueue.length === 0 ? (
+                <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2 text-[11px] text-slate-500">
+                  No stalking candidates in the loaded set.
+                </div>
+              ) : (
+                stalkingQueue.slice(0, 3).map((row) => (
+                  <div key={`stalking-${row.symbol}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                      <span className="rounded-full border border-[#dcc9aa] bg-[#f8f0e2] px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                        {row.stalking_label ?? "Monitor"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-600">{row.summary ?? "—"}</div>
+                    {row.next_trigger ? (
+                      <div className="mt-1 text-[10px] text-slate-500">Next trigger: {row.next_trigger}</div>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
       </div>
       ) : null}
 
@@ -3185,6 +3254,28 @@ function changePill(status: string | null | undefined) {
                         </span>
                       ))}
                     </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Tomorrow setup queue</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">
+                      {selected.stalking_candidate?.summary ?? "This name is not currently in the top stalking queue."}
+                    </div>
+                  </div>
+                  {selected.stalking_candidate ? (
+                    <span className="rounded-full border border-[#dcc9aa] bg-[#f8f0e2] px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                      {selected.stalking_candidate.stalking_label}
+                    </span>
+                  ) : null}
+                </div>
+                {selected.stalking_candidate ? (
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                    <div>Stalking score: {selected.stalking_candidate.stalking_score.toFixed(1)}</div>
+                    <div>Next trigger: {selected.stalking_candidate.next_trigger ?? "—"}</div>
                   </div>
                 ) : null}
               </div>

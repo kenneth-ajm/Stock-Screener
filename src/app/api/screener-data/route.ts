@@ -15,6 +15,7 @@ import { blockerCounts, compareIdeaProgress, sortClosestToActionable } from "@/l
 import { buildPortfolioFit, summarizePortfolioFit, type HeldPositionContext } from "@/lib/portfolio_fit";
 import { buildIdeaTransitionPlan } from "@/lib/idea_transition";
 import { buildIdeaLeadershipContext } from "@/lib/idea_leadership";
+import { buildStalkingQueue } from "@/lib/idea_stalking";
 import {
   SECTOR_MOMENTUM_STRATEGY_VERSION,
   computeSectorMomentum,
@@ -117,6 +118,12 @@ type ScanRow = {
     industry_group: string | null;
     theme: string | null;
     group_rank_score: number | null;
+  } | null;
+  stalking_candidate?: {
+    stalking_score: number;
+    stalking_label: string;
+    summary: string;
+    next_trigger: string | null;
   } | null;
 };
 
@@ -969,6 +976,11 @@ const loadScreenerDataCached = unstable_cache(
       weak: rowsFinal.filter((row) => row.leadership_context?.state === "WEAK").length,
       unknown: rowsFinal.filter((row) => row.leadership_context?.state === "UNKNOWN" || !row.leadership_context).length,
     };
+    const stalking = buildStalkingQueue(rowsFinal as any);
+    rowsFinal = rowsFinal.map((row) => ({
+      ...row,
+      stalking_candidate: stalking.queue.find((candidate) => candidate.symbol === row.symbol) ?? null,
+    }));
     const [coreStats, midcapStats, liquidStats, growthStats] = await Promise.all([
       latestUniverseStats(supabase as any, strategyVersion, "core_800"),
       latestUniverseStats(supabase as any, strategyVersion, "midcap_1000"),
@@ -1022,6 +1034,8 @@ const loadScreenerDataCached = unstable_cache(
         portfolio_fit_summary: portfolioFitSummary,
         transition_summary: transitionSummary,
         leadership_summary: leadershipSummary,
+        stalking_summary: stalking.summary,
+        stalking_queue: stalking.queue,
         rows_count_scope: "loaded_rows_limit",
         rows_query_limit: MAX_ROWS,
         selected_universe_has_rows: rawRows.length > 0,
