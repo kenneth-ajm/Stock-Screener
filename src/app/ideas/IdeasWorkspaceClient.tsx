@@ -9,6 +9,7 @@ import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
 type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold" | "quality_dip";
 type IdeasFilter = "all" | "buy" | "watch" | "actionable";
+type PortfolioFitState = "GOOD_FIT" | "ALREADY_HELD" | "CAPACITY_LIMITED" | "CROWDED" | "REVIEW";
 
 type IdeaRow = {
   symbol: string;
@@ -75,6 +76,21 @@ type IdeaRow = {
   prior_signal?: "BUY" | "WATCH" | "AVOID" | null;
   prior_quality_score?: number | null;
   prior_date?: string | null;
+  portfolio_fit?: {
+    fit_state: PortfolioFitState;
+    fit_label: string;
+    fit_score: number;
+    summary: string;
+    blockers: string[];
+    watch_items: string[];
+    already_held: boolean;
+    open_positions_count: number;
+    same_industry_count: number;
+    same_theme_count: number;
+    cash_available: number;
+    slots_left: number;
+    estimated_cost: number | null;
+  } | null;
   action?: "BUY_NOW" | "WAIT" | "SKIP";
   sizing?: {
     shares: number;
@@ -136,6 +152,22 @@ type Payload = {
       unchanged_count?: number;
       downgraded_count?: number;
     } | null;
+    portfolio_fit_summary?: {
+      counts?: {
+        good_fit?: number;
+        already_held?: number;
+        capacity_limited?: number;
+        crowded?: number;
+        review?: number;
+      } | null;
+      best_fits?: Array<{
+        symbol: string;
+        fit_state?: PortfolioFitState | null;
+        fit_label?: string | null;
+        summary?: string | null;
+      }> | null;
+      overlap_summary?: Array<{ label: string; count: number }> | null;
+    } | null;
     rows_count_scope?: string | null;
     rows_query_limit?: number | null;
     selected_universe_has_rows?: boolean | null;
@@ -174,6 +206,11 @@ type Payload = {
       scheduler_last_run_at?: string | null;
       scheduler_last_scan_date?: string | null;
       scheduler_last_ok?: boolean | null;
+    } | null;
+    portfolio_context?: {
+      open_positions_count?: number;
+      cash_available?: number;
+      slots_left?: number;
     } | null;
   };
   capacity?: {
@@ -292,6 +329,21 @@ function round1(n: number) {
 
 function round2(n: number) {
   return Math.round(n * 100) / 100;
+}
+
+function fitPill(state: PortfolioFitState | null | undefined) {
+  switch (state) {
+    case "GOOD_FIT":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "ALREADY_HELD":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+    case "CAPACITY_LIMITED":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    case "CROWDED":
+      return "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-700";
+  }
 }
 
 function parseNullableNumber(v: string) {
@@ -848,6 +900,11 @@ export default function IdeasWorkspaceClient({
   const improvingRows = data?.meta?.improving_rows ?? [];
   const blockerSummary = data?.meta?.blocker_summary ?? [];
   const changeSummary = data?.meta?.change_summary ?? null;
+  const portfolioFitSummary = data?.meta?.portfolio_fit_summary ?? null;
+  const portfolioFitCounts = portfolioFitSummary?.counts ?? null;
+  const bestPortfolioFits = portfolioFitSummary?.best_fits ?? [];
+  const overlapSummary = portfolioFitSummary?.overlap_summary ?? [];
+  const portfolioContext = data?.meta?.portfolio_context ?? null;
   const filteredRows = useMemo(() => {
     if (selectedFilter === "all") return rows;
     if (selectedFilter === "buy") return rows.filter((r) => r.signal === "BUY");
@@ -2079,6 +2136,74 @@ function changePill(status: string | null | undefined) {
             </div>
           </div>
         </div>
+        <div className="mt-2 grid gap-2 lg:grid-cols-[1.1fr_1fr]">
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Portfolio Fit</div>
+              <div className="text-[10px] text-slate-500">
+                {Number(portfolioContext?.open_positions_count ?? 0)} open • cash {Number(portfolioContext?.cash_available ?? 0).toFixed(0)} • slots {Number(portfolioContext?.slots_left ?? 0)}
+              </div>
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-5">
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Good fit</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(portfolioFitCounts?.good_fit ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Already held</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(portfolioFitCounts?.already_held ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Capacity limited</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(portfolioFitCounts?.capacity_limited ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Crowded</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(portfolioFitCounts?.crowded ?? 0)}</div>
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] text-slate-500">Review</div>
+                <div className="text-sm font-semibold text-slate-900">{Number(portfolioFitCounts?.review ?? 0)}</div>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Best Fits / Exposure Watch</div>
+            <div className="mt-2 grid gap-2 md:grid-cols-[1.1fr_0.9fr]">
+              <div className="space-y-2">
+                {bestPortfolioFits.length === 0 ? (
+                  <div className="text-[11px] text-slate-500">No fit data yet for the loaded set.</div>
+                ) : (
+                  bestPortfolioFits.slice(0, 3).map((row) => (
+                    <div key={`${row.symbol}-${row.fit_state}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${fitPill(row.fit_state)}`}>
+                          {row.fit_label ?? row.fit_state ?? "—"}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-600">{row.summary ?? "—"}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Exposure watch</div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {overlapSummary.length > 0 ? (
+                    overlapSummary.slice(0, 5).map((item) => (
+                      <span key={item.label} className="rounded-full border border-fuchsia-200 bg-fuchsia-50 px-2 py-0.5 text-[10px] font-semibold text-fuchsia-700">
+                        {item.label} ({item.count})
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-[11px] text-slate-500">No repeated portfolio concentration flags yet.</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
       ) : null}
 
@@ -2743,6 +2868,59 @@ function changePill(status: string | null | undefined) {
                     Daily facts are not available yet for this row.
                   </div>
                 )}
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Portfolio fit</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">
+                      {selected.portfolio_fit?.fit_label ?? "Review"}
+                    </div>
+                  </div>
+                  {selected.portfolio_fit?.fit_state ? (
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${fitPill(selected.portfolio_fit.fit_state)}`}>
+                      {selected.portfolio_fit.fit_label}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-2 text-xs leading-5 text-slate-600">
+                  {selected.portfolio_fit?.summary ?? "Portfolio-fit guidance is not available for this row yet."}
+                </div>
+                {selected.portfolio_fit ? (
+                  <>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                      <div>Cash available: {selected.portfolio_fit.cash_available.toFixed(2)}</div>
+                      <div>Slots left: {selected.portfolio_fit.slots_left}</div>
+                      <div>Estimated cost: {selected.portfolio_fit.estimated_cost != null ? selected.portfolio_fit.estimated_cost.toFixed(2) : "—"}</div>
+                      <div>Open positions: {selected.portfolio_fit.open_positions_count}</div>
+                      <div>Same industry: {selected.portfolio_fit.same_industry_count}</div>
+                      <div>Same theme: {selected.portfolio_fit.same_theme_count}</div>
+                    </div>
+                    {Array.isArray(selected.portfolio_fit.blockers) && selected.portfolio_fit.blockers.length > 0 ? (
+                      <div className="mt-2">
+                        <div className="text-[11px] font-medium text-slate-500">Fit blockers</div>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {selected.portfolio_fit.blockers.slice(0, 4).map((item) => (
+                            <span key={item} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                              {item}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {Array.isArray(selected.portfolio_fit.watch_items) && selected.portfolio_fit.watch_items.length > 0 ? (
+                      <div className="mt-2">
+                        <div className="text-[11px] font-medium text-slate-500">Portfolio watch</div>
+                        <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
+                          {selected.portfolio_fit.watch_items.slice(0, 3).map((item) => (
+                            <li key={item}>• {item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
               </div>
 
               <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">

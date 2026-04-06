@@ -12,6 +12,7 @@ import { buildTradeRiskLayer } from "@/lib/trade_risk_layer";
 import { buildIdeaDossier } from "@/lib/idea_dossier";
 import { computeDailySymbolFact } from "@/lib/daily_symbol_facts";
 import { blockerCounts, compareIdeaProgress, sortClosestToActionable } from "@/lib/idea_progress";
+import { buildPortfolioFit, summarizePortfolioFit, type HeldPositionContext } from "@/lib/portfolio_fit";
 import {
   SECTOR_MOMENTUM_STRATEGY_VERSION,
 } from "@/lib/sector_momentum";
@@ -68,6 +69,34 @@ type ScanRow = {
   prior_signal?: "BUY" | "WATCH" | "AVOID" | null;
   prior_quality_score?: number | null;
   prior_date?: string | null;
+  action?: "BUY_NOW" | "WAIT" | "SKIP";
+  action_reason?: string | null;
+  sizing?: {
+    shares: number;
+    est_cost: number;
+    risk_per_share: number;
+    risk_budget: number;
+    shares_by_risk?: number;
+    shares_by_cash?: number;
+    shares_by_portfolio_cap?: number | null;
+    limiting_factor?: "risk" | "cash" | "portfolio_cap" | "none";
+    sizing_mode?: "cash_only";
+  } | null;
+  portfolio_fit?: {
+    fit_state: "GOOD_FIT" | "ALREADY_HELD" | "CAPACITY_LIMITED" | "CROWDED" | "REVIEW";
+    fit_label: string;
+    fit_score: number;
+    summary: string;
+    blockers: string[];
+    watch_items: string[];
+    already_held: boolean;
+    open_positions_count: number;
+    same_industry_count: number;
+    same_theme_count: number;
+    cash_available: number;
+    slots_left: number;
+    estimated_cost: number | null;
+  } | null;
 };
 
 async function latestUniverseStats(supabase: any, strategyVersion: string, universeSlug: string) {
@@ -380,6 +409,55 @@ const loadScreenerDataCached = unstable_cache(
       supabase: supabase as any,
       userId,
     });
+    const portfolioId = String(capacity?.portfolio_id ?? "").trim();
+    let heldPositions: HeldPositionContext[] = [];
+    if (portfolioId) {
+      const { data: openPositions } = await (supabase as any)
+        .from("portfolio_positions")
+        .select("symbol,strategy_version,status")
+        .eq("portfolio_id", portfolioId)
+        .eq("status", "OPEN");
+      const heldSymbols = Array.from(
+        new Set(
+          (Array.isArray(openPositions) ? openPositions : [])
+            .map((row: any) => String(row?.symbol ?? "").trim().toUpperCase())
+            .filter(Boolean)
+        )
+      );
+      const metadataBySymbol = new Map<string, { industry_group?: string | null; theme?: string | null }>();
+      if (heldSymbols.length > 0) {
+        for (const row of rawRows) {
+          const symbol = String((row as any)?.symbol ?? "").trim().toUpperCase();
+          if (!symbol || metadataBySymbol.has(symbol)) continue;
+          const industryGroup = String((row as any)?.industry_group ?? "").trim() || null;
+          const theme = String((row as any)?.theme ?? "").trim() || null;
+          if (industryGroup || theme) metadataBySymbol.set(symbol, { industry_group: industryGroup, theme });
+        }
+        const { data: heldScanRows } = await (supabase as any)
+          .from("daily_scans")
+          .select("symbol,date,reason_json")
+          .in("symbol", heldSymbols)
+          .order("date", { ascending: false });
+        for (const row of Array.isArray(heldScanRows) ? heldScanRows : []) {
+          const symbol = String((row as any)?.symbol ?? "").trim().toUpperCase();
+          if (!symbol || metadataBySymbol.has(symbol)) continue;
+          const group = (row as any)?.reason_json?.group ?? null;
+          const industryGroup = String(group?.name ?? "").trim() || null;
+          const theme = String(group?.theme ?? "").trim() || null;
+          if (industryGroup || theme) metadataBySymbol.set(symbol, { industry_group: industryGroup, theme });
+        }
+      }
+      heldPositions = (Array.isArray(openPositions) ? openPositions : []).map((row: any) => {
+        const symbol = String(row?.symbol ?? "").trim().toUpperCase();
+        const metadata = metadataBySymbol.get(symbol);
+        return {
+          symbol,
+          strategy_version: row?.strategy_version ? String(row.strategy_version) : null,
+          industry_group: metadata?.industry_group ?? null,
+          theme: metadata?.theme ?? null,
+        } satisfies HeldPositionContext;
+      });
+    }
 
     if (isSectorMomentum) {
       console.info("[sector_momentum][screener-data]", {
@@ -727,6 +805,24 @@ const loadScreenerDataCached = unstable_cache(
         prior_date: progress.prior_date,
       };
     });
+    rowsFinal = rowsFinal.map((row) => ({
+      ...row,
+      portfolio_fit: buildPortfolioFit(
+        {
+          symbol: row.symbol,
+          industry_group: row.industry_group ?? null,
+          theme: row.theme ?? null,
+          candidate_state: row.candidate_state ?? null,
+          action: row.action ?? null,
+          action_reason: row.action_reason ?? null,
+          sizing: row.sizing ?? null,
+        },
+        {
+          held_positions: heldPositions,
+          capacity,
+        }
+      ),
+    }));
 
     const rawSignalCounts = {
       buy: rawRows.filter((r) => r.signal === "BUY").length,
@@ -791,6 +887,7 @@ const loadScreenerDataCached = unstable_cache(
       unchanged_count: rowsFinal.filter((row) => row.change_status === "UNCHANGED").length,
       downgraded_count: rowsFinal.filter((row) => row.change_status === "DOWNGRADED").length,
     };
+    const portfolioFitSummary = summarizePortfolioFit(rowsFinal as Array<{ symbol: string; portfolio_fit?: any }>, heldPositions);
     const [coreStats, midcapStats, liquidStats, growthStats] = await Promise.all([
       latestUniverseStats(supabase as any, strategyVersion, "core_800"),
       latestUniverseStats(supabase as any, strategyVersion, "midcap_1000"),
@@ -841,6 +938,7 @@ const loadScreenerDataCached = unstable_cache(
         improving_rows: improvingRows,
         blocker_summary: blockerSummary,
         change_summary: changeSummary,
+        portfolio_fit_summary: portfolioFitSummary,
         rows_count_scope: "loaded_rows_limit",
         rows_query_limit: MAX_ROWS,
         selected_universe_has_rows: rawRows.length > 0,
@@ -887,6 +985,11 @@ const loadScreenerDataCached = unstable_cache(
           scheduler_last_run_at: schedulerUpdatedAt,
           scheduler_last_scan_date: schedulerScanDate,
           scheduler_last_ok: schedulerValue?.ok === true,
+        },
+        portfolio_context: {
+          open_positions_count: heldPositions.length,
+          cash_available: capacity?.cash_available ?? 0,
+          slots_left: capacity?.slots_left ?? 0,
         },
       },
       capacity,
