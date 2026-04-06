@@ -46,6 +46,30 @@ type IdeaRow = {
   blockers?: string[] | null;
   watch_items?: string[] | null;
   dossier_summary?: string | null;
+  symbol_facts?: {
+    close?: number | null;
+    sma20?: number | null;
+    sma50?: number | null;
+    sma200?: number | null;
+    above_sma20?: boolean | null;
+    above_sma50?: boolean | null;
+    above_sma200?: boolean | null;
+    atr14?: number | null;
+    atr_ratio?: number | null;
+    avg_volume20?: number | null;
+    avg_dollar_volume20?: number | null;
+    relative_volume?: number | null;
+    high_30bar?: number | null;
+    low_30bar?: number | null;
+    drop_from_30bar_high_pct?: number | null;
+    distance_from_sma20_pct?: number | null;
+    distance_from_sma50_pct?: number | null;
+    distance_from_sma200_pct?: number | null;
+    trend_state?: string | null;
+    extension_state?: string | null;
+    liquidity_state?: string | null;
+    volatility_state?: string | null;
+  } | null;
   action?: "BUY_NOW" | "WAIT" | "SKIP";
   sizing?: {
     shares: number;
@@ -2506,6 +2530,50 @@ function candidateStatePill(state: string | null | undefined) {
                     </ul>
                   </div>
                 ) : null}
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="text-xs text-slate-500">Daily symbol facts</div>
+                {selected.symbol_facts ? (
+                  <>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                      <div>Trend: {selected.symbol_facts.trend_state ?? "—"}</div>
+                      <div>Extension: {selected.symbol_facts.extension_state ?? "—"}</div>
+                      <div>Rel vol: {typeof selected.symbol_facts.relative_volume === "number" ? selected.symbol_facts.relative_volume.toFixed(2) : "—"}</div>
+                      <div>ATR %: {typeof selected.symbol_facts.atr_ratio === "number" ? `${(selected.symbol_facts.atr_ratio * 100).toFixed(2)}%` : "—"}</div>
+                      <div>30-bar high: {typeof selected.symbol_facts.high_30bar === "number" ? selected.symbol_facts.high_30bar.toFixed(2) : "—"}</div>
+                      <div>Drop from high: {typeof selected.symbol_facts.drop_from_30bar_high_pct === "number" ? `${selected.symbol_facts.drop_from_30bar_high_pct.toFixed(2)}%` : "—"}</div>
+                      <div>Dist vs SMA50: {typeof selected.symbol_facts.distance_from_sma50_pct === "number" ? `${selected.symbol_facts.distance_from_sma50_pct.toFixed(2)}%` : "—"}</div>
+                      <div>Dist vs SMA200: {typeof selected.symbol_facts.distance_from_sma200_pct === "number" ? `${selected.symbol_facts.distance_from_sma200_pct.toFixed(2)}%` : "—"}</div>
+                      <div>Liquidity: {selected.symbol_facts.liquidity_state ?? "—"}</div>
+                      <div>Volatility: {selected.symbol_facts.volatility_state ?? "—"}</div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                          selected.symbol_facts.above_sma50
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-rose-200 bg-rose-50 text-rose-700"
+                        }`}
+                      >
+                        {selected.symbol_facts.above_sma50 ? "Above SMA50" : "Below SMA50"}
+                      </span>
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                          selected.symbol_facts.above_sma200
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-rose-200 bg-rose-50 text-rose-700"
+                        }`}
+                      >
+                        {selected.symbol_facts.above_sma200 ? "Above SMA200" : "Below SMA200"}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="mt-1 text-xs text-slate-500">
+                    Daily facts are not available yet for this row.
+                  </div>
+                )}
               </div>
 
               <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">

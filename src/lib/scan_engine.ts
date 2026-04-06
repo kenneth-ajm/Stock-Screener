@@ -14,6 +14,7 @@ import { getLCTD } from "@/lib/scan_date";
 import { finalizeSignals } from "@/lib/finalize_signals";
 import { scoreSignalQuality } from "@/lib/signal_quality";
 import { buildTradeRiskLayer } from "@/lib/trade_risk_layer";
+import { computeDailySymbolFact, upsertDailySymbolFacts } from "@/lib/daily_symbol_facts";
 
 export type ScanEngineClient = SupabaseClient<any, any, any> | any;
 
@@ -441,6 +442,7 @@ export async function runScanPipeline(opts: {
   }
 
   const rows: ScanRowPayload[] = [];
+  const factsRows: Array<ReturnType<typeof computeDailySymbolFact>> = [];
   let processed = 0;
   let scored = 0;
   for (const symbol of symbols) {
@@ -448,6 +450,12 @@ export async function runScanPipeline(opts: {
     const bars = barsResult.barsBySymbol.get(symbol) ?? [];
     if (bars.length < 260) continue;
     const barsAsc = [...bars].reverse();
+    const factRow = computeDailySymbolFact({
+      symbol,
+      scanDate,
+      barsAsc,
+    });
+    if (factRow) factsRows.push(factRow);
 
     const scoredRow = scoreSymbol({
       symbol,
@@ -541,6 +549,21 @@ export async function runScanPipeline(opts: {
       scored,
     };
   }
+  const factsToWrite = factsRows.filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const factsUpsert = await upsertDailySymbolFacts({
+    supabase: supa,
+    facts: factsToWrite,
+  });
+  if (!factsUpsert.ok) {
+    return {
+      ok: false,
+      error: factsUpsert.error ?? "daily_symbol_facts upsert failed",
+      scan_date_used: scanDate,
+      lctd_source: dateResolved.lctd_source,
+      processed,
+      scored,
+    };
+  }
 
   let finalization: unknown = null;
   const shouldFinalize = opts.finalize ?? true;
@@ -567,6 +590,8 @@ export async function runScanPipeline(opts: {
     processed,
     scored,
     upserted: upsertRaw.upserted,
+    facts_upserted: factsUpsert.upserted,
+    facts_skipped: factsUpsert.skipped,
     finalization,
     duration_ms: Date.now() - startedAt,
   };

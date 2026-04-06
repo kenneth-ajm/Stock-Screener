@@ -10,6 +10,7 @@ import { computeMarketBreadth } from "@/lib/market_breadth";
 import { scoreSignalQuality } from "@/lib/signal_quality";
 import { buildTradeRiskLayer } from "@/lib/trade_risk_layer";
 import { buildIdeaDossier } from "@/lib/idea_dossier";
+import { computeDailySymbolFact } from "@/lib/daily_symbol_facts";
 import {
   SECTOR_MOMENTUM_STRATEGY_VERSION,
 } from "@/lib/sector_momentum";
@@ -60,6 +61,7 @@ type ScanRow = {
   blockers?: string[] | null;
   watch_items?: string[] | null;
   dossier_summary?: string | null;
+  symbol_facts?: Record<string, unknown> | null;
 };
 
 async function latestUniverseStats(supabase: any, strategyVersion: string, universeSlug: string) {
@@ -409,6 +411,112 @@ const loadScreenerDataCached = unstable_cache(
       });
     }
 
+    let factsBySymbol = new Map<string, Record<string, unknown>>();
+    if (resolvedDateUsed && entryValidatedRows.length > 0) {
+      const factSymbols = Array.from(
+        new Set(entryValidatedRows.map((row) => String(row.symbol ?? "").trim().toUpperCase()).filter(Boolean))
+      );
+      const { data: factRows, error: factError } = await (supabase as any)
+        .from("daily_symbol_facts")
+        .select(
+          "symbol,close,sma20,sma50,sma200,above_sma20,above_sma50,above_sma200,atr14,atr_ratio,avg_volume20,avg_dollar_volume20,relative_volume,high_30bar,low_30bar,drop_from_30bar_high_pct,distance_from_sma20_pct,distance_from_sma50_pct,distance_from_sma200_pct,trend_state,extension_state,liquidity_state,volatility_state"
+        )
+        .eq("date", resolvedDateUsed)
+        .in("symbol", factSymbols);
+      if (!factError && Array.isArray(factRows)) {
+        factsBySymbol = new Map(
+          factRows.map((row: any) => [
+            String(row?.symbol ?? "").trim().toUpperCase(),
+            {
+              close: row?.close ?? null,
+              sma20: row?.sma20 ?? null,
+              sma50: row?.sma50 ?? null,
+              sma200: row?.sma200 ?? null,
+              above_sma20: row?.above_sma20 ?? null,
+              above_sma50: row?.above_sma50 ?? null,
+              above_sma200: row?.above_sma200 ?? null,
+              atr14: row?.atr14 ?? null,
+              atr_ratio: row?.atr_ratio ?? null,
+              avg_volume20: row?.avg_volume20 ?? null,
+              avg_dollar_volume20: row?.avg_dollar_volume20 ?? null,
+              relative_volume: row?.relative_volume ?? null,
+              high_30bar: row?.high_30bar ?? null,
+              low_30bar: row?.low_30bar ?? null,
+              drop_from_30bar_high_pct: row?.drop_from_30bar_high_pct ?? null,
+              distance_from_sma20_pct: row?.distance_from_sma20_pct ?? null,
+              distance_from_sma50_pct: row?.distance_from_sma50_pct ?? null,
+              distance_from_sma200_pct: row?.distance_from_sma200_pct ?? null,
+              trend_state: row?.trend_state ?? null,
+              extension_state: row?.extension_state ?? null,
+              liquidity_state: row?.liquidity_state ?? null,
+              volatility_state: row?.volatility_state ?? null,
+            } satisfies Record<string, unknown>,
+          ])
+        );
+      }
+      if (factsBySymbol.size === 0 && factSymbols.length > 0) {
+        const { data: factBars, error: factBarsError } = await (supabase as any)
+          .from("price_bars")
+          .select("symbol,date,open,high,low,close,volume")
+          .in("symbol", factSymbols)
+          .eq("source", "polygon")
+          .lte("date", resolvedDateUsed)
+          .order("symbol", { ascending: true })
+          .order("date", { ascending: false });
+        if (!factBarsError && Array.isArray(factBars)) {
+          const grouped = new Map<string, Array<{ date: string; open: number; high: number; low: number; close: number; volume: number }>>();
+          for (const row of factBars) {
+            const symbol = String((row as any)?.symbol ?? "").trim().toUpperCase();
+            if (!symbol) continue;
+            const existing = grouped.get(symbol) ?? [];
+            if (existing.length >= 300) continue;
+            existing.push({
+              date: String((row as any)?.date ?? ""),
+              open: Number((row as any)?.open ?? 0),
+              high: Number((row as any)?.high ?? 0),
+              low: Number((row as any)?.low ?? 0),
+              close: Number((row as any)?.close ?? 0),
+              volume: Number((row as any)?.volume ?? 0),
+            });
+            grouped.set(symbol, existing);
+          }
+          for (const [symbol, barsDesc] of grouped.entries()) {
+            const barsAsc = [...barsDesc].reverse();
+            const fact = computeDailySymbolFact({
+              symbol,
+              scanDate: resolvedDateUsed,
+              barsAsc,
+            });
+            if (!fact) continue;
+            factsBySymbol.set(symbol, {
+              close: fact.close,
+              sma20: fact.sma20,
+              sma50: fact.sma50,
+              sma200: fact.sma200,
+              above_sma20: fact.above_sma20,
+              above_sma50: fact.above_sma50,
+              above_sma200: fact.above_sma200,
+              atr14: fact.atr14,
+              atr_ratio: fact.atr_ratio,
+              avg_volume20: fact.avg_volume20,
+              avg_dollar_volume20: fact.avg_dollar_volume20,
+              relative_volume: fact.relative_volume,
+              high_30bar: fact.high_30bar,
+              low_30bar: fact.low_30bar,
+              drop_from_30bar_high_pct: fact.drop_from_30bar_high_pct,
+              distance_from_sma20_pct: fact.distance_from_sma20_pct,
+              distance_from_sma50_pct: fact.distance_from_sma50_pct,
+              distance_from_sma200_pct: fact.distance_from_sma200_pct,
+              trend_state: fact.trend_state,
+              extension_state: fact.extension_state,
+              liquidity_state: fact.liquidity_state,
+              volatility_state: fact.volatility_state,
+            });
+          }
+        }
+      }
+    }
+
     const cappedRows = applyDisplayCaps(entryValidatedRows);
     const withActions = cappedRows.map((row) => {
       const persistedSignalQuality = (row?.reason_json as any)?.signal_quality as
@@ -509,6 +617,7 @@ const loadScreenerDataCached = unstable_cache(
         blockers: dossier.blockers,
         watch_items: dossier.watch_items,
         dossier_summary: dossier.dossier_summary,
+        symbol_facts: factsBySymbol.get(String(row.symbol ?? "").trim().toUpperCase()) ?? null,
         atr14: null,
         event_risk: false,
         news_risk: false,
