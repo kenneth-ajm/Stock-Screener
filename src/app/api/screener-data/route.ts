@@ -13,6 +13,7 @@ import { buildIdeaDossier } from "@/lib/idea_dossier";
 import { computeDailySymbolFact } from "@/lib/daily_symbol_facts";
 import { blockerCounts, compareIdeaProgress, sortClosestToActionable } from "@/lib/idea_progress";
 import { buildPortfolioFit, summarizePortfolioFit, type HeldPositionContext } from "@/lib/portfolio_fit";
+import { buildIdeaTransitionPlan } from "@/lib/idea_transition";
 import {
   SECTOR_MOMENTUM_STRATEGY_VERSION,
 } from "@/lib/sector_momentum";
@@ -96,6 +97,13 @@ type ScanRow = {
     cash_available: number;
     slots_left: number;
     estimated_cost: number | null;
+  } | null;
+  transition_plan?: {
+    summary: string;
+    next_action: string;
+    triggers_to_buy: string[];
+    strengths_now: string[];
+    invalidation_watch: string[];
   } | null;
 };
 
@@ -823,6 +831,20 @@ const loadScreenerDataCached = unstable_cache(
         }
       ),
     }));
+    rowsFinal = rowsFinal.map((row) => ({
+      ...row,
+      transition_plan: buildIdeaTransitionPlan({
+        strategy_version: strategyVersion,
+        signal: row.signal,
+        action: row.action ?? null,
+        action_reason: row.action_reason ?? null,
+        candidate_state: row.candidate_state ?? null,
+        blockers: row.blockers ?? [],
+        watch_items: row.watch_items ?? [],
+        symbol_facts: (row.symbol_facts as any) ?? null,
+        portfolio_fit: (row.portfolio_fit as any) ?? null,
+      }),
+    }));
 
     const rawSignalCounts = {
       buy: rawRows.filter((r) => r.signal === "BUY").length,
@@ -888,6 +910,12 @@ const loadScreenerDataCached = unstable_cache(
       downgraded_count: rowsFinal.filter((row) => row.change_status === "DOWNGRADED").length,
     };
     const portfolioFitSummary = summarizePortfolioFit(rowsFinal as Array<{ symbol: string; portfolio_fit?: any }>, heldPositions);
+    const transitionSummary = {
+      ready_now: rowsFinal.filter((row) => row.transition_plan?.next_action === "Ready to plan or paper trade now").length,
+      needs_regime: rowsFinal.filter((row) => row.transition_plan?.triggers_to_buy?.some((item) => /SPY regime/i.test(item))).length,
+      needs_pullback: rowsFinal.filter((row) => row.transition_plan?.triggers_to_buy?.some((item) => /pullback|buy zone/i.test(item))).length,
+      needs_capacity: rowsFinal.filter((row) => row.transition_plan?.triggers_to_buy?.some((item) => /cash|slot/i.test(item))).length,
+    };
     const [coreStats, midcapStats, liquidStats, growthStats] = await Promise.all([
       latestUniverseStats(supabase as any, strategyVersion, "core_800"),
       latestUniverseStats(supabase as any, strategyVersion, "midcap_1000"),
@@ -939,6 +967,7 @@ const loadScreenerDataCached = unstable_cache(
         blocker_summary: blockerSummary,
         change_summary: changeSummary,
         portfolio_fit_summary: portfolioFitSummary,
+        transition_summary: transitionSummary,
         rows_count_scope: "loaded_rows_limit",
         rows_query_limit: MAX_ROWS,
         selected_universe_has_rows: rawRows.length > 0,

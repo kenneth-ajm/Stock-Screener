@@ -91,6 +91,13 @@ type IdeaRow = {
     slots_left: number;
     estimated_cost: number | null;
   } | null;
+  transition_plan?: {
+    summary: string;
+    next_action: string;
+    triggers_to_buy: string[];
+    strengths_now: string[];
+    invalidation_watch: string[];
+  } | null;
   action?: "BUY_NOW" | "WAIT" | "SKIP";
   sizing?: {
     shares: number;
@@ -167,6 +174,12 @@ type Payload = {
         summary?: string | null;
       }> | null;
       overlap_summary?: Array<{ label: string; count: number }> | null;
+    } | null;
+    transition_summary?: {
+      ready_now?: number;
+      needs_regime?: number;
+      needs_pullback?: number;
+      needs_capacity?: number;
     } | null;
     rows_count_scope?: string | null;
     rows_query_limit?: number | null;
@@ -905,6 +918,7 @@ export default function IdeasWorkspaceClient({
   const bestPortfolioFits = portfolioFitSummary?.best_fits ?? [];
   const overlapSummary = portfolioFitSummary?.overlap_summary ?? [];
   const portfolioContext = data?.meta?.portfolio_context ?? null;
+  const transitionSummary = data?.meta?.transition_summary ?? null;
   const filteredRows = useMemo(() => {
     if (selectedFilter === "all") return rows;
     if (selectedFilter === "buy") return rows.filter((r) => r.signal === "BUY");
@@ -2204,6 +2218,30 @@ function changePill(status: string | null | undefined) {
             </div>
           </div>
         </div>
+        <div className="mt-2 rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">What Changes This To Buy</div>
+            <div className="text-[10px] text-slate-500">Transition cues from the loaded set</div>
+          </div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-4">
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Ready now</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(transitionSummary?.ready_now ?? 0)}</div>
+            </div>
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Need regime</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(transitionSummary?.needs_regime ?? 0)}</div>
+            </div>
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Need pullback</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(transitionSummary?.needs_pullback ?? 0)}</div>
+            </div>
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Need capacity</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(transitionSummary?.needs_capacity ?? 0)}</div>
+            </div>
+          </div>
+        </div>
       </div>
       ) : null}
 
@@ -2822,6 +2860,54 @@ function changePill(status: string | null | undefined) {
                     {selected.change_label ? (
                       <div className="mt-1 text-[11px] text-slate-500">{selected.change_label}</div>
                     ) : null}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-slate-500">What changes this to buy</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">
+                      {selected.transition_plan?.next_action ?? "No transition plan available"}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-2 text-xs leading-5 text-slate-600">
+                  {selected.transition_plan?.summary ?? "This row does not yet have a transition summary."}
+                </div>
+                {Array.isArray(selected.transition_plan?.triggers_to_buy) && selected.transition_plan!.triggers_to_buy.length > 0 ? (
+                  <div className="mt-2">
+                    <div className="text-[11px] font-medium text-slate-500">Upgrade triggers</div>
+                    <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
+                      {selected.transition_plan!.triggers_to_buy.slice(0, 4).map((item) => (
+                        <li key={item}>• {item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {Array.isArray(selected.transition_plan?.strengths_now) && selected.transition_plan!.strengths_now.length > 0 ? (
+                  <div className="mt-2">
+                    <div className="text-[11px] font-medium text-slate-500">Strengths now</div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {selected.transition_plan!.strengths_now.slice(0, 4).map((item) => (
+                        <span key={item} className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {Array.isArray(selected.transition_plan?.invalidation_watch) && selected.transition_plan!.invalidation_watch.length > 0 ? (
+                  <div className="mt-2">
+                    <div className="text-[11px] font-medium text-slate-500">Can break the setup</div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {selected.transition_plan!.invalidation_watch.slice(0, 4).map((item) => (
+                        <span key={item} className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
               </div>
