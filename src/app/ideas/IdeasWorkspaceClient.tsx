@@ -4,6 +4,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
 import { mapExecutionState } from "@/lib/execution_state";
 import { applyEarningsRiskToAction, type EarningsRisk } from "@/lib/earnings_risk";
+import { buildIdeaCatalystContext, type TickerProfile } from "@/lib/idea_catalyst";
 import { applyBreadthToAction } from "@/lib/market_breadth";
 import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
@@ -359,6 +360,19 @@ function fitPill(state: PortfolioFitState | null | undefined) {
   }
 }
 
+function catalystPill(state: "ACTIVE" | "QUIET" | "RISK" | "IMPROVING" | null | undefined) {
+  switch (state) {
+    case "IMPROVING":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "RISK":
+      return "border-rose-200 bg-rose-50 text-rose-700";
+    case "ACTIVE":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-700";
+  }
+}
+
 function parseNullableNumber(v: string) {
   const t = v.trim();
   if (!t) return null;
@@ -437,6 +451,7 @@ export default function IdeasWorkspaceClient({
   const [lastLoadOk, setLastLoadOk] = useState<boolean | null>(null);
   const [quoteBySymbol, setQuoteBySymbol] = useState<QuoteMap>({});
   const [earningsBySymbol, setEarningsBySymbol] = useState<EarningsRiskMap>({});
+  const [profileBySymbol, setProfileBySymbol] = useState<Record<string, TickerProfile | null>>({});
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [entryFee, setEntryFee] = useState("");
   const [exitFee, setExitFee] = useState("");
@@ -791,6 +806,28 @@ export default function IdeasWorkspaceClient({
   }, [selected, quoteBySymbol]);
 
   useEffect(() => {
+    const symbol = String(selected?.symbol ?? "").trim().toUpperCase();
+    if (!symbol || profileBySymbol[symbol] !== undefined) return;
+    let mounted = true;
+    fetch(`/api/ticker-profile?symbol=${encodeURIComponent(symbol)}`, { cache: "no-store" })
+      .then((r) => r.json().catch(() => null))
+      .then((payload) => {
+        if (!mounted) return;
+        setProfileBySymbol((prev) => ({
+          ...prev,
+          [symbol]: (payload?.ok ? (payload?.profile as TickerProfile | null) : null) ?? null,
+        }));
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setProfileBySymbol((prev) => ({ ...prev, [symbol]: null }));
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [selected?.symbol, profileBySymbol]);
+
+  useEffect(() => {
     if (!initialSymbol || !data?.rows) return;
     const target = String(initialSymbol).trim().toUpperCase();
     const found = (data.rows ?? []).find((r) => String(r.symbol ?? "").trim().toUpperCase() === target);
@@ -1106,6 +1143,38 @@ export default function IdeasWorkspaceClient({
     (Number.isFinite(Number(entryFee)) ? Number(entryFee) : 0) +
     (Number.isFinite(Number(exitFee)) ? Number(exitFee) : 0);
   const totalCostWithFees = positionCost + feesTotal;
+  const catalystSummaryRows = useMemo(() => {
+    return allRows.reduce(
+      (acc, row) => {
+        const symbol = String(row.symbol ?? "").trim().toUpperCase();
+        const earnings = earningsBySymbol[symbol] ?? null;
+        if (earnings?.earningsRiskState === "block") acc.earningsSoon += 1;
+        else if (earnings?.earningsRiskState === "warn") acc.earningsUpcoming += 1;
+        if (row.change_status === "NEW" || row.change_status === "UPGRADED") acc.improving += 1;
+        if (Array.isArray(row.blockers) && row.blockers.some((item) => /Market regime/i.test(item))) acc.regimeBlocked += 1;
+        return acc;
+      },
+      {
+        earningsSoon: 0,
+        earningsUpcoming: 0,
+        improving: 0,
+        regimeBlocked: 0,
+      }
+    );
+  }, [allRows, earningsBySymbol]);
+  const selectedCatalyst = useMemo(() => {
+    if (!selected) return null;
+    const symbol = String(selected.symbol ?? "").trim().toUpperCase();
+    return buildIdeaCatalystContext({
+      symbol,
+      earnings: earningsBySymbol[symbol] ?? null,
+      change_status: selected.change_status ?? null,
+      candidate_state_label: selected.candidate_state_label ?? null,
+      blockers: selected.blockers ?? [],
+      symbol_facts: selected.symbol_facts ?? null,
+      profile: profileBySymbol[symbol] ?? null,
+    });
+  }, [selected, earningsBySymbol, profileBySymbol]);
 
   async function openDetails() {
     if (!selected || detailsLoading || details) return;
@@ -2242,6 +2311,30 @@ function changePill(status: string | null | undefined) {
             </div>
           </div>
         </div>
+        <div className="mt-2 rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Catalyst Watch</div>
+            <div className="text-[10px] text-slate-500">Event and profile context for the loaded set</div>
+          </div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-4">
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Earnings soon</div>
+              <div className="text-sm font-semibold text-slate-900">{catalystSummaryRows.earningsSoon}</div>
+            </div>
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Earnings upcoming</div>
+              <div className="text-sm font-semibold text-slate-900">{catalystSummaryRows.earningsUpcoming}</div>
+            </div>
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Improving names</div>
+              <div className="text-sm font-semibold text-slate-900">{catalystSummaryRows.improving}</div>
+            </div>
+            <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Regime blocked</div>
+              <div className="text-sm font-semibold text-slate-900">{catalystSummaryRows.regimeBlocked}</div>
+            </div>
+          </div>
+        </div>
       </div>
       ) : null}
 
@@ -2908,6 +3001,76 @@ function changePill(status: string | null | undefined) {
                         </span>
                       ))}
                     </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Catalyst context</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">
+                      {selectedCatalyst?.summary ?? "Catalyst context unavailable"}
+                    </div>
+                  </div>
+                  {selectedCatalyst ? (
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${catalystPill(selectedCatalyst.state)}`}>
+                      {selectedCatalyst.state}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                  <div>
+                    Earnings:{" "}
+                    {(() => {
+                      const earnings = earningsBySymbol[String(selected.symbol ?? "").trim().toUpperCase()] ?? null;
+                      if (!earnings) return "—";
+                      if (earnings.earningsLabel) {
+                        return `${earnings.earningsLabel}${earnings.earningsDate ? ` • ${earnings.earningsDate}` : ""}`;
+                      }
+                      return earnings.earningsDate ? `Clear • ${earnings.earningsDate}` : "Clear";
+                    })()}
+                  </div>
+                  <div>
+                    Change: {selected.change_status ?? "UNCHANGED"}
+                  </div>
+                </div>
+                {Array.isArray(selectedCatalyst?.company_context) && selectedCatalyst.company_context.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {selectedCatalyst.company_context.map((item) => (
+                      <span key={item} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {Array.isArray(selectedCatalyst?.positives) && selectedCatalyst.positives.length > 0 ? (
+                  <div className="mt-2">
+                    <div className="text-[11px] font-medium text-slate-500">Helpful context</div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {selectedCatalyst.positives.slice(0, 4).map((item) => (
+                        <span key={item} className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {Array.isArray(selectedCatalyst?.risks) && selectedCatalyst.risks.length > 0 ? (
+                  <div className="mt-2">
+                    <div className="text-[11px] font-medium text-slate-500">Catalyst risks</div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {selectedCatalyst.risks.slice(0, 4).map((item) => (
+                        <span key={item} className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {profileBySymbol[String(selected.symbol ?? "").trim().toUpperCase()]?.description ? (
+                  <div className="mt-2 text-[11px] leading-5 text-slate-600">
+                    {profileBySymbol[String(selected.symbol ?? "").trim().toUpperCase()]?.description}
                   </div>
                 ) : null}
               </div>
