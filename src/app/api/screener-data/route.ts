@@ -11,6 +11,7 @@ import { scoreSignalQuality } from "@/lib/signal_quality";
 import { buildTradeRiskLayer } from "@/lib/trade_risk_layer";
 import { buildIdeaDossier } from "@/lib/idea_dossier";
 import { computeDailySymbolFact } from "@/lib/daily_symbol_facts";
+import { blockerCounts, compareIdeaProgress, sortClosestToActionable } from "@/lib/idea_progress";
 import {
   SECTOR_MOMENTUM_STRATEGY_VERSION,
 } from "@/lib/sector_momentum";
@@ -62,6 +63,11 @@ type ScanRow = {
   watch_items?: string[] | null;
   dossier_summary?: string | null;
   symbol_facts?: Record<string, unknown> | null;
+  change_status?: "NEW" | "UPGRADED" | "UNCHANGED" | "DOWNGRADED" | null;
+  change_label?: string | null;
+  prior_signal?: "BUY" | "WATCH" | "AVOID" | null;
+  prior_quality_score?: number | null;
+  prior_date?: string | null;
 };
 
 async function latestUniverseStats(supabase: any, strategyVersion: string, universeSlug: string) {
@@ -602,10 +608,29 @@ const loadScreenerDataCached = unstable_cache(
         tp2: Number(row.tp2 ?? 0),
         rank: row.rank ?? null,
         rank_score: row.rank_score ?? null,
-        quality_score: persistedSignalQuality?.quality_score ?? null,
-        risk_grade: (persistedSignalQuality?.risk_grade as any) ?? null,
-        quality_signal: (persistedSignalQuality?.quality_signal as any) ?? null,
-        quality_summary: (persistedSignalQuality?.summary as any) ?? null,
+        quality_score:
+          typeof persistedSignalQuality?.quality_score === "number" && Number.isFinite(persistedSignalQuality.quality_score)
+            ? Number(persistedSignalQuality.quality_score)
+            : Number((quality as any).quality_score ?? 0),
+        risk_grade:
+          persistedSignalQuality?.risk_grade === "A" ||
+          persistedSignalQuality?.risk_grade === "B" ||
+          persistedSignalQuality?.risk_grade === "C" ||
+          persistedSignalQuality?.risk_grade === "D"
+            ? persistedSignalQuality.risk_grade
+            : ((quality as any).risk_grade ?? null),
+        quality_signal:
+          persistedSignalQuality?.quality_signal === "BUY" ||
+          persistedSignalQuality?.quality_signal === "WATCH" ||
+          persistedSignalQuality?.quality_signal === "AVOID"
+            ? persistedSignalQuality.quality_signal
+            : ((quality as any).quality_signal ?? null),
+        quality_summary:
+          typeof persistedSignalQuality?.summary === "string"
+            ? persistedSignalQuality.summary
+            : typeof (quality as any).quality_summary === "string"
+              ? (quality as any).quality_summary
+              : null,
         trade_risk_layer: persistedTradeRisk ?? tradeRisk,
         reason_summary: row.reason_summary ?? null,
         reason_json: row.reason_json ?? null,
@@ -636,11 +661,73 @@ const loadScreenerDataCached = unstable_cache(
         return a.symbol.localeCompare(b.symbol);
       });
     const keepBuyNow = new Set(buyNowSorted.slice(0, 3).map((r) => r.symbol));
-    const rowsFinal = withActions.map((row) =>
+    let rowsFinal: ScanRow[] = withActions.map((row) =>
       row.action === "BUY_NOW" && !keepBuyNow.has(row.symbol)
         ? { ...row, action: "WAIT" as const, action_reason: "Prioritize top 3 actionable today" }
         : row
     );
+
+    const priorSymbols = Array.from(
+      new Set(rowsFinal.map((row) => String(row.symbol ?? "").trim().toUpperCase()).filter(Boolean))
+    );
+    const priorUniverses = Array.from(
+      new Set(rowsFinal.map((row) => String(row.universe_slug ?? "").trim()).filter(Boolean))
+    );
+    let priorByKey = new Map<string, { symbol: string; universe_slug: string; date: string; signal: "BUY" | "WATCH" | "AVOID"; quality_score: number | null }>();
+    if (priorSymbols.length > 0 && priorUniverses.length > 0) {
+      const earliestCurrentDate = rowsFinal
+        .map((row) => String(row.source_scan_date ?? "").trim())
+        .filter(Boolean)
+        .sort()[0] ?? null;
+      if (earliestCurrentDate) {
+        const { data: priorRows } = await (supabase as any)
+          .from("daily_scans")
+          .select("symbol,universe_slug,date,signal,quality_score,reason_json")
+          .eq("strategy_version", strategyVersion)
+          .in("symbol", priorSymbols)
+          .in("universe_slug", priorUniverses)
+          .lt("date", earliestCurrentDate)
+          .order("date", { ascending: false });
+        for (const row of Array.isArray(priorRows) ? priorRows : []) {
+          const symbol = String((row as any)?.symbol ?? "").trim().toUpperCase();
+          const universe = String((row as any)?.universe_slug ?? "").trim();
+          const date = String((row as any)?.date ?? "").trim();
+          if (!symbol || !universe || !date) continue;
+          const key = `${symbol}__${universe}`;
+          if (priorByKey.has(key)) continue;
+          const persistedQuality = Number((row as any)?.quality_score);
+          const fallbackQuality = Number((row as any)?.reason_json?.signal_quality?.quality_score);
+          priorByKey.set(key, {
+            symbol,
+            universe_slug: universe,
+            date,
+            signal:
+              (row as any)?.signal === "BUY" || (row as any)?.signal === "WATCH" || (row as any)?.signal === "AVOID"
+                ? (row as any).signal
+                : "AVOID",
+            quality_score: Number.isFinite(persistedQuality)
+              ? persistedQuality
+              : Number.isFinite(fallbackQuality)
+                ? fallbackQuality
+                : null,
+          });
+        }
+      }
+    }
+
+    rowsFinal = rowsFinal.map((row) => {
+      const key = `${String(row.symbol ?? "").trim().toUpperCase()}__${String(row.universe_slug ?? "").trim()}`;
+      const progress = compareIdeaProgress(row as any, priorByKey.get(key) ?? null);
+      return {
+        ...row,
+        change_status: progress.status,
+        change_label: progress.label,
+        prior_signal: progress.prior_signal,
+        prior_quality_score: progress.prior_quality_score,
+        prior_date: progress.prior_date,
+      };
+    });
+
     const rawSignalCounts = {
       buy: rawRows.filter((r) => r.signal === "BUY").length,
       watch: rawRows.filter((r) => r.signal === "WATCH").length,
@@ -655,6 +742,54 @@ const loadScreenerDataCached = unstable_cache(
       buy: rowsFinal.filter((r) => r.signal === "BUY").length,
       watch: rowsFinal.filter((r) => r.signal === "WATCH").length,
       avoid: rowsFinal.filter((r) => r.signal === "AVOID").length,
+    };
+    const candidateStateCounts = {
+      actionable_today: rowsFinal.filter((r) => r.candidate_state === "ACTIONABLE_TODAY").length,
+      near_entry: rowsFinal.filter((r) => r.candidate_state === "NEAR_ENTRY").length,
+      quality_watch: rowsFinal.filter((r) => r.candidate_state === "QUALITY_WATCH").length,
+      extended_leader: rowsFinal.filter((r) => r.candidate_state === "EXTENDED_LEADER").length,
+      blocked: rowsFinal.filter((r) => r.candidate_state === "BLOCKED").length,
+      avoid: rowsFinal.filter((r) => r.candidate_state === "AVOID" || !r.candidate_state).length,
+    };
+    const closestToActionable = sortClosestToActionable(
+      rowsFinal.filter((row) => row.candidate_state !== "ACTIONABLE_TODAY" && row.signal !== "AVOID")
+    )
+      .slice(0, 5)
+      .map((row) => ({
+        symbol: row.symbol,
+        candidate_state: row.candidate_state ?? null,
+        candidate_state_label: row.candidate_state_label ?? null,
+        quality_score: row.quality_score ?? null,
+        blockers: row.blockers ?? [],
+        dossier_summary: row.dossier_summary ?? null,
+      }));
+    const improvingRows = rowsFinal
+      .filter((row) => row.change_status === "NEW" || row.change_status === "UPGRADED")
+      .sort((a, b) => {
+        const statusRank = (row: typeof a) => (row.change_status === "NEW" ? 2 : row.change_status === "UPGRADED" ? 1 : 0);
+        const rankDelta = statusRank(b) - statusRank(a);
+        if (rankDelta !== 0) return rankDelta;
+        const qa = typeof a.quality_score === "number" ? a.quality_score : 0;
+        const qb = typeof b.quality_score === "number" ? b.quality_score : 0;
+        if (qb !== qa) return qb - qa;
+        return String(a.symbol ?? "").localeCompare(String(b.symbol ?? ""));
+      })
+      .slice(0, 5)
+      .map((row) => ({
+        symbol: row.symbol,
+        change_status: row.change_status ?? null,
+        change_label: row.change_label ?? null,
+        candidate_state_label: row.candidate_state_label ?? null,
+        quality_score: row.quality_score ?? null,
+      }));
+    const blockerSummary = blockerCounts(rowsFinal)
+      .slice(0, 5)
+      .map((row) => ({ label: row.label, count: row.count }));
+    const changeSummary = {
+      new_count: rowsFinal.filter((row) => row.change_status === "NEW").length,
+      upgraded_count: rowsFinal.filter((row) => row.change_status === "UPGRADED").length,
+      unchanged_count: rowsFinal.filter((row) => row.change_status === "UNCHANGED").length,
+      downgraded_count: rowsFinal.filter((row) => row.change_status === "DOWNGRADED").length,
     };
     const [coreStats, midcapStats, liquidStats, growthStats] = await Promise.all([
       latestUniverseStats(supabase as any, strategyVersion, "core_800"),
@@ -701,6 +836,11 @@ const loadScreenerDataCached = unstable_cache(
         rows_signal_counts_raw: rawSignalCounts,
         rows_signal_counts_validated: validatedSignalCounts,
         rows_signal_counts_display: displaySignalCounts,
+        candidate_state_counts: candidateStateCounts,
+        closest_to_actionable: closestToActionable,
+        improving_rows: improvingRows,
+        blocker_summary: blockerSummary,
+        change_summary: changeSummary,
         rows_count_scope: "loaded_rows_limit",
         rows_query_limit: MAX_ROWS,
         selected_universe_has_rows: rawRows.length > 0,

@@ -70,6 +70,11 @@ type IdeaRow = {
     liquidity_state?: string | null;
     volatility_state?: string | null;
   } | null;
+  change_status?: "NEW" | "UPGRADED" | "UNCHANGED" | "DOWNGRADED" | null;
+  change_label?: string | null;
+  prior_signal?: "BUY" | "WATCH" | "AVOID" | null;
+  prior_quality_score?: number | null;
+  prior_date?: string | null;
   action?: "BUY_NOW" | "WAIT" | "SKIP";
   sizing?: {
     shares: number;
@@ -101,6 +106,36 @@ type Payload = {
     rows_signal_counts_raw?: { buy?: number; watch?: number; avoid?: number } | null;
     rows_signal_counts_validated?: { buy?: number; watch?: number; avoid?: number } | null;
     rows_signal_counts_display?: { buy?: number; watch?: number; avoid?: number } | null;
+    candidate_state_counts?: {
+      actionable_today?: number;
+      near_entry?: number;
+      quality_watch?: number;
+      extended_leader?: number;
+      blocked?: number;
+      avoid?: number;
+    } | null;
+    closest_to_actionable?: Array<{
+      symbol: string;
+      candidate_state?: string | null;
+      candidate_state_label?: string | null;
+      quality_score?: number | null;
+      blockers?: string[] | null;
+      dossier_summary?: string | null;
+    }> | null;
+    improving_rows?: Array<{
+      symbol: string;
+      change_status?: "NEW" | "UPGRADED" | "UNCHANGED" | "DOWNGRADED" | null;
+      change_label?: string | null;
+      candidate_state_label?: string | null;
+      quality_score?: number | null;
+    }> | null;
+    blocker_summary?: Array<{ label: string; count: number }> | null;
+    change_summary?: {
+      new_count?: number;
+      upgraded_count?: number;
+      unchanged_count?: number;
+      downgraded_count?: number;
+    } | null;
     rows_count_scope?: string | null;
     rows_query_limit?: number | null;
     selected_universe_has_rows?: boolean | null;
@@ -808,6 +843,11 @@ export default function IdeasWorkspaceClient({
     [qualityDipData]
   );
   const rows = useMemo(() => allRows.slice(0, 10), [allRows]);
+  const candidateStateCounts = data?.meta?.candidate_state_counts ?? null;
+  const closestToActionable = data?.meta?.closest_to_actionable ?? [];
+  const improvingRows = data?.meta?.improving_rows ?? [];
+  const blockerSummary = data?.meta?.blocker_summary ?? [];
+  const changeSummary = data?.meta?.change_summary ?? null;
   const filteredRows = useMemo(() => {
     if (selectedFilter === "all") return rows;
     if (selectedFilter === "buy") return rows.filter((r) => r.signal === "BUY");
@@ -1566,6 +1606,19 @@ function candidateStatePill(state: string | null | undefined) {
   }
 }
 
+function changePill(status: string | null | undefined) {
+  switch (status) {
+    case "NEW":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+    case "UPGRADED":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "DOWNGRADED":
+      return "border-rose-200 bg-rose-50 text-rose-700";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-600";
+  }
+}
+
   return (
     <div className="space-y-5">
       {toast ? (
@@ -1931,6 +1984,101 @@ function candidateStatePill(state: string | null | undefined) {
       {strategy !== "quality_dip" ? (
       <div className="mt-[-8px] text-[11px] text-slate-500">
         Auto selects the latest populated universe for each strategy. Unavailable explicit universes are marked as not scanned yet.
+      </div>
+      ) : null}
+
+      {strategy !== "quality_dip" ? (
+      <div className="surface-card px-3.5 py-3">
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Idea Pulse</div>
+        <div className="grid gap-2 lg:grid-cols-[1.2fr_1fr_1fr]">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Actionable today</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(candidateStateCounts?.actionable_today ?? 0)}</div>
+            </div>
+            <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Near entry</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(candidateStateCounts?.near_entry ?? 0)}</div>
+            </div>
+            <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Quality watch</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(candidateStateCounts?.quality_watch ?? 0)}</div>
+            </div>
+            <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Extended leaders</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(candidateStateCounts?.extended_leader ?? 0)}</div>
+            </div>
+            <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Blocked</div>
+              <div className="text-sm font-semibold text-slate-900">{Number(candidateStateCounts?.blocked ?? 0)}</div>
+            </div>
+            <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-2.5 py-2">
+              <div className="text-[10px] text-slate-500">Improving / new</div>
+              <div className="text-sm font-semibold text-slate-900">
+                {Number(changeSummary?.upgraded_count ?? 0) + Number(changeSummary?.new_count ?? 0)}
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Closest To Actionable</div>
+            <div className="mt-2 space-y-2">
+              {closestToActionable.length === 0 ? (
+                <div className="text-[11px] text-slate-500">No near-actionable names in the loaded set.</div>
+              ) : (
+                closestToActionable.slice(0, 3).map((row) => (
+                  <div key={row.symbol} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${candidateStatePill(row.candidate_state)}`}>
+                        {row.candidate_state_label ?? row.candidate_state ?? "—"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-600">{row.dossier_summary ?? "—"}</div>
+                    {Array.isArray(row.blockers) && row.blockers.length > 0 ? (
+                      <div className="mt-1 text-[10px] text-slate-500">Main blocker: {row.blockers[0]}</div>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Change Vs Prior Scan</div>
+            <div className="mt-2 space-y-2">
+              {improvingRows.length === 0 ? (
+                <div className="text-[11px] text-slate-500">No new or upgraded names in the loaded set.</div>
+              ) : (
+                improvingRows.slice(0, 3).map((row) => (
+                  <div key={`${row.symbol}-${row.change_status}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${changePill(row.change_status)}`}>
+                        {row.change_status ?? "—"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-600">{row.change_label ?? "—"}</div>
+                    <div className="mt-1 text-[10px] text-slate-500">
+                      {row.candidate_state_label ?? "State —"}
+                      {typeof row.quality_score === "number" ? ` • quality ${row.quality_score.toFixed(0)}` : ""}
+                    </div>
+                  </div>
+                ))
+              )}
+              {blockerSummary.length > 0 ? (
+                <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Top blockers</div>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {blockerSummary.slice(0, 4).map((item) => (
+                      <span key={item.label} className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+                        {item.label} ({item.count})
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
       </div>
       ) : null}
 
@@ -2356,6 +2504,13 @@ function candidateStatePill(state: string | null | undefined) {
                       {row.setup_type ? (
                         <div className="mt-0.5 text-[10px] font-normal text-slate-500">{row.setup_type}</div>
                       ) : null}
+                      {row.change_status ? (
+                        <div className="mt-1">
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${changePill(row.change_status)}`}>
+                            {row.change_status}
+                          </span>
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3.5">
                       <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${signalPill(row.signal)}`}>
@@ -2528,6 +2683,20 @@ function candidateStatePill(state: string | null | undefined) {
                         <li key={item}>• {item}</li>
                       ))}
                     </ul>
+                  </div>
+                ) : null}
+                {selected.change_status ? (
+                  <div className="mt-2">
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${changePill(
+                        selected.change_status
+                      )}`}
+                    >
+                      {selected.change_status}
+                    </span>
+                    {selected.change_label ? (
+                      <div className="mt-1 text-[11px] text-slate-500">{selected.change_label}</div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
