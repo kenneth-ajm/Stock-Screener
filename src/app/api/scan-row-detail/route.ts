@@ -153,6 +153,14 @@ export async function GET(req: Request) {
         high_20bar: Number.isFinite(Number(high20)) && high20 != null ? high20 : null,
         low_20bar: Number.isFinite(Number(low20)) && low20 != null ? low20 : null,
       },
+      recent_bars: barsAsc.map((bar: any) => ({
+        date: bar?.date ? String(bar.date) : null,
+        open: toNumber(bar?.open),
+        high: toNumber(bar?.high),
+        low: toNumber(bar?.low),
+        close: toNumber(bar?.close),
+        volume: toNumber(bar?.volume),
+      })),
       explainability_checks: checks,
     });
   } catch (e: unknown) {

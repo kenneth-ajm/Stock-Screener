@@ -657,6 +657,65 @@ function formatCompactDateTime(value: string | null | undefined) {
   }).format(parsed);
 }
 
+function buildSparklinePath(values: number[], width = 220, height = 56) {
+  if (values.length === 0) return "";
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  return values
+    .map((value, index) => {
+      const x = values.length === 1 ? width / 2 : (index / (values.length - 1)) * width;
+      const y = height - ((value - min) / range) * height;
+      return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
+
+function buildStructureSummary(bars: Array<{ close?: number | null; high?: number | null; low?: number | null }> | null | undefined) {
+  const closes = Array.isArray(bars)
+    ? bars.map((bar) => Number(bar?.close)).filter((value) => Number.isFinite(value) && value > 0)
+    : [];
+  if (closes.length < 8) {
+    return {
+      label: "Structure unclear",
+      summary: "Not enough recent bars to judge the structure confidently.",
+      slopePct: null as number | null,
+      rangePositionPct: null as number | null,
+    };
+  }
+  const recent = closes.slice(-5);
+  const earlier = closes.slice(-10, -5);
+  const latest = closes[closes.length - 1];
+  const recentAvg = recent.reduce((sum, value) => sum + value, 0) / recent.length;
+  const earlierAvg = earlier.length > 0 ? earlier.reduce((sum, value) => sum + value, 0) / earlier.length : recentAvg;
+  const slopePct = earlierAvg > 0 ? ((recentAvg - earlierAvg) / earlierAvg) * 100 : null;
+  const windowHigh = Math.max(...closes.slice(-20));
+  const windowLow = Math.min(...closes.slice(-20));
+  const rangePositionPct = windowHigh > windowLow ? ((latest - windowLow) / (windowHigh - windowLow)) * 100 : 50;
+  if ((slopePct ?? 0) > 1.5 && rangePositionPct >= 65) {
+    return {
+      label: "Trend firming",
+      summary: "Recent closes are pushing back toward the upper half of the 20-bar range.",
+      slopePct,
+      rangePositionPct,
+    };
+  }
+  if ((slopePct ?? 0) < -1.5 && rangePositionPct <= 35) {
+    return {
+      label: "Structure weakening",
+      summary: "Recent closes are sliding toward the lower part of the 20-bar range.",
+      slopePct,
+      rangePositionPct,
+    };
+  }
+  return {
+    label: "Range repair",
+    summary: "Price is still moving inside the recent range and needs clearer directional follow-through.",
+    slopePct,
+    rangePositionPct,
+  };
+}
+
 export default function IdeasWorkspaceClient({
   initialStrategy = "v1",
   initialUniverse = "auto",
@@ -1476,6 +1535,13 @@ export default function IdeasWorkspaceClient({
     const symbol = String(selected?.symbol ?? "").trim().toUpperCase();
     return symbol ? newsBySymbol[symbol] ?? [] : [];
   }, [selected?.symbol, newsBySymbol]);
+  const detailBars = useMemo(() => (Array.isArray(details?.recent_bars) ? details.recent_bars : []), [details?.recent_bars]);
+  const detailCloseSeries = useMemo(
+    () => detailBars.map((bar: any) => Number(bar?.close)).filter((value: number) => Number.isFinite(value) && value > 0),
+    [detailBars]
+  );
+  const structureSparkline = useMemo(() => buildSparklinePath(detailCloseSeries), [detailCloseSeries]);
+  const structureSummary = useMemo(() => buildStructureSummary(detailBars), [detailBars]);
 
   async function openDetails() {
     if (!selected || detailsLoading || details) return;
@@ -4223,6 +4289,27 @@ function changePill(status: string | null | undefined) {
                     <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600">
                       <div>20-bar high: {fmtMaybeNumber(details?.price_context?.high_20bar ?? null)}</div>
                       <div>20-bar low: {fmtMaybeNumber(details?.price_context?.low_20bar ?? null)}</div>
+                    </div>
+                    <div className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-[11px] font-medium text-slate-500">Price structure</div>
+                          <div className="mt-1 text-[12px] font-semibold text-slate-900">{structureSummary.label}</div>
+                        </div>
+                        <div className="text-[10px] text-slate-500">30 bars</div>
+                      </div>
+                      <div className="mt-2 text-[11px] leading-5 text-slate-600">{structureSummary.summary}</div>
+                      {detailCloseSeries.length > 1 ? (
+                        <div className="mt-2 rounded-lg border border-[#f1e7d8] bg-[#fffaf2] p-2">
+                          <svg viewBox="0 0 220 56" className="h-14 w-full">
+                            <path d={structureSparkline} fill="none" stroke="#0f172a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </div>
+                      ) : null}
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                        <div>5-bar slope: {fmtSignedPct(structureSummary.slopePct)}</div>
+                        <div>Range position: {structureSummary.rangePositionPct != null ? `${structureSummary.rangePositionPct.toFixed(0)}%` : "—"}</div>
+                      </div>
                     </div>
                     <div>
                       <div className="text-[11px] font-medium text-slate-500">Recent scan history</div>
