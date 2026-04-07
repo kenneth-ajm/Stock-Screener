@@ -392,6 +392,7 @@ type NewsItem = {
   author: string | null;
   publisher_name: string | null;
 };
+type NewsRelevanceState = "SUPPORTIVE" | "NEUTRAL" | "RISK" | "MIXED";
 const PRICE_MISMATCH_THRESHOLD_PCT = 0.6;
 
 type ManualScanStatus = "idle" | "starting" | "running" | "completed" | "completed_zero" | "failed";
@@ -669,6 +670,100 @@ function buildSparklinePath(values: number[], width = 220, height = 56) {
       return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(" ");
+}
+
+function newsRelevancePill(state: NewsRelevanceState | null | undefined) {
+  switch (state) {
+    case "SUPPORTIVE":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "RISK":
+      return "border-rose-200 bg-rose-50 text-rose-700";
+    case "MIXED":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-700";
+  }
+}
+
+function buildNewsRelevanceSummary(items: NewsItem[], symbol: string) {
+  const supportTerms = [
+    "upgrade",
+    "beats",
+    "beat",
+    "raises",
+    "raised",
+    "expands",
+    "expansion",
+    "partnership",
+    "contract",
+    "wins",
+    "buyback",
+    "acquisition",
+    "growth",
+    "record",
+    "strong demand",
+    "guidance raised",
+  ];
+  const riskTerms = [
+    "downgrade",
+    "miss",
+    "misses",
+    "cuts",
+    "cut",
+    "lawsuit",
+    "probe",
+    "investigation",
+    "delay",
+    "weak demand",
+    "guidance cut",
+    "recall",
+    "layoffs",
+    "tariff",
+    "warning",
+    "fraud",
+  ];
+
+  let supportiveHits = 0;
+  let riskHits = 0;
+  const supportiveNotes: string[] = [];
+  const riskNotes: string[] = [];
+
+  for (const item of items.slice(0, 5)) {
+    const haystack = `${item.title ?? ""} ${item.description ?? ""}`.toLowerCase();
+    const supportMatch = supportTerms.find((term) => haystack.includes(term));
+    const riskMatch = riskTerms.find((term) => haystack.includes(term));
+    if (supportMatch) {
+      supportiveHits += 1;
+      supportiveNotes.push(`${item.publisher_name ?? "Headline"}: ${item.title ?? supportMatch}`);
+    }
+    if (riskMatch) {
+      riskHits += 1;
+      riskNotes.push(`${item.publisher_name ?? "Headline"}: ${item.title ?? riskMatch}`);
+    }
+  }
+
+  let state: NewsRelevanceState = "NEUTRAL";
+  if (supportiveHits > 0 && riskHits > 0) state = "MIXED";
+  else if (riskHits > 0) state = "RISK";
+  else if (supportiveHits > 0) state = "SUPPORTIVE";
+
+  const headline =
+    state === "SUPPORTIVE"
+      ? `Recent headlines for ${symbol} look broadly supportive.`
+      : state === "RISK"
+      ? `Recent headlines for ${symbol} add event or sentiment risk.`
+      : state === "MIXED"
+      ? `Recent headlines for ${symbol} are mixed.`
+      : `Recent headlines for ${symbol} look mostly neutral so far.`;
+
+  return {
+    state,
+    headline,
+    supportive_count: supportiveHits,
+    risk_count: riskHits,
+    supportive_notes: supportiveNotes.slice(0, 3),
+    risk_notes: riskNotes.slice(0, 3),
+  };
 }
 
 function buildStructureSummary(bars: Array<{ close?: number | null; high?: number | null; low?: number | null }> | null | undefined) {
@@ -1535,6 +1630,10 @@ export default function IdeasWorkspaceClient({
     const symbol = String(selected?.symbol ?? "").trim().toUpperCase();
     return symbol ? newsBySymbol[symbol] ?? [] : [];
   }, [selected?.symbol, newsBySymbol]);
+  const selectedNewsSummary = useMemo(() => {
+    const symbol = String(selected?.symbol ?? "").trim().toUpperCase();
+    return symbol ? buildNewsRelevanceSummary(selectedNews, symbol) : null;
+  }, [selected?.symbol, selectedNews]);
   const detailBars = useMemo(() => (Array.isArray(details?.recent_bars) ? details.recent_bars : []), [details?.recent_bars]);
   const detailCloseSeries = useMemo(
     () => detailBars.map((bar: any) => Number(bar?.close)).filter((value: number) => Number.isFinite(value) && value > 0),
@@ -3669,12 +3768,39 @@ function changePill(status: string | null | undefined) {
                   <div>
                     <div className="text-xs text-slate-500">Recent headlines</div>
                     <div className="mt-1 text-sm font-medium text-slate-900">
-                      {selectedNews.length > 0
+                      {selectedNewsSummary?.headline ?? (selectedNews.length > 0
                         ? `${selectedNews.length} recent headline${selectedNews.length === 1 ? "" : "s"} for ${selected.symbol}`
-                        : "No recent headlines loaded"}
+                        : "No recent headlines loaded")}
                     </div>
                   </div>
+                  {selectedNewsSummary ? (
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${newsRelevancePill(selectedNewsSummary.state)}`}>
+                      {selectedNewsSummary.state}
+                    </span>
+                  ) : null}
                 </div>
+                {selectedNewsSummary ? (
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                    <div>Supportive hits: {selectedNewsSummary.supportive_count}</div>
+                    <div>Risk hits: {selectedNewsSummary.risk_count}</div>
+                  </div>
+                ) : null}
+                {selectedNewsSummary && (selectedNewsSummary.supportive_notes.length > 0 || selectedNewsSummary.risk_notes.length > 0) ? (
+                  <div className="mt-2 grid gap-2 md:grid-cols-2">
+                    <div>
+                      <div className="text-[11px] font-medium text-slate-500">Supportive reads</div>
+                      <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
+                        {selectedNewsSummary.supportive_notes.length > 0 ? selectedNewsSummary.supportive_notes.map((item) => <li key={item}>• {item}</li>) : <li>• None flagged</li>}
+                      </ul>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-medium text-slate-500">Risk reads</div>
+                      <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
+                        {selectedNewsSummary.risk_notes.length > 0 ? selectedNewsSummary.risk_notes.map((item) => <li key={item}>• {item}</li>) : <li>• None flagged</li>}
+                      </ul>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="mt-2 space-y-2">
                   {selectedNews.length > 0 ? (
                     selectedNews.slice(0, 4).map((item) => (
