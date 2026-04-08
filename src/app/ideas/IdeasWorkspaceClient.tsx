@@ -1645,7 +1645,7 @@ export default function IdeasWorkspaceClient({
   async function openDetails() {
     if (!selected || detailsLoading || details) return;
     if ((strategy === "v1_sector_momentum" || strategy === "quality_dip") && selected.reason_json) {
-      setDetails({ ok: true, row: selected, source: "sector_momentum_inline" });
+      setDetails({ ok: true, row: selected, source: strategy === "quality_dip" ? "quality_dip_inline" : "sector_momentum_inline" });
       return;
     }
     setDetailsLoading(true);
@@ -2142,6 +2142,131 @@ export default function IdeasWorkspaceClient({
     return "border-rose-200 bg-rose-50 text-rose-700";
   }
 
+  function buildQualityDipProfile(row: QualityDipRow) {
+    const drop = typeof row.drop_pct_from_30d_high === "number" ? row.drop_pct_from_30d_high : null;
+    const stockHealthy = row.stock_above_sma200 === true;
+    const stockBroken = row.stock_above_sma200 === false;
+    const marketHealthy = row.market_spy_above_sma200 === true;
+    const shallowDip = drop != null && drop >= 3 && drop < 5;
+    const idealDip = drop != null && drop >= 5 && drop <= 10;
+    const deepDip = drop != null && drop > 10 && drop <= 12;
+    const brokenDip = drop != null && drop > 12;
+
+    const blockers = uniqueStrings([
+      stockBroken ? "Stock trend is below SMA200." : null,
+      !marketHealthy ? "Market filter is weak (SPY below SMA200)." : null,
+      shallowDip ? "Needs a deeper pullback into the preferred buy zone." : null,
+      brokenDip ? "Dip is deeper than the preferred 12% ceiling." : null,
+      deepDip && !(stockHealthy && marketHealthy) ? "Needs stronger confirmation before treating the rebound as buyable." : null,
+    ]);
+
+    const watchItems = uniqueStrings([
+      idealDip && stockHealthy && marketHealthy ? "Keep the rebound intact above SMA200 and avoid chasing a fast extension." : null,
+      shallowDip ? "Watch for a 5% to 10% pullback from the 30-bar high." : null,
+      deepDip ? "Watch whether the bounce can stabilize before reclaiming momentum." : null,
+      stockHealthy ? "Trend remains above SMA200." : "Trend needs to reclaim SMA200.",
+      marketHealthy ? "Broad market filter remains supportive." : "Broad market filter needs to improve.",
+    ]);
+
+    const strengths = uniqueStrings([
+      stockHealthy ? "Above SMA200" : null,
+      marketHealthy ? "SPY healthy" : null,
+      idealDip ? "Pullback is inside the preferred dip zone." : null,
+      shallowDip ? "Pullback is controlled so far." : null,
+      deepDip && stockHealthy && marketHealthy ? "Deep but still structurally healthy dip." : null,
+    ]);
+
+    const invalidationWatch = uniqueStrings([
+      stockHealthy ? "A decisive break below SMA200 would damage the setup." : "Needs a reclaim back above SMA200.",
+      marketHealthy ? null : "A weak SPY regime keeps dip entries lower quality.",
+      brokenDip ? "Further downside below the current deep-dip state would keep this defensive." : null,
+    ]);
+
+    if (row.signal === "CONSIDER_BUY") {
+      return {
+        setupType: `${row.group} quality dip`,
+        candidateState: "ACTIONABLE_TODAY",
+        candidateLabel: "Consider Buy",
+        dossierSummary: `${row.reason_summary} Entry is the current price with a controlled 6% / 6% / 12% plan.`,
+        blockers,
+        watchItems,
+        transitionPlan: {
+          summary: "This dip already sits in the preferred zone with stock and market confirmations in place.",
+          next_action: "Use the current price as the working entry and manage the rebound cleanly.",
+          triggers_to_buy: uniqueStrings([
+            "Hold above SMA200.",
+            "Keep the dip inside the 5% to 10% zone without breaking trend.",
+          ]),
+          strengths_now: strengths,
+          invalidation_watch: invalidationWatch,
+        },
+        qualityScore: idealDip ? 80 : 74,
+        action: "BUY_NOW" as const,
+      };
+    }
+
+    if (row.signal === "WATCH") {
+      const isShallowWatch = shallowDip;
+      const isDeepWatch = deepDip;
+      return {
+        setupType: `${row.group} quality dip watch`,
+        candidateState: "QUALITY_WATCH",
+        candidateLabel: isShallowWatch ? "Shallow Watch" : isDeepWatch ? "Deep Watch" : "Watch setup",
+        dossierSummary: isShallowWatch
+          ? `${row.reason_summary} The stock is interesting, but the pullback still needs to deepen into the preferred dip zone.`
+          : isDeepWatch
+            ? `${row.reason_summary} The dip is deep enough to watch closely, but it still needs a steadier rebound before acting.`
+            : `${row.reason_summary} One of the confirmations still needs to improve before this becomes a higher-quality entry.`,
+        blockers,
+        watchItems,
+        transitionPlan: {
+          summary: isShallowWatch
+            ? "This is a stalking candidate rather than a buy-now setup because the pullback is still shallow."
+            : isDeepWatch
+              ? "The dip is interesting, but the bounce still needs to prove itself before this becomes buyable."
+              : "The dip has some quality, but one confirmation still needs to improve first.",
+          next_action: isShallowWatch ? "Wait for a deeper pullback into the 5% to 10% zone." : "Keep stalking the rebound and wait for cleaner confirmation.",
+          triggers_to_buy: uniqueStrings([
+            isShallowWatch ? "A deeper pullback into the 5% to 10% dip zone." : null,
+            isDeepWatch ? "Stabilization after the deeper pullback while staying above SMA200." : null,
+            !stockHealthy ? "Reclaim and hold above SMA200." : null,
+            !marketHealthy ? "SPY needs to remain or move back above SMA200." : null,
+          ]),
+          strengths_now: strengths,
+          invalidation_watch: invalidationWatch,
+        },
+        qualityScore: isShallowWatch ? 64 : 58,
+        action: "WAIT" as const,
+      };
+    }
+
+    return {
+      setupType: `${row.group} defensive dip`,
+      candidateState: "BLOCKED",
+      candidateLabel: stockBroken ? "Broken trend" : brokenDip ? "Too deep" : "Avoid",
+      dossierSummary: `${row.reason_summary} This is defensive for now rather than an entry candidate.`,
+      blockers: uniqueStrings([
+        ...blockers,
+        stockBroken ? "Trend damage is the main blocker." : null,
+        brokenDip ? "The drawdown is beyond the preferred dip range." : null,
+      ]),
+      watchItems,
+      transitionPlan: {
+        summary: "This needs a structural repair before it becomes an investable dip again.",
+        next_action: "Stand aside and wait for the trend and market backdrop to improve.",
+        triggers_to_buy: uniqueStrings([
+          "Reclaim SMA200.",
+          "See the dip stabilize back into a healthier zone.",
+          !marketHealthy ? "SPY back above SMA200." : null,
+        ]),
+        strengths_now: strengths,
+        invalidation_watch: invalidationWatch,
+      },
+      qualityScore: 38,
+      action: "SKIP" as const,
+    };
+  }
+
   function toQualityDipTradeRow(row: QualityDipRow): IdeaRow | null {
     const entry = Number(row.current_price ?? 0);
     if (!Number.isFinite(entry) || entry <= 0) return null;
@@ -2150,6 +2275,7 @@ export default function IdeasWorkspaceClient({
     const tp2 = round2(entry * 1.12);
     const mappedSignal: "BUY" | "WATCH" | "AVOID" =
       row.signal === "CONSIDER_BUY" ? "BUY" : row.signal === "WATCH" ? "WATCH" : "AVOID";
+    const profile = buildQualityDipProfile(row);
     const riskPerShare = Math.max(0, entry - stop);
     const cashAvailable = Number(data?.capacity?.cash_available ?? 0);
     const sharesByCash = entry > 0 ? Math.floor(cashAvailable / entry) : 0;
@@ -2157,9 +2283,19 @@ export default function IdeasWorkspaceClient({
     return {
       symbol: row.symbol,
       signal: mappedSignal,
-      confidence: mappedSignal === "BUY" ? 70 : mappedSignal === "WATCH" ? 60 : 40,
+      confidence: mappedSignal === "BUY" ? 72 : mappedSignal === "WATCH" ? 60 : 38,
       rank: null,
       rank_score: null,
+      quality_score: profile.qualityScore,
+      quality_summary: profile.dossierSummary,
+      setup_type: profile.setupType,
+      candidate_state: profile.candidateState,
+      candidate_state_label: profile.candidateLabel,
+      blockers: profile.blockers,
+      watch_items: profile.watchItems,
+      dossier_summary: profile.dossierSummary,
+      transition_plan: profile.transitionPlan,
+      action: profile.action,
       entry,
       stop,
       tp1,
@@ -2168,10 +2304,32 @@ export default function IdeasWorkspaceClient({
       reason_json: {
         strategy: "quality_dip_v1",
         quality_dip: {
+          group: row.group,
+          bars_count: row.bars_count,
+          source_date: row.source_date,
+          high_30bar: row.high_30d,
           drop_pct_from_30d_high: row.drop_pct_from_30d_high,
           stock_above_sma200: row.stock_above_sma200,
           market_spy_above_sma200: row.market_spy_above_sma200,
         },
+      },
+      symbol_facts: {
+        close: entry,
+        sma200: null,
+        above_sma200: row.stock_above_sma200,
+        high_30bar: row.high_30d,
+        drop_from_30bar_high_pct: row.drop_pct_from_30d_high,
+        trend_state: row.stock_above_sma200 === true ? "ABOVE_SMA200" : row.stock_above_sma200 === false ? "BELOW_SMA200" : "UNKNOWN",
+        extension_state:
+          typeof row.drop_pct_from_30d_high === "number"
+            ? row.drop_pct_from_30d_high < 5
+              ? "SHALLOW_DIP"
+              : row.drop_pct_from_30d_high <= 10
+                ? "IDEAL_DIP"
+                : row.drop_pct_from_30d_high <= 12
+                  ? "DEEP_DIP"
+                  : "TOO_DEEP"
+            : null,
       },
       universe_slug: "quality_dip_watchlist",
       source_scan_date: row.source_date,
