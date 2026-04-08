@@ -58,6 +58,17 @@ type GroupedOpenRow = {
 };
 
 type TpPlan = "none" | "tp1_only" | "tp1_tp2";
+type ClosePreset = {
+  quantity: number;
+  exitReason: "TP1" | "TP2" | "STOP" | "MANUAL" | "TIME";
+  exitPrice?: number | null;
+};
+type ManagementCue = {
+  state: "HOLD" | "TP1_REACHED" | "TP2_REACHED" | "STOP_BREACHED" | "TIME_STOP_SOON" | "TIME_STOP_DUE" | "TIGHTEN_STOP";
+  label: string;
+  summary: string;
+  preset: ClosePreset | null;
+};
 
 function clsx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
@@ -155,6 +166,118 @@ function tpPlanSummaryFor(p: {
 
 function defaultTpPercentsForStrategy(version: string | null | undefined) {
   return version === "v1_trend_hold" ? { tp1Pct: 10, tp2Pct: 20 } : { tp1Pct: 5, tp2Pct: 10 };
+}
+
+function defaultTpSizePctForPlan(plan: string | null | undefined, target: "tp1" | "tp2") {
+  const normalized = String(plan ?? "").toLowerCase();
+  if (target === "tp1") return normalized === "tp1_only" ? 100 : 50;
+  return normalized === "tp1_tp2" ? 50 : 0;
+}
+
+function tpSizePctForPosition(p: PositionRow, target: "tp1" | "tp2") {
+  const explicit = target === "tp1" ? p.tp1_size_pct : p.tp2_size_pct;
+  if (typeof explicit === "number" && Number.isFinite(explicit) && explicit >= 0) return explicit;
+  return defaultTpSizePctForPlan(p.tp_plan ?? null, target);
+}
+
+function qtyForTarget(totalQty: number, sizePct: number | null | undefined) {
+  if (!(totalQty > 0)) return 0;
+  const pct = typeof sizePct === "number" && Number.isFinite(sizePct) ? sizePct : 100;
+  if (pct >= 100) return Math.max(1, Math.round(totalQty));
+  return Math.max(1, Math.min(Math.round(totalQty), Math.round(totalQty * (pct / 100))));
+}
+
+function managementCueClass(state: ManagementCue["state"]) {
+  switch (state) {
+    case "TP1_REACHED":
+    case "TIGHTEN_STOP":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "TIME_STOP_SOON":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    case "STOP_BREACHED":
+    case "TIME_STOP_DUE":
+      return "border-rose-200 bg-rose-50 text-rose-700";
+    case "TP2_REACHED":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-700";
+  }
+}
+
+function buildManagementCue(args: {
+  qty: number;
+  entry: number | null;
+  stop: number | null;
+  last: number | null;
+  tp1: number | null;
+  tp2: number | null;
+  tp1SizePct?: number | null;
+  timeStop: ReturnType<typeof buildTimeStopView>;
+}): ManagementCue {
+  const qty = typeof args.qty === "number" && Number.isFinite(args.qty) ? args.qty : 0;
+  const entry = typeof args.entry === "number" && Number.isFinite(args.entry) ? args.entry : null;
+  const stop = typeof args.stop === "number" && Number.isFinite(args.stop) ? args.stop : null;
+  const last = typeof args.last === "number" && Number.isFinite(args.last) ? args.last : null;
+  const tp1 = typeof args.tp1 === "number" && Number.isFinite(args.tp1) ? args.tp1 : null;
+  const tp2 = typeof args.tp2 === "number" && Number.isFinite(args.tp2) ? args.tp2 : null;
+  const tp1SizePct = typeof args.tp1SizePct === "number" && Number.isFinite(args.tp1SizePct) ? args.tp1SizePct : 50;
+  const presetExitPrice = last != null && last > 0 ? last : null;
+
+  if (last != null && stop != null && last <= stop) {
+    return {
+      state: "STOP_BREACHED" as const,
+      label: "Stop breached",
+      summary: "Price is at or below the stop. Closing or reassessing immediately is reasonable.",
+      preset: { quantity: Math.max(1, Math.round(qty)), exitReason: "STOP", exitPrice: presetExitPrice },
+    };
+  }
+  if (args.timeStop.isDue) {
+    return {
+      state: "TIME_STOP_DUE" as const,
+      label: "Time stop due",
+      summary: "The max hold window is up. Exiting today is consistent with the current plan.",
+      preset: { quantity: Math.max(1, Math.round(qty)), exitReason: "TIME", exitPrice: presetExitPrice },
+    };
+  }
+  if (last != null && tp2 != null && last >= tp2) {
+    return {
+      state: "TP2_REACHED" as const,
+      label: "TP2 reached",
+      summary: "The second target is reached. Taking the remainder off is reasonable.",
+      preset: { quantity: Math.max(1, Math.round(qty)), exitReason: "TP2", exitPrice: presetExitPrice },
+    };
+  }
+  if (last != null && tp1 != null && last >= tp1) {
+    return {
+      state: "TP1_REACHED" as const,
+      label: "TP1 reached",
+      summary: "First target is reached. A partial sale and stop review is reasonable now.",
+      preset: { quantity: qtyForTarget(qty, tp1SizePct), exitReason: "TP1", exitPrice: presetExitPrice },
+    };
+  }
+  const rNow = last != null && entry != null && stop != null && entry > stop ? (last - entry) / (entry - stop) : null;
+  if (rNow != null && rNow >= 1) {
+    return {
+      state: "TIGHTEN_STOP" as const,
+      label: "Tighten stop",
+      summary: "The trade is above 1R. Tightening the stop toward breakeven is worth considering.",
+      preset: null,
+    };
+  }
+  if (args.timeStop.warnSoon) {
+    return {
+      state: "TIME_STOP_SOON" as const,
+      label: "Time stop soon",
+      summary: "The time-stop window is almost up. Plan the exit path now.",
+      preset: null,
+    };
+  }
+  return {
+    state: "HOLD" as const,
+    label: "Hold plan",
+    summary: "No immediate management trigger is active right now.",
+    preset: null,
+  };
 }
 
 function dayDiffFromDate(dateStr: string | null | undefined) {
@@ -353,32 +476,33 @@ export default function PositionsClient({
 
   const hasClosedTrades = closedWithPnL.length > 0;
 
-  function openCloseModal(p: PositionRow) {
-    setActivePosition(p);
-    setActiveGroupedRow(null);
-    setExitPriceInput("");
-    setCloseQtyInput(String(resolveQty(p)));
+  function applyClosePreset(maxQty: number, preset: ClosePreset | null | undefined) {
+    setExitPriceInput(
+      preset?.exitPrice != null && Number.isFinite(preset.exitPrice) && preset.exitPrice > 0
+        ? Number(preset.exitPrice).toFixed(2)
+        : ""
+    );
+    setCloseQtyInput(String(preset ? Math.max(1, Math.min(Math.round(maxQty), Math.round(preset.quantity))) : maxQty));
     setExitFeeInput(
       typeof defaultFeePerOrder === "number" && Number.isFinite(defaultFeePerOrder)
         ? defaultFeePerOrder.toFixed(2)
         : ""
     );
-    setExitReasonInput("MANUAL");
+    setExitReasonInput(preset?.exitReason ?? "MANUAL");
+  }
+
+  function openCloseModal(p: PositionRow, preset?: ClosePreset | null) {
+    setActivePosition(p);
+    setActiveGroupedRow(null);
+    applyClosePreset(resolveQty(p), preset ?? null);
     setCloseError(null);
     setCloseModalOpen(true);
   }
 
-  function openCloseGroupedModal(row: GroupedOpenRow) {
+  function openCloseGroupedModal(row: GroupedOpenRow, preset?: ClosePreset | null) {
     setActiveGroupedRow(row);
     setActivePosition(null);
-    setExitPriceInput("");
-    setCloseQtyInput(String(row.qty));
-    setExitFeeInput(
-      typeof defaultFeePerOrder === "number" && Number.isFinite(defaultFeePerOrder)
-        ? defaultFeePerOrder.toFixed(2)
-        : ""
-    );
-    setExitReasonInput("MANUAL");
+    applyClosePreset(row.qty, preset ?? null);
     setCloseError(null);
     setCloseModalOpen(true);
   }
@@ -1090,12 +1214,28 @@ export default function PositionsClient({
                         if (q <= 0 || v === null) return sum;
                         return sum + q;
                       }, 0);
+                      const groupedTp1 = weightedTp1Denom > 0 ? weightedTp1Numer / weightedTp1Denom : null;
+                      const groupedTp2 = weightedTp2Denom > 0 ? weightedTp2Numer / weightedTp2Denom : null;
+                      const groupedTp1SizePct =
+                        g.qty > 0
+                          ? lots.reduce((sum, p) => sum + resolveQty(p) * (tpSizePctForPosition(p, "tp1") / 100), 0) / g.qty * 100
+                          : null;
                       const intel = riskIntel({
                         entry: g.avgEntry,
                         stop: groupedStop,
                         last: g.last,
-                        tp1: weightedTp1Denom > 0 ? weightedTp1Numer / weightedTp1Denom : null,
-                        tp2: weightedTp2Denom > 0 ? weightedTp2Numer / weightedTp2Denom : null,
+                        tp1: groupedTp1,
+                        tp2: groupedTp2,
+                      });
+                      const managementCue = buildManagementCue({
+                        qty: g.qty,
+                        entry: g.avgEntry,
+                        stop: groupedStop,
+                        last: g.last,
+                        tp1: groupedTp1,
+                        tp2: groupedTp2,
+                        tp1SizePct: groupedTp1SizePct,
+                        timeStop,
                       });
 
                       return (
@@ -1133,6 +1273,16 @@ export default function PositionsClient({
                             <div>Stop: {formatMoney(groupedStop)}</div>
                             <div>TP1: {typeof intel.toTp1Pct === "number" ? formatPct(intel.toTp1Pct) : "—"}</div>
                             <div>R now: {typeof intel.rNow === "number" && Number.isFinite(intel.rNow) ? formatNum(intel.rNow) : "—"}</div>
+                            {managementCue.state !== "HOLD" ? (
+                              <>
+                                <div className="mt-1">
+                                  <span className={clsx("rounded-full border px-2 py-0.5 text-[10px] font-semibold", managementCueClass(managementCue.state))}>
+                                    {managementCue.label}
+                                  </span>
+                                </div>
+                                <div className="mt-1 max-w-[16rem] text-[10px] leading-4 text-slate-500">{managementCue.summary}</div>
+                              </>
+                            ) : null}
                           </td>
                           <td className="p-3 text-slate-800">
                             <div
@@ -1177,6 +1327,15 @@ export default function PositionsClient({
                               >
                                 Edit TP plan
                               </button>
+                              {managementCue.preset ? (
+                                <button
+                                  className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                                  onClick={() => openCloseGroupedModal(g, managementCue.preset)}
+                                  title={managementCue.summary}
+                                >
+                                  {managementCue.preset.exitReason === "TP1" ? "Take TP1" : "Close now"}
+                                </button>
+                              ) : null}
                               <button
                                 className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
                                 onClick={() => openCloseGroupedModal(g)}
@@ -1267,12 +1426,24 @@ export default function PositionsClient({
                               ? "text-rose-600"
                               : "text-slate-600"
                           : "text-slate-500";
+                      const tp1Price = maybeTpPriceForPosition(p, "tp1");
+                      const tp2Price = maybeTpPriceForPosition(p, "tp2");
                       const intel = riskIntel({
                         entry: p.entry_price,
                         stop: resolveStopPrice(p),
                         last,
-                        tp1: maybeTpPriceForPosition(p, "tp1"),
-                        tp2: maybeTpPriceForPosition(p, "tp2"),
+                        tp1: tp1Price,
+                        tp2: tp2Price,
+                      });
+                      const managementCue = buildManagementCue({
+                        qty,
+                        entry: p.entry_price,
+                        stop: resolveStopPrice(p),
+                        last,
+                        tp1: tp1Price,
+                        tp2: tp2Price,
+                        tp1SizePct: tpSizePctForPosition(p, "tp1"),
+                        timeStop,
                       });
 
                       return (
@@ -1310,6 +1481,16 @@ export default function PositionsClient({
                             <div>Stop: {formatMoney(resolveStopPrice(p))}</div>
                             <div>TP1: {typeof intel.toTp1Pct === "number" ? formatPct(intel.toTp1Pct) : "—"}</div>
                             <div>R now: {typeof intel.rNow === "number" && Number.isFinite(intel.rNow) ? formatNum(intel.rNow) : "—"}</div>
+                            {managementCue.state !== "HOLD" ? (
+                              <>
+                                <div className="mt-1">
+                                  <span className={clsx("rounded-full border px-2 py-0.5 text-[10px] font-semibold", managementCueClass(managementCue.state))}>
+                                    {managementCue.label}
+                                  </span>
+                                </div>
+                                <div className="mt-1 max-w-[16rem] text-[10px] leading-4 text-slate-500">{managementCue.summary}</div>
+                              </>
+                            ) : null}
                           </td>
                           <td className="p-3 text-slate-800">
                             <div
@@ -1344,6 +1525,15 @@ export default function PositionsClient({
                               >
                                 Edit TP plan
                               </button>
+                              {managementCue.preset ? (
+                                <button
+                                  className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                                  onClick={() => openCloseModal(p, managementCue.preset)}
+                                  title={managementCue.summary}
+                                >
+                                  {managementCue.preset.exitReason === "TP1" ? "Take TP1" : "Close now"}
+                                </button>
+                              ) : null}
                               <button
                                 className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50"
                                 onClick={() => openCloseModal(p)}
