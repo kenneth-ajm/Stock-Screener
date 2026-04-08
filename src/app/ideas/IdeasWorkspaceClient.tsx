@@ -1384,6 +1384,26 @@ export default function IdeasWorkspaceClient({
       },
     [qualityDipData]
   );
+  const qualityProfileSummary = useMemo(() => {
+    return qualityRows.reduce(
+      (acc, row) => {
+        const profile = buildQualityDipProfile(row);
+        if (profile.candidateState === "ACTIONABLE_TODAY") acc.buyReady += 1;
+        else if (profile.candidateLabel === "Shallow Watch") acc.shallowWatch += 1;
+        else if (profile.candidateLabel === "Deep Watch") acc.deepWatch += 1;
+        else if (profile.candidateState === "BLOCKED") acc.defensive += 1;
+        else acc.watchSetup += 1;
+        return acc;
+      },
+      {
+        buyReady: 0,
+        shallowWatch: 0,
+        deepWatch: 0,
+        watchSetup: 0,
+        defensive: 0,
+      }
+    );
+  }, [qualityRows]);
   const rows = useMemo(() => allRows.slice(0, 10), [allRows]);
   const candidateStateCounts = data?.meta?.candidate_state_counts ?? null;
   const closestToActionable = data?.meta?.closest_to_actionable ?? [];
@@ -3257,6 +3277,28 @@ function changePill(status: string | null | undefined) {
                     <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2">
                       <div className="text-[11px] text-rose-700">Avoid</div>
                       <div className="text-lg font-semibold text-rose-800">{qualitySummary.avoid}</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-5">
+                    <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-emerald-700">Buy-ready</div>
+                      <div className="mt-1 text-sm font-semibold text-emerald-800">{qualityProfileSummary.buyReady}</div>
+                    </div>
+                    <div className="rounded-lg border border-sky-200 bg-white px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-sky-700">Shallow watch</div>
+                      <div className="mt-1 text-sm font-semibold text-sky-800">{qualityProfileSummary.shallowWatch}</div>
+                    </div>
+                    <div className="rounded-lg border border-amber-200 bg-white px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-amber-700">Deep watch</div>
+                      <div className="mt-1 text-sm font-semibold text-amber-800">{qualityProfileSummary.deepWatch}</div>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-600">Watch setups</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-800">{qualityProfileSummary.watchSetup}</div>
+                    </div>
+                    <div className="rounded-lg border border-rose-200 bg-white px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-rose-700">Defensive</div>
+                      <div className="mt-1 text-sm font-semibold text-rose-800">{qualityProfileSummary.defensive}</div>
                     </div>
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
