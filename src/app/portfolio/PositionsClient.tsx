@@ -995,6 +995,98 @@ export default function PositionsClient({
     return m;
   }, [openFiltered]);
 
+  const managementSummary = useMemo(() => {
+    const stateCounts: Record<ManagementCue["state"], number> = {
+      HOLD: 0,
+      TP1_REACHED: 0,
+      TP2_REACHED: 0,
+      STOP_BREACHED: 0,
+      TIME_STOP_SOON: 0,
+      TIME_STOP_DUE: 0,
+      TIGHTEN_STOP: 0,
+    };
+    const severityRank: Record<ManagementCue["state"], number> = {
+      STOP_BREACHED: 5,
+      TIME_STOP_DUE: 4,
+      TP2_REACHED: 3,
+      TP1_REACHED: 2,
+      TIGHTEN_STOP: 1,
+      TIME_STOP_SOON: 1,
+      HOLD: 0,
+    };
+    const rows = groupedOpen.map((g) => {
+      const lots = g.lotIds.map((id) => openById.get(id)).filter((lot): lot is PositionRow => Boolean(lot));
+      const groupedStop = (() => {
+        const stops = lots
+          .map((p) => resolveStopPrice(p))
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+        if (stops.length === 0) return null;
+        const totalQty = lots.reduce((sum, p) => sum + resolveQty(p), 0);
+        const weighted = lots.reduce((sum, p) => {
+          const q = resolveQty(p);
+          const stop = resolveStopPrice(p);
+          if (!q || stop == null) return sum;
+          return sum + stop * q;
+        }, 0);
+        return totalQty > 0 ? weighted / totalQty : stops[0] ?? null;
+      })();
+      const timeStop = buildTimeStopView(g.openedAt, g.maxHoldDays);
+      const weightedTp1Numer = lots.reduce((sum, p) => {
+        const q = resolveQty(p);
+        const v = maybeTpPriceForPosition(p, "tp1");
+        if (q <= 0 || v === null) return sum;
+        return sum + v * q;
+      }, 0);
+      const weightedTp1Denom = lots.reduce((sum, p) => {
+        const q = resolveQty(p);
+        const v = maybeTpPriceForPosition(p, "tp1");
+        if (q <= 0 || v === null) return sum;
+        return sum + q;
+      }, 0);
+      const weightedTp2Numer = lots.reduce((sum, p) => {
+        const q = resolveQty(p);
+        const v = maybeTpPriceForPosition(p, "tp2");
+        if (q <= 0 || v === null) return sum;
+        return sum + v * q;
+      }, 0);
+      const weightedTp2Denom = lots.reduce((sum, p) => {
+        const q = resolveQty(p);
+        const v = maybeTpPriceForPosition(p, "tp2");
+        if (q <= 0 || v === null) return sum;
+        return sum + q;
+      }, 0);
+      const groupedTp1 = weightedTp1Denom > 0 ? weightedTp1Numer / weightedTp1Denom : null;
+      const groupedTp2 = weightedTp2Denom > 0 ? weightedTp2Numer / weightedTp2Denom : null;
+      const groupedTp1SizePct =
+        g.qty > 0
+          ? (lots.reduce((sum, p) => sum + resolveQty(p) * (tpSizePctForPosition(p, "tp1") / 100), 0) / g.qty) * 100
+          : null;
+      const cue = buildManagementCue({
+        qty: g.qty,
+        entry: g.avgEntry,
+        stop: groupedStop,
+        last: g.last,
+        tp1: groupedTp1,
+        tp2: groupedTp2,
+        tp1SizePct: groupedTp1SizePct,
+        timeStop,
+      });
+      stateCounts[cue.state] += 1;
+      return {
+        symbol: g.symbol,
+        strategy: strategyLabel(g.strategy_version),
+        cue,
+        qty: g.qty,
+        last: g.last,
+      };
+    });
+    rows.sort((a, b) => severityRank[b.cue.state] - severityRank[a.cue.state] || a.symbol.localeCompare(b.symbol));
+    return {
+      counts: stateCounts,
+      top: rows.filter((row) => row.cue.state !== "HOLD").slice(0, 4),
+    };
+  }, [groupedOpen, openById]);
+
   function maybeTpPriceForPosition(p: PositionRow, tp: "tp1" | "tp2"): number | null {
     const priceField = tp === "tp1" ? p.tp1_price : p.tp2_price;
     const pctField = tp === "tp1" ? p.tp1_pct : p.tp2_pct;
@@ -1123,6 +1215,43 @@ export default function PositionsClient({
             >
               + Add Existing Holding
             </button>
+          </div>
+
+          <div className="border-b border-slate-200 bg-slate-50/70 px-3 py-3">
+            <div className="grid gap-2 md:grid-cols-4">
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+                <div className="text-[11px] font-medium text-emerald-700">TP1 / TP2 ready</div>
+                <div className="mt-1 text-lg font-semibold text-emerald-800">
+                  {managementSummary.counts.TP1_REACHED + managementSummary.counts.TP2_REACHED}
+                </div>
+              </div>
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
+                <div className="text-[11px] font-medium text-rose-700">Urgent exits</div>
+                <div className="mt-1 text-lg font-semibold text-rose-800">
+                  {managementSummary.counts.STOP_BREACHED + managementSummary.counts.TIME_STOP_DUE}
+                </div>
+              </div>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+                <div className="text-[11px] font-medium text-amber-700">Time stop soon</div>
+                <div className="mt-1 text-lg font-semibold text-amber-800">{managementSummary.counts.TIME_STOP_SOON}</div>
+              </div>
+              <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
+                <div className="text-[11px] font-medium text-sky-700">Tighten stop</div>
+                <div className="mt-1 text-lg font-semibold text-sky-800">{managementSummary.counts.TIGHTEN_STOP}</div>
+              </div>
+            </div>
+            {managementSummary.top.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-600">
+                {managementSummary.top.map((item) => (
+                  <span key={`${item.symbol}-${item.cue.state}`} className="rounded-full border border-slate-200 bg-white px-2.5 py-1">
+                    <span className="font-semibold text-slate-800">{item.symbol}</span>{" "}
+                    <span className="text-slate-500">• {item.cue.label}</span>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-3 text-[11px] text-slate-500">No immediate management triggers across current open positions.</div>
+            )}
           </div>
 
           <div className="overflow-x-auto">
