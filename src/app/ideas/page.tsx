@@ -9,6 +9,7 @@ const IDEAS_PAGE_MARKER = "ideas-canonical-20260308-a";
 function normalizeIdeasStrategy(input: string | null | undefined) {
   const raw = String(input ?? "").trim().toLowerCase();
   if (raw === "quality_dip" || raw === "quality" || raw === "dip") return "quality_dip";
+  if (raw === "tactical_momentum" || raw === "tactical" || raw === "q" || raw === "qstyle") return "tactical_momentum";
   if (raw === "v1_trend_hold" || raw === "trend") return "v1_trend_hold";
   if (raw === "v1_sector_momentum" || raw === "sector") return "v1_sector_momentum";
   if (raw === "v1" || raw === "v2_core_momentum" || raw === "momentum" || raw === "core" || raw === "swing" || raw === "")

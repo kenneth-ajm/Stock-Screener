@@ -8,7 +8,7 @@ import { buildIdeaCatalystContext, type TickerProfile } from "@/lib/idea_catalys
 import { applyBreadthToAction } from "@/lib/market_breadth";
 import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 
-type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold" | "quality_dip";
+type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold" | "quality_dip" | "tactical_momentum";
 type IdeasFilter = "all" | "buy" | "watch" | "actionable";
 type PortfolioFitState = "GOOD_FIT" | "ALREADY_HELD" | "CAPACITY_LIMITED" | "CROWDED" | "REVIEW";
 type LeadershipState = "LEADING" | "IMPROVING" | "WEAK" | "UNKNOWN";
@@ -373,6 +373,62 @@ type QualityDipPayload = {
 };
 type QualityDipFilter = "all" | "consider_buy" | "watch" | "avoid";
 type QualityDipSort = "signal" | "drop" | "price" | "symbol";
+type TacticalMomentumSignal = "BUY" | "WATCH" | "AVOID";
+type TacticalMomentumSetupType = "Q Breakout" | "Q EP Daily" | "Momentum Watch" | "Defensive";
+type TacticalMomentumRow = {
+  symbol: string;
+  name: string;
+  group: string;
+  setup_type: TacticalMomentumSetupType;
+  current_price: number | null;
+  breakout_level: number | null;
+  distance_to_breakout_pct: number | null;
+  relative_volume: number | null;
+  day_change_pct: number | null;
+  range_10d_pct: number | null;
+  stock_above_sma20: boolean | null;
+  stock_above_sma50: boolean | null;
+  stock_above_sma200: boolean | null;
+  market_spy_above_sma200: boolean;
+  signal: TacticalMomentumSignal;
+  entry_price: number | null;
+  stop_price: number | null;
+  tp1_price: number | null;
+  tp2_price: number | null;
+  reason_summary: string;
+  source_date: string | null;
+  bars_count: number;
+};
+
+type TacticalMomentumPayload = {
+  ok: boolean;
+  rows?: TacticalMomentumRow[];
+  summary?: { buy: number; watch: number; avoid: number };
+  meta?: {
+    watchlist_size?: number;
+    source_date?: string | null;
+    setup_summary?: { breakout: number; ep: number; watch: number; defensive: number };
+    freshness?: {
+      expected_date?: string | null;
+      latest_symbol_date?: string | null;
+      oldest_symbol_date?: string | null;
+      stale_symbols_count?: number;
+      stale_symbols?: Array<{ symbol: string; source_date: string }>;
+      state?: "current" | "mixed" | "stale";
+    };
+    market?: {
+      spy_close?: number | null;
+      spy_sma50?: number | null;
+      spy_sma200?: number | null;
+      spy_above_sma200?: boolean;
+      source_date?: string | null;
+    };
+    missing_symbols?: string[];
+  };
+  error?: string;
+};
+type TacticalMomentumFilter = "all" | "buy" | "watch" | "avoid";
+type TacticalMomentumSort = "signal" | "distance" | "rv" | "symbol";
 
 type QuoteMap = Record<
   string,
@@ -847,6 +903,7 @@ export default function IdeasWorkspaceClient({
   const [universeMode, setUniverseMode] = useState<string>(initialUniverse);
   const [data, setData] = useState<Payload | null>(null);
   const [qualityDipData, setQualityDipData] = useState<QualityDipPayload | null>(null);
+  const [tacticalData, setTacticalData] = useState<TacticalMomentumPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<IdeaRow | null>(null);
   const [fill, setFill] = useState("");
@@ -877,6 +934,9 @@ export default function IdeasWorkspaceClient({
   const [selectedFilter, setSelectedFilter] = useState<IdeasFilter>("all");
   const [qualityFilter, setQualityFilter] = useState<QualityDipFilter>("all");
   const [qualitySort, setQualitySort] = useState<QualityDipSort>("signal");
+  const [tacticalFilter, setTacticalFilter] = useState<TacticalMomentumFilter>("all");
+  const [tacticalSort, setTacticalSort] = useState<TacticalMomentumSort>("signal");
+  const [showAdvancedInsights, setShowAdvancedInsights] = useState(false);
   const [scanDateHintByStrategy, setScanDateHintByStrategy] = useState<Partial<Record<StrategyVersion, string>>>({});
   const [runScanState, setRunScanState] = useState<ManualScanState>({
     status: "idle",
@@ -934,9 +994,13 @@ export default function IdeasWorkspaceClient({
   }, [initialStrategy]);
 
   useEffect(() => {
-    if (strategy === "quality_dip") {
+    if (strategy === "quality_dip" || strategy === "tactical_momentum") {
       setSelected(null);
     }
+  }, [strategy]);
+
+  useEffect(() => {
+    setShowAdvancedInsights(false);
   }, [strategy]);
 
   useEffect(() => {
@@ -946,8 +1010,9 @@ export default function IdeasWorkspaceClient({
   useEffect(() => {
     let mounted = true;
     setLoading(true);
-    if (strategy === "quality_dip") {
-      const apiUrl = refreshNonce > 0 ? `/api/quality-dip?_bust=${refreshNonce}` : "/api/quality-dip";
+    if (strategy === "quality_dip" || strategy === "tactical_momentum") {
+      const apiBase = strategy === "quality_dip" ? "/api/quality-dip" : "/api/tactical-momentum";
+      const apiUrl = refreshNonce > 0 ? `${apiBase}?_bust=${refreshNonce}` : apiBase;
       setLastQualityApiUrl(apiUrl);
       setLastApiUrl(apiUrl);
       setLastLoadOk(null);
@@ -958,16 +1023,34 @@ export default function IdeasWorkspaceClient({
           if (!r.ok || !json) {
             const apiError = (json as any)?.error ?? `HTTP ${r.status}`;
             setLastLoadOk(false);
-            setQualityDipData({ ok: false, error: String(apiError) });
+            if (strategy === "quality_dip") {
+              setQualityDipData({ ok: false, error: String(apiError) });
+              setTacticalData(null);
+            } else {
+              setTacticalData({ ok: false, error: String(apiError) });
+              setQualityDipData(null);
+            }
             return;
           }
           setLastLoadOk(Boolean(json?.ok));
-          setQualityDipData(json as QualityDipPayload);
+          if (strategy === "quality_dip") {
+            setQualityDipData(json as QualityDipPayload);
+            setTacticalData(null);
+          } else {
+            setTacticalData(json as TacticalMomentumPayload);
+            setQualityDipData(null);
+          }
         })
         .catch((e) => {
           if (!mounted) return;
           setLastLoadOk(false);
-          setQualityDipData({ ok: false, error: e instanceof Error ? e.message : "Load failed" });
+          if (strategy === "quality_dip") {
+            setQualityDipData({ ok: false, error: e instanceof Error ? e.message : "Load failed" });
+            setTacticalData(null);
+          } else {
+            setTacticalData({ ok: false, error: e instanceof Error ? e.message : "Load failed" });
+            setQualityDipData(null);
+          }
         })
         .finally(() => mounted && setLoading(false));
       return () => {
@@ -1218,7 +1301,7 @@ export default function IdeasWorkspaceClient({
   }, [selected, quoteBySymbol]);
 
   useEffect(() => {
-    if (!selected || strategy === "quality_dip") return;
+    if (!selected || isWatchlistStrategy) return;
     if (detailsLoading || details) return;
     void openDetails();
   }, [selected?.symbol, selected?.source_scan_date, strategy]);
@@ -1404,6 +1487,56 @@ export default function IdeasWorkspaceClient({
       }
     );
   }, [qualityRows]);
+  const tacticalRows = useMemo(() => tacticalData?.rows ?? [], [tacticalData]);
+  const tacticalFreshness = tacticalData?.meta?.freshness;
+  const tacticalFreshnessChip =
+    tacticalFreshness?.state === "current"
+      ? `Bars current: ${tacticalFreshness.expected_date ?? tacticalData?.meta?.source_date ?? "—"}`
+      : tacticalFreshness?.state === "mixed"
+        ? `Bars mixed: ${tacticalFreshness.expected_date ?? tacticalData?.meta?.source_date ?? "—"}`
+        : `Bars stale: ${tacticalFreshness?.oldest_symbol_date ?? tacticalData?.meta?.source_date ?? "—"}`;
+  const tacticalStaleSymbols = Array.isArray(tacticalFreshness?.stale_symbols) ? tacticalFreshness.stale_symbols : [];
+  const tacticalStalePreview =
+    tacticalStaleSymbols.length > 0
+      ? tacticalStaleSymbols.slice(0, 6).map((entry) => `${entry.symbol} (${entry.source_date})`).join(", ")
+      : "";
+  const tacticalRowsView = useMemo(() => {
+    const filtered = tacticalRows.filter((row) => {
+      if (tacticalFilter === "all") return true;
+      if (tacticalFilter === "buy") return row.signal === "BUY";
+      if (tacticalFilter === "watch") return row.signal === "WATCH";
+      return row.signal === "AVOID";
+    });
+    const signalOrder: Record<TacticalMomentumSignal, number> = { BUY: 0, WATCH: 1, AVOID: 2 };
+    return [...filtered].sort((a, b) => {
+      if (tacticalSort === "symbol") return a.symbol.localeCompare(b.symbol);
+      if (tacticalSort === "distance") {
+        const diff = Number(a.distance_to_breakout_pct ?? 999) - Number(b.distance_to_breakout_pct ?? 999);
+        if (diff !== 0) return diff;
+        return a.symbol.localeCompare(b.symbol);
+      }
+      if (tacticalSort === "rv") {
+        const diff = Number(b.relative_volume ?? -999) - Number(a.relative_volume ?? -999);
+        if (diff !== 0) return diff;
+        return a.symbol.localeCompare(b.symbol);
+      }
+      const signalDiff = signalOrder[a.signal] - signalOrder[b.signal];
+      if (signalDiff !== 0) return signalDiff;
+      const breakoutDiff = Number(a.distance_to_breakout_pct ?? 999) - Number(b.distance_to_breakout_pct ?? 999);
+      if (breakoutDiff !== 0) return breakoutDiff;
+      return a.symbol.localeCompare(b.symbol);
+    });
+  }, [tacticalRows, tacticalFilter, tacticalSort]);
+  const tacticalGroupedRows = useMemo(() => {
+    const order = ["Semis & AI", "Platform Leaders", "Software & Infra", "Cyclicals & Industrials", "Financial Momentum", "Biotech & Special Situations", "ETF Anchors"];
+    return order.map((group) => ({ group, rows: tacticalRowsView.filter((row) => row.group === group) })).filter((group) => group.rows.length > 0);
+  }, [tacticalRowsView]);
+  const tacticalSummary = useMemo(() => tacticalData?.summary ?? { buy: 0, watch: 0, avoid: 0 }, [tacticalData]);
+  const tacticalSetupSummary = useMemo(() => tacticalData?.meta?.setup_summary ?? { breakout: 0, ep: 0, watch: 0, defensive: 0 }, [tacticalData]);
+  const isQualityDip = strategy === "quality_dip";
+  const isTacticalMomentum = strategy === "tactical_momentum";
+  const isWatchlistStrategy = isQualityDip || isTacticalMomentum;
+  const isScannerStrategy = !isWatchlistStrategy;
   const rows = useMemo(() => allRows.slice(0, 10), [allRows]);
   const candidateStateCounts = data?.meta?.candidate_state_counts ?? null;
   const closestToActionable = data?.meta?.closest_to_actionable ?? [];
@@ -1552,7 +1685,7 @@ export default function IdeasWorkspaceClient({
     readContextMatchesLatestManualScan &&
     Number(data?.meta?.rows_display_count ?? 0) > 0;
   const marketDataStatus = data?.meta?.market_data_status ?? null;
-  const marketDataIsStale = strategy !== "quality_dip" && Boolean(marketDataStatus?.is_stale);
+  const marketDataIsStale = isScannerStrategy && Boolean(marketDataStatus?.is_stale);
   const marketDataReasonSummary =
     Array.isArray(marketDataStatus?.reasons) && marketDataStatus.reasons.length > 0
       ? marketDataStatus.reasons.join(" • ")
@@ -1664,8 +1797,8 @@ export default function IdeasWorkspaceClient({
 
   async function openDetails() {
     if (!selected || detailsLoading || details) return;
-    if ((strategy === "v1_sector_momentum" || strategy === "quality_dip") && selected.reason_json) {
-      setDetails({ ok: true, row: selected, source: strategy === "quality_dip" ? "quality_dip_inline" : "sector_momentum_inline" });
+    if ((strategy === "v1_sector_momentum" || isWatchlistStrategy) && selected.reason_json) {
+      setDetails({ ok: true, row: selected, source: isQualityDip ? "quality_dip_inline" : isTacticalMomentum ? "tactical_momentum_inline" : "sector_momentum_inline" });
       return;
     }
     setDetailsLoading(true);
@@ -1877,7 +2010,7 @@ export default function IdeasWorkspaceClient({
     }
   }
 
-  async function runStrategyScan(strategyToRun: Exclude<StrategyVersion, "quality_dip">, label: string) {
+  async function runStrategyScan(strategyToRun: Exclude<StrategyVersion, "quality_dip" | "tactical_momentum">, label: string) {
     const requestId = `scan_ui_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const startedAtMs = Date.now();
     let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -1904,7 +2037,7 @@ export default function IdeasWorkspaceClient({
       error: null,
     });
     try {
-      const strategyUniverses: Record<Exclude<StrategyVersion, "quality_dip">, string[]> = {
+      const strategyUniverses: Record<Exclude<StrategyVersion, "quality_dip" | "tactical_momentum">, string[]> = {
         v1: ["liquid_2000", "midcap_1000"],
         v1_trend_hold: ["core_800", "liquid_2000"],
         v1_sector_momentum: ["growth_1500", "midcap_1000"],
@@ -2162,6 +2295,104 @@ export default function IdeasWorkspaceClient({
     return "border-rose-200 bg-rose-50 text-rose-700";
   }
 
+  function buildTacticalMomentumProfile(row: TacticalMomentumRow) {
+    const nearBreakout = typeof row.distance_to_breakout_pct === "number" && row.distance_to_breakout_pct <= 3;
+    const healthyTrend = row.stock_above_sma50 === true && row.stock_above_sma200 === true;
+    const epStyle = row.setup_type === "Q EP Daily";
+    const breakoutStyle = row.setup_type === "Q Breakout";
+    const blockers = uniqueStrings([
+      row.market_spy_above_sma200 ? null : "Broad market filter is weak (SPY below key trend).",
+      row.stock_above_sma200 === false ? "Stock is below SMA200.": null,
+      !nearBreakout && row.signal !== "AVOID" ? "Still needs to tighten closer to the breakout level." : null,
+      typeof row.relative_volume === "number" && row.relative_volume < 1.1 && row.signal !== "AVOID" ? "Relative volume still needs to confirm." : null,
+    ]);
+    const strengths = uniqueStrings([
+      healthyTrend ? "Trend aligned above SMA50 and SMA200." : null,
+      row.market_spy_above_sma200 ? "SPY trend is supportive." : null,
+      epStyle ? "Catalyst-style expansion day is in play." : null,
+      breakoutStyle ? "Price is pressing a recent breakout level." : null,
+      typeof row.relative_volume === "number" && row.relative_volume >= 1.3 ? `${row.relative_volume.toFixed(2)}x relative volume` : null,
+    ]);
+    const watchItems = uniqueStrings([
+      nearBreakout ? "Watch the breakout level closely and avoid chasing a failed thrust." : "Watch for price to tighten within 3% of breakout.",
+      epStyle ? "Watch whether follow-through holds after the expansion day." : null,
+      breakoutStyle ? "Watch for tighter closes under the breakout level." : null,
+    ]);
+    const invalidationWatch = uniqueStrings([
+      row.stock_above_sma50 === false ? "Needs to reclaim SMA50." : "Losing SMA50 would weaken the setup.",
+      row.stock_above_sma200 === false ? "Needs to reclaim SMA200." : "A decisive break below SMA200 would damage the setup.",
+      row.market_spy_above_sma200 ? null : "Weak market backdrop lowers breakout quality.",
+    ]);
+
+    if (row.signal === "BUY") {
+      return {
+        setupType: row.setup_type,
+        candidateState: "ACTIONABLE_TODAY",
+        candidateLabel: epStyle ? "EP buy" : "Breakout buy",
+        dossierSummary: `${row.reason_summary} This is a tactical momentum entry with a tighter, faster trade plan.`,
+        blockers,
+        watchItems,
+        transitionPlan: {
+          summary: epStyle
+            ? "The expansion day is already in motion; this needs disciplined execution rather than a long wait."
+            : "The stock is close enough to the breakout level to plan a tactical entry now.",
+          next_action: epStyle ? "Plan a quick tactical entry and manage follow-through aggressively." : "Plan a breakout entry and treat this as a faster swing.",
+          triggers_to_buy: uniqueStrings([
+            "Keep the breakout / expansion move intact.",
+            "Do not let the setup lose the 20 to 50 day support area immediately.",
+          ]),
+          strengths_now: strengths,
+          invalidation_watch: invalidationWatch,
+        },
+        qualityScore: epStyle ? 82 : 76,
+        action: "BUY_NOW" as const,
+      };
+    }
+    if (row.signal === "WATCH") {
+      return {
+        setupType: row.setup_type,
+        candidateState: "NEAR_ENTRY",
+        candidateLabel: epStyle ? "EP watch" : "Near breakout",
+        dossierSummary: `${row.reason_summary} This is worth stalking, but it still needs one more improvement before a tactical entry.`,
+        blockers,
+        watchItems,
+        transitionPlan: {
+          summary: "This tactical setup is close, but still needs another round of tightening or confirmation.",
+          next_action: nearBreakout ? "Keep stalking for a cleaner push with better volume confirmation." : "Wait for price to tighten closer to breakout.",
+          triggers_to_buy: uniqueStrings([
+            nearBreakout ? "A stronger push through the breakout level." : "Distance to breakout tightens under 3%.",
+            typeof row.relative_volume === "number" && row.relative_volume < 1.1 ? "Relative volume improves above 1.1x." : null,
+            !row.market_spy_above_sma200 ? "SPY improves back above trend." : null,
+          ]),
+          strengths_now: strengths,
+          invalidation_watch: invalidationWatch,
+        },
+        qualityScore: 62,
+        action: "WAIT" as const,
+      };
+    }
+    return {
+      setupType: row.setup_type,
+      candidateState: "BLOCKED",
+      candidateLabel: "Defensive",
+      dossierSummary: `${row.reason_summary} This is not a tactical entry right now.`,
+      blockers: uniqueStrings([...blockers, "Setup quality is not clean enough for tactical execution."]),
+      watchItems,
+      transitionPlan: {
+        summary: "Stand aside until the trend, breakout distance, and market support improve.",
+        next_action: "Do not plan an entry yet.",
+        triggers_to_buy: uniqueStrings([
+          "Rebuild trend above key moving averages.",
+          "Tighten closer to breakout with stronger relative volume.",
+        ]),
+        strengths_now: strengths,
+        invalidation_watch: invalidationWatch,
+      },
+      qualityScore: 40,
+      action: "SKIP" as const,
+    };
+  }
+
   function buildQualityDipProfile(row: QualityDipRow) {
     const drop = typeof row.drop_pct_from_30d_high === "number" ? row.drop_pct_from_30d_high : null;
     const stockHealthy = row.stock_above_sma200 === true;
@@ -2284,6 +2515,83 @@ export default function IdeasWorkspaceClient({
       },
       qualityScore: 38,
       action: "SKIP" as const,
+    };
+  }
+
+  function toTacticalTradeRow(row: TacticalMomentumRow): IdeaRow | null {
+    const entry = Number(row.entry_price ?? row.current_price ?? 0);
+    const stop = Number(row.stop_price ?? 0);
+    const tp1 = Number(row.tp1_price ?? 0);
+    const tp2 = Number(row.tp2_price ?? 0);
+    if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0) return null;
+    const profile = buildTacticalMomentumProfile(row);
+    const riskPerShare = Math.max(0, entry - stop);
+    const cashAvailable = Number(data?.capacity?.cash_available ?? 0);
+    const sharesByCash = entry > 0 ? Math.floor(cashAvailable / entry) : 0;
+    const shares = Math.max(0, sharesByCash);
+    return {
+      symbol: row.symbol,
+      signal: row.signal,
+      confidence: row.signal === "BUY" ? 74 : row.signal === "WATCH" ? 61 : 38,
+      rank: null,
+      rank_score: null,
+      quality_score: profile.qualityScore,
+      quality_summary: profile.dossierSummary,
+      setup_type: profile.setupType,
+      candidate_state: profile.candidateState,
+      candidate_state_label: profile.candidateLabel,
+      blockers: profile.blockers,
+      watch_items: profile.watchItems,
+      dossier_summary: profile.dossierSummary,
+      transition_plan: profile.transitionPlan,
+      action: profile.action,
+      entry,
+      stop,
+      tp1: Number.isFinite(tp1) && tp1 > 0 ? tp1 : round2(entry + riskPerShare * 1.5),
+      tp2: Number.isFinite(tp2) && tp2 > 0 ? tp2 : round2(entry + riskPerShare * 3),
+      reason_summary: `Tactical Momentum ${row.setup_type} • ${row.reason_summary}`,
+      reason_json: {
+        strategy: "tactical_momentum_v1",
+        tactical_momentum: {
+          group: row.group,
+          bars_count: row.bars_count,
+          source_date: row.source_date,
+          setup_type: row.setup_type,
+          breakout_level: row.breakout_level,
+          distance_to_breakout_pct: row.distance_to_breakout_pct,
+          relative_volume: row.relative_volume,
+          day_change_pct: row.day_change_pct,
+          range_10d_pct: row.range_10d_pct,
+          stock_above_sma20: row.stock_above_sma20,
+          stock_above_sma50: row.stock_above_sma50,
+          stock_above_sma200: row.stock_above_sma200,
+          market_spy_above_sma200: row.market_spy_above_sma200,
+        },
+      },
+      symbol_facts: {
+        close: row.current_price,
+        above_sma20: row.stock_above_sma20,
+        above_sma50: row.stock_above_sma50,
+        above_sma200: row.stock_above_sma200,
+        relative_volume: row.relative_volume,
+        high_30bar: row.breakout_level,
+        trend_state: row.stock_above_sma200 === true ? "ABOVE_SMA200" : row.stock_above_sma200 === false ? "BELOW_SMA200" : "UNKNOWN",
+        extension_state: typeof row.distance_to_breakout_pct === "number" ? `${row.distance_to_breakout_pct.toFixed(2)}%_FROM_BREAKOUT` : null,
+        volatility_state: typeof row.range_10d_pct === "number" ? `${row.range_10d_pct.toFixed(2)}%_10D_RANGE` : null,
+      },
+      universe_slug: "tactical_momentum_watchlist",
+      source_scan_date: row.source_date,
+      sizing: {
+        shares,
+        est_cost: round2(shares * entry),
+        risk_per_share: round2(riskPerShare),
+        risk_budget: round2(riskPerShare * shares),
+        shares_by_risk: shares,
+        shares_by_cash: sharesByCash,
+        shares_by_portfolio_cap: null,
+        limiting_factor: "cash",
+        sizing_mode: "cash_only",
+      },
     };
   }
 
@@ -2452,8 +2760,18 @@ function changePill(status: string | null | undefined) {
           >
             Quality Dip
           </button>
+          <button
+            onClick={() => setStrategy("tactical_momentum")}
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
+              strategy === "tactical_momentum"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
+            }`}
+          >
+            Tactical Momentum
+          </button>
         </div>
-        {strategy !== "quality_dip" ? (
+        {isScannerStrategy ? (
         <div className="flex items-center gap-2 rounded-xl border border-[#e3d5bf] bg-[#fcf8f1] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
           <button
             onClick={() => setUniverseMode("auto")}
@@ -2519,7 +2837,7 @@ function changePill(status: string | null | undefined) {
           </button>
         </div>
         ) : null}
-        {strategy !== "quality_dip" ? (
+        {isScannerStrategy ? (
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -2556,7 +2874,7 @@ function changePill(status: string | null | undefined) {
         </div>
         ) : null}
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-          {strategy === "quality_dip" ? (
+          {isQualityDip ? (
             <>
               <button
                 type="button"
@@ -2572,6 +2890,24 @@ function changePill(status: string | null | undefined) {
               <span className="surface-chip px-2.5 py-1">{qualityFreshnessChip}</span>
               <span className="surface-chip px-2.5 py-1">
                 SPY trend: {qualityDipData?.meta?.market?.spy_above_sma200 ? "Healthy" : "Weak"}
+              </span>
+            </>
+          ) : isTacticalMomentum ? (
+            <>
+              <button
+                type="button"
+                onClick={runMarketDataRefresh}
+                disabled={marketRefreshBusy}
+                className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {marketRefreshBusy ? "Refreshing..." : "Refresh Daily Bars"}
+              </button>
+              <span className="surface-chip px-2.5 py-1">
+                Watchlist: {tacticalData?.meta?.watchlist_size ?? tacticalRows.length}
+              </span>
+              <span className="surface-chip px-2.5 py-1">{tacticalFreshnessChip}</span>
+              <span className="surface-chip px-2.5 py-1">
+                SPY trend: {tacticalData?.meta?.market?.spy_above_sma200 ? "Healthy" : "Weak"}
               </span>
             </>
           ) : (
@@ -2627,7 +2963,7 @@ function changePill(status: string | null | undefined) {
           )}
         </div>
       </div>
-      {strategy !== "quality_dip" && marketDataIsStale ? (
+      {isScannerStrategy && marketDataIsStale ? (
         <div className="mt-[-8px] rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
           <div className="font-medium">Market data is stale</div>
           <div className="mt-0.5">
@@ -2650,7 +2986,7 @@ function changePill(status: string | null | undefined) {
           </div>
         </div>
       ) : null}
-      {strategy !== "quality_dip" && marketRefreshState.status !== "idle" ? (
+      {(isScannerStrategy || isTacticalMomentum) && marketRefreshState.status !== "idle" ? (
         <div
           className={`mt-[-8px] rounded-xl border px-3 py-2 text-xs ${
             marketRefreshState.status === "failed"
@@ -2662,10 +2998,16 @@ function changePill(status: string | null | undefined) {
         >
           <div className="font-medium">
             {marketRefreshState.status === "running"
-              ? "Market data refresh running"
+              ? isTacticalMomentum
+                ? "Tactical bar refresh running"
+                : "Market data refresh running"
               : marketRefreshState.status === "completed"
-                ? "Market data refresh completed"
-                : "Market data refresh failed"}
+                ? isTacticalMomentum
+                  ? "Tactical bar refresh completed"
+                  : "Market data refresh completed"
+                : isTacticalMomentum
+                  ? "Tactical bar refresh failed"
+                  : "Market data refresh failed"}
           </div>
           <div className="mt-0.5">{marketDataRefreshDetail}</div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] opacity-90">
@@ -2677,7 +3019,7 @@ function changePill(status: string | null | undefined) {
           {marketRefreshState.error ? <div className="mt-1 text-[11px]">{marketRefreshState.error}</div> : null}
         </div>
       ) : null}
-      {strategy === "quality_dip" && qualityRefreshState.status !== "idle" ? (
+      {isQualityDip && qualityRefreshState.status !== "idle" ? (
         <div
           className={`mt-[-8px] rounded-xl border px-3 py-2 text-xs ${
             qualityRefreshState.status === "failed"
@@ -2711,7 +3053,7 @@ function changePill(status: string | null | undefined) {
           {qualityRefreshState.error ? <div className="mt-1 text-[11px]">{qualityRefreshState.error}</div> : null}
         </div>
       ) : null}
-      {strategy !== "quality_dip" && runScanState.status !== "idle" ? (
+      {isScannerStrategy && runScanState.status !== "idle" ? (
         <div
           className={`mt-[-8px] rounded-xl border px-3 py-2 text-xs ${
             runScanState.status === "failed"
@@ -2765,13 +3107,93 @@ function changePill(status: string | null | undefined) {
           ) : null}
         </div>
       ) : null}
-      {strategy !== "quality_dip" ? (
+      {isScannerStrategy ? (
       <div className="mt-[-8px] text-[11px] text-slate-500">
         Auto selects the latest populated universe for each strategy. Unavailable explicit universes are marked as not scanned yet.
       </div>
       ) : null}
 
-      {strategy !== "quality_dip" ? (
+      {isScannerStrategy ? (
+      <div className="surface-card px-3.5 py-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Action Focus</div>
+            <div className="mt-1 text-sm text-slate-600">
+              Keep the default view simple: what is closest, what is actionable, and what is worth stalking next.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowAdvancedInsights((prev) => !prev)}
+            className="rounded-xl border border-[#d8c8aa] bg-white px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#f8f1e4]"
+          >
+            {showAdvancedInsights ? "Hide Advanced Insights" : "Show Advanced Insights"}
+          </button>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="text-[10px] text-slate-500">Actionable today</div>
+            <div className="text-sm font-semibold text-slate-900">{Number(candidateStateCounts?.actionable_today ?? 0)}</div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="text-[10px] text-slate-500">Near entry</div>
+            <div className="text-sm font-semibold text-slate-900">{Number(candidateStateCounts?.near_entry ?? 0)}</div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="text-[10px] text-slate-500">Ready tomorrow</div>
+            <div className="text-sm font-semibold text-slate-900">{Number(stalkingSummary?.ready_tomorrow ?? 0)}</div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="text-[10px] text-slate-500">Main blocker</div>
+            <div className="text-sm font-semibold text-slate-900">{blockerSummary[0]?.label ?? "—"}</div>
+          </div>
+        </div>
+        <div className="mt-3 grid gap-2 lg:grid-cols-2">
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Closest names</div>
+            <div className="mt-2 space-y-2">
+              {closestToActionable.length === 0 ? (
+                <div className="text-[11px] text-slate-500">No close names in the loaded set yet.</div>
+              ) : (
+                closestToActionable.slice(0, 3).map((row) => (
+                  <div key={`focus-${row.symbol}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${candidateStatePill(row.candidate_state)}`}>
+                        {row.candidate_state_label ?? row.candidate_state ?? "Review"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-600">{row.dossier_summary ?? "—"}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+          <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Stalk next</div>
+            <div className="mt-2 space-y-2">
+              {stalkingQueue.length === 0 ? (
+                <div className="text-[11px] text-slate-500">No stalking candidates in the loaded set yet.</div>
+              ) : (
+                stalkingQueue.slice(0, 3).map((row) => (
+                  <div key={`focus-stalk-${row.symbol}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                      <span className="rounded-full border border-[#dcc9aa] bg-[#f8f0e2] px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                        {row.stalking_label ?? "Monitor"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-600">{row.summary ?? "—"}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+      ) : null}
+
+      {isScannerStrategy && showAdvancedInsights ? (
       <div className="surface-card px-3.5 py-3">
         <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Idea Pulse</div>
         <div className="grid gap-2 lg:grid-cols-[1.2fr_1fr_1fr]">
@@ -3133,7 +3555,7 @@ function changePill(status: string | null | undefined) {
       </div>
       ) : null}
 
-      {strategy !== "quality_dip" ? (
+      {isScannerStrategy && showAdvancedInsights ? (
       <div className="surface-card px-3.5 py-3">
         <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Signal Funnel</div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
@@ -3216,7 +3638,7 @@ function changePill(status: string | null | undefined) {
           {" • "}read_context_is_fallback={String(Boolean(data?.meta?.read_context_is_fallback))}
           {" • "}read_context_matches_manual_scan={String(readContextMatchesLatestManualScan)}
           {" • "}ok={loading ? "loading" : lastLoadOk === null ? "unknown" : lastLoadOk ? "true" : "false"}
-          {" • "}api={strategy === "quality_dip" ? lastQualityApiUrl || lastApiUrl || "—" : lastApiUrl || "—"}
+          {" • "}api={isWatchlistStrategy ? lastQualityApiUrl || lastApiUrl || "—" : lastApiUrl || "—"}
           {" • "}quality_rows={qualityRows.length}
           {" • "}quality_consider_buy={qualitySummary.consider_buy}
           {" • "}quality_watch={qualitySummary.watch}
@@ -3256,7 +3678,7 @@ function changePill(status: string | null | undefined) {
       ) : null}
 
       <div className="surface-panel overflow-hidden">
-        {strategy === "quality_dip" ? (
+        {isQualityDip ? (
           <>
             {loading ? <div className="p-5 text-sm text-slate-600">Loading Quality Dip watchlist…</div> : null}
             {!loading && !qualityDipData?.ok ? (
@@ -3465,7 +3887,221 @@ function changePill(status: string | null | undefined) {
             ) : null}
           </>
         ) : null}
-        {strategy !== "quality_dip" ? (
+        {isTacticalMomentum ? (
+          <>
+            {loading ? <div className="p-5 text-sm text-slate-600">Loading Tactical Momentum watchlist…</div> : null}
+            {!loading && !tacticalData?.ok ? (
+              <div className="p-5 text-sm text-rose-600">Failed: {tacticalData?.error ?? "Unknown error"}</div>
+            ) : null}
+            {!loading && tacticalData?.ok ? (
+              <>
+                <div className="border-b border-[#e2d2b7] bg-[#fffaf2] px-4 py-3">
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                      <div className="text-[11px] text-emerald-700">Buy-ready</div>
+                      <div className="text-lg font-semibold text-emerald-800">{tacticalSummary.buy}</div>
+                    </div>
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                      <div className="text-[11px] text-amber-700">Watch</div>
+                      <div className="text-lg font-semibold text-amber-800">{tacticalSummary.watch}</div>
+                    </div>
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2">
+                      <div className="text-[11px] text-rose-700">Defensive</div>
+                      <div className="text-lg font-semibold text-rose-800">{tacticalSummary.avoid}</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                    <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-emerald-700">Q Breakout</div>
+                      <div className="mt-1 text-sm font-semibold text-emerald-800">{tacticalSetupSummary.breakout}</div>
+                    </div>
+                    <div className="rounded-lg border border-sky-200 bg-white px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-sky-700">Q EP Daily</div>
+                      <div className="mt-1 text-sm font-semibold text-sky-800">{tacticalSetupSummary.ep}</div>
+                    </div>
+                    <div className="rounded-lg border border-amber-200 bg-white px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-amber-700">Momentum Watch</div>
+                      <div className="mt-1 text-sm font-semibold text-amber-800">{tacticalSetupSummary.watch}</div>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-600">Defensive</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-800">{tacticalSetupSummary.defensive}</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-slate-500">Filter:</span>
+                    {([
+                      { key: "all", label: "All" },
+                      { key: "buy", label: "Buy-ready" },
+                      { key: "watch", label: "Watch" },
+                      { key: "avoid", label: "Defensive" },
+                    ] as Array<{ key: TacticalMomentumFilter; label: string }>).map((f) => (
+                      <button
+                        key={f.key}
+                        type="button"
+                        onClick={() => setTacticalFilter(f.key)}
+                        className={`rounded-full border px-2.5 py-1 font-medium transition ${
+                          tacticalFilter === f.key
+                            ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900"
+                            : "border-[#e4d5be] bg-[#fffdf8] text-slate-600 hover:bg-[#f7efe1]"
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                    <span className="ml-2 text-slate-500">Sort:</span>
+                    <select
+                      value={tacticalSort}
+                      onChange={(e) => setTacticalSort(e.target.value as TacticalMomentumSort)}
+                      className="rounded-lg border border-[#dcc9aa] bg-white px-2 py-1 text-xs text-slate-700"
+                    >
+                      <option value="signal">Signal</option>
+                      <option value="distance">Breakout distance</option>
+                      <option value="rv">Relative volume</option>
+                      <option value="symbol">Symbol</option>
+                    </select>
+                    <span className="ml-2 text-[11px] text-slate-500">
+                      Tactical Momentum is a daily-compatible Q-style sleeve built from cached bars only.
+                    </span>
+                  </div>
+                  {Array.isArray(tacticalData?.meta?.missing_symbols) && tacticalData.meta!.missing_symbols!.length > 0 ? (
+                    <div className="mt-2 text-[11px] text-slate-500">
+                      Missing/insufficient bars: {tacticalData.meta!.missing_symbols!.join(", ")}
+                    </div>
+                  ) : null}
+                  {tacticalFreshness?.state && tacticalFreshness.state !== "current" ? (
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      {tacticalFreshness.state === "mixed"
+                        ? `Mixed freshness: ${tacticalFreshness.stale_symbols_count ?? 0} symbols are behind SPY ${tacticalFreshness.expected_date ?? "—"}`
+                        : `Freshness stale: tactical watchlist bars lag SPY ${tacticalFreshness.expected_date ?? "—"}`}
+                      {tacticalStalePreview ? ` (${tacticalStalePreview}${tacticalStaleSymbols.length > 6 ? ", …" : ""})` : ""}
+                    </div>
+                  ) : null}
+                </div>
+                <table className="w-full table-fixed text-sm leading-5">
+                  <thead className="text-left text-[11px] text-slate-500">
+                    <tr className="border-b border-[#e2d2b7]">
+                      <th className="px-3 py-2.5">Symbol</th>
+                      <th className="px-3 py-2.5">Company</th>
+                      <th className="px-3 py-2.5">Setup</th>
+                      <th className="px-3 py-2.5">Price</th>
+                      <th className="px-3 py-2.5">Breakout</th>
+                      <th className="px-3 py-2.5">Context</th>
+                      <th className="px-3 py-2.5">Signal</th>
+                      <th className="px-3 py-2.5">Trade Levels</th>
+                      <th className="px-3 py-2.5">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tacticalGroupedRows.length === 0 ? (
+                      <tr>
+                        <td className="px-3 py-4 text-sm text-slate-600" colSpan={9}>
+                          No Tactical Momentum rows available.
+                        </td>
+                      </tr>
+                    ) : null}
+                    {tacticalGroupedRows.map((group) => (
+                      <Fragment key={group.group}>
+                        <tr className="border-b border-[#eee2cf] bg-[#fff7eb]">
+                          <td colSpan={9} className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                            {group.group}
+                          </td>
+                        </tr>
+                        {group.rows.map((row) => (
+                          <tr key={row.symbol} className="border-b border-[#efe5d6]">
+                            <td className="px-3 py-2.5 font-semibold tracking-tight">{row.symbol}</td>
+                            <td className="px-3 py-2.5">
+                              <div className="truncate text-slate-800" title={row.name}>
+                                {row.name}
+                              </div>
+                              <div className="truncate text-[11px] text-slate-500" title={row.reason_summary}>
+                                {row.reason_summary}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700 whitespace-nowrap">
+                                {row.setup_type}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5">{row.current_price != null ? row.current_price.toFixed(2) : "—"}</td>
+                            <td className="px-3 py-2.5">
+                              {row.breakout_level != null ? row.breakout_level.toFixed(2) : "—"}
+                              {row.distance_to_breakout_pct != null ? (
+                                <div className="text-[10px] text-slate-500">
+                                  {row.distance_to_breakout_pct <= 0
+                                    ? "through level"
+                                    : `${row.distance_to_breakout_pct.toFixed(2)}% below`}
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <div className="flex flex-col gap-1">
+                                <span
+                                  className={`w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${
+                                    row.stock_above_sma200
+                                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                      : "border-rose-200 bg-rose-50 text-rose-700"
+                                  }`}
+                                >
+                                  {row.stock_above_sma200 ? "Above SMA200" : "Below SMA200"}
+                                </span>
+                                <span
+                                  className={`w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${
+                                    row.market_spy_above_sma200
+                                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                      : "border-amber-200 bg-amber-50 text-amber-700"
+                                  }`}
+                                >
+                                  {row.market_spy_above_sma200 ? "SPY Healthy" : "SPY Weak"}
+                                </span>
+                                {typeof row.relative_volume === "number" ? (
+                                  <span className="text-[10px] text-slate-500">{row.relative_volume.toFixed(2)}x RVOL</span>
+                                ) : null}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${signalPill(row.signal)}`}>
+                                {row.signal === "BUY" ? "Buy-ready" : row.signal}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5 text-[11px] text-slate-600 whitespace-nowrap">
+                              {row.entry_price != null ? (
+                                <>
+                                  E {row.entry_price.toFixed(2)} · S {(row.stop_price ?? 0).toFixed(2)}
+                                  <div>TP {(row.tp1_price ?? 0).toFixed(2)} / {(row.tp2_price ?? 0).toFixed(2)}</div>
+                                </>
+                              ) : (
+                                "—"
+                              )}
+                            </td>
+                            <td className="px-3 py-2.5">
+                              {row.signal !== "AVOID" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const mapped = toTacticalTradeRow(row);
+                                    if (!mapped) return;
+                                    openTradeTicket(mapped);
+                                  }}
+                                  className="rounded-lg border border-[#dcc9aa] bg-[#f8f0e2] px-2.5 py-1 text-[10px] font-semibold text-slate-700 whitespace-nowrap hover:bg-[#f2e6d4]"
+                                >
+                                  {row.signal === "BUY" ? "Paper Trade" : "Prepare Trade"}
+                                </button>
+                              ) : (
+                                <span className="text-slate-300">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            ) : null}
+          </>
+        ) : null}
+        {isScannerStrategy ? (
           <>
             {loading ? <div className="p-5 text-sm text-slate-600">Loading ideas…</div> : null}
             {!loading && !data?.ok ? <div className="p-5 text-sm text-rose-600">Failed: {data?.error ?? "Unknown error"}</div> : null}
@@ -3691,8 +4327,10 @@ function changePill(status: string | null | undefined) {
                     ? "Trend Hold"
                     : strategy === "v1_sector_momentum"
                     ? "Sector Momentum"
-                    : strategy === "quality_dip"
+                    : isQualityDip
                     ? "Quality Dip"
+                    : isTacticalMomentum
+                    ? "Tactical Momentum"
                     : "Momentum Swing"}
                 </div>
               </div>
