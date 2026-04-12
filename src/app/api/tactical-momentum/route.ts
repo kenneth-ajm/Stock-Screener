@@ -64,38 +64,43 @@ function round2(value: number | null) {
   return Math.round(value * 100) / 100;
 }
 
+function mapRowToPriceBar(row: any): PriceBar | null {
+  const date = typeof row?.date === "string" ? String(row.date) : null;
+  const open = toNumber(row?.open);
+  const high = toNumber(row?.high);
+  const low = toNumber(row?.low);
+  const close = toNumber(row?.close);
+  const volume = toNumber(row?.volume);
+  if (!date || open == null || high == null || low == null || close == null || volume == null) return null;
+  return { date, open, high, low, close, volume };
+}
+
+async function fetchBarsForSymbol(supabase: any, symbol: string, limit = 260) {
+  const { data, error } = await supabase
+    .from("price_bars")
+    .select("date,open,high,low,close,volume")
+    .eq("symbol", symbol)
+    .order("date", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (Array.isArray(data) ? data : [])
+    .map(mapRowToPriceBar)
+    .filter((row): row is PriceBar => Boolean(row));
+}
+
 async function fetchBarsBySymbol(supabase: any, symbols: string[], limit = 260) {
   const results = new Map<string, PriceBar[]>();
-  for (const symbol of symbols) results.set(symbol, []);
-  for (let i = 0; i < symbols.length; i += 20) {
-    const chunk = symbols.slice(i, i + 20);
-    const { data, error } = await supabase
-      .from("price_bars")
-      .select("symbol,date,open,high,low,close,volume")
-      .in("symbol", chunk)
-      .order("date", { ascending: false });
-    if (error) throw error;
-    const grouped = new Map<string, PriceBar[]>();
-    for (const row of Array.isArray(data) ? data : []) {
-      const symbol = String((row as any)?.symbol ?? "").trim().toUpperCase();
-      if (!symbol) continue;
-      const mapped: PriceBar | null = (() => {
-        const date = typeof (row as any)?.date === "string" ? String((row as any).date) : null;
-        const open = toNumber((row as any)?.open);
-        const high = toNumber((row as any)?.high);
-        const low = toNumber((row as any)?.low);
-        const close = toNumber((row as any)?.close);
-        const volume = toNumber((row as any)?.volume);
-        if (!date || open == null || high == null || low == null || close == null || volume == null) return null;
-        return { date, open, high, low, close, volume };
-      })();
-      if (!mapped) continue;
-      if (!grouped.has(symbol)) grouped.set(symbol, []);
-      const rows = grouped.get(symbol)!;
-      if (rows.length < limit) rows.push(mapped);
-    }
-    for (const symbol of chunk) {
-      results.set(symbol, grouped.get(symbol) ?? []);
+  const uniqueSymbols = Array.from(new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()).filter(Boolean)));
+  for (let i = 0; i < uniqueSymbols.length; i += 8) {
+    const chunk = uniqueSymbols.slice(i, i + 8);
+    const chunkResults = await Promise.all(
+      chunk.map(async (symbol) => {
+        const bars = await fetchBarsForSymbol(supabase, symbol, limit);
+        return [symbol, bars] as const;
+      })
+    );
+    for (const [symbol, bars] of chunkResults) {
+      results.set(symbol, bars);
     }
   }
   return results;
