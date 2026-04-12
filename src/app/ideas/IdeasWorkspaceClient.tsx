@@ -1528,7 +1528,16 @@ export default function IdeasWorkspaceClient({
     });
   }, [tacticalRows, tacticalFilter, tacticalSort]);
   const tacticalGroupedRows = useMemo(() => {
-    const order = ["Semis & AI", "Platform Leaders", "Software & Infra", "Cyclicals & Industrials", "Financial Momentum", "Biotech & Special Situations", "ETF Anchors"];
+    const order = [
+      "Semis & AI",
+      "AI Hardware & Infra",
+      "Selective Mega Cap",
+      "Cyclicals & Industrials",
+      "Energy & Services",
+      "Materials & Metals",
+      "Financial Momentum",
+      "ETF Anchors",
+    ];
     return order.map((group) => ({ group, rows: tacticalRowsView.filter((row) => row.group === group) })).filter((group) => group.rows.length > 0);
   }, [tacticalRowsView]);
   const tacticalSummary = useMemo(() => tacticalData?.summary ?? { buy: 0, watch: 0, avoid: 0 }, [tacticalData]);
