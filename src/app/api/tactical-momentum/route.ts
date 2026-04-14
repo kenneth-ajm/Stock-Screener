@@ -6,12 +6,16 @@ export const dynamic = "force-dynamic";
 
 type TacticalSignal = "BUY" | "WATCH" | "AVOID";
 type TacticalSetupType = "Q Breakout" | "Q EP Daily" | "Momentum Watch" | "Defensive";
+type TacticalTimingState = "BUY_READY" | "NEAR_TRIGGER" | "TOO_EXTENDED" | "DEFENSIVE";
 
 type TacticalMomentumRow = {
   symbol: string;
   name: string;
   group: string;
   setup_type: TacticalSetupType;
+  timing_state: TacticalTimingState;
+  timing_label: string;
+  ranking_score: number | null;
   current_price: number | null;
   breakout_level: number | null;
   distance_to_breakout_pct: number | null;
@@ -113,6 +117,9 @@ function evaluateRow(item: TacticalMomentumWatchItem, barsDesc: PriceBar[], spyH
       name: item.name,
       group: item.group,
       setup_type: "Defensive",
+      timing_state: "DEFENSIVE",
+      timing_label: "Defensive",
+      ranking_score: 10,
       current_price: null,
       breakout_level: null,
       distance_to_breakout_pct: null,
@@ -165,6 +172,9 @@ function evaluateRow(item: TacticalMomentumWatchItem, barsDesc: PriceBar[], spyH
   const volumeStrong = relativeVolume != null && relativeVolume >= 1.1;
   const epDay = dayChangePct != null && dayChangePct >= 4 && relativeVolume != null && relativeVolume >= 1.8 && closeInUpperHalf;
   const epWatch = dayChangePct != null && dayChangePct >= 3 && relativeVolume != null && relativeVolume >= 1.3;
+  const tooExtended =
+    distanceToBreakoutPct != null &&
+    (distanceToBreakoutPct <= -3 || (distanceToBreakoutPct <= -1.5 && dayChangePct != null && dayChangePct >= 5));
 
   let signal: TacticalSignal = "AVOID";
   let setupType: TacticalSetupType = "Defensive";
@@ -204,12 +214,36 @@ function evaluateRow(item: TacticalMomentumWatchItem, barsDesc: PriceBar[], spyH
         : `${round2(distanceToBreakoutPct)}% below prior 20-bar high`;
   const volumeText = relativeVolume == null ? "volume unavailable" : `${round2(relativeVolume)}x relative volume`;
   const marketText = spyHealthy ? "SPY healthy" : "SPY weak";
+  const timingState: TacticalTimingState =
+    signal === "AVOID" ? "DEFENSIVE" : tooExtended ? "TOO_EXTENDED" : signal === "BUY" ? "BUY_READY" : "NEAR_TRIGGER";
+  const timingLabel =
+    timingState === "BUY_READY"
+      ? "Buy-ready"
+      : timingState === "NEAR_TRIGGER"
+        ? "Near trigger"
+        : timingState === "TOO_EXTENDED"
+          ? "Too extended"
+          : "Defensive";
+  const rankingScoreRaw =
+    (setupType === "Q EP Daily" ? 76 : setupType === "Q Breakout" ? 72 : setupType === "Momentum Watch" ? 56 : 28) +
+    (trendHealthy ? 10 : 0) +
+    (spyHealthy ? 6 : -4) +
+    (nearBreakout ? 8 : nearEnoughForWatch ? 3 : -2) +
+    (tightRange ? 6 : decentRange ? 2 : -3) +
+    (volumeStrong ? 6 : relativeVolume != null ? Math.max(-3, Math.min(3, (relativeVolume - 1) * 8)) : 0) +
+    (epDay ? 6 : epWatch ? 2 : 0) +
+    (tooExtended ? -14 : 0) +
+    (stockAboveSma200 === false ? -12 : 0);
+  const rankingScore = Math.max(0, Math.min(100, round2(rankingScoreRaw) ?? 0));
 
   return {
     symbol: item.symbol,
     name: item.name,
     group: item.group,
     setup_type: setupType,
+    timing_state: timingState,
+    timing_label: timingLabel,
+    ranking_score: rankingScore,
     current_price: round2(latest.close),
     breakout_level: round2(prior20High),
     distance_to_breakout_pct: round2(distanceToBreakoutPct),
@@ -284,6 +318,40 @@ export async function GET() {
       },
       { breakout: 0, ep: 0, watch: 0, defensive: 0 }
     );
+    const timingSummary = rows.reduce(
+      (acc, row) => {
+        if (row.timing_state === "BUY_READY") acc.buy_ready += 1;
+        else if (row.timing_state === "NEAR_TRIGGER") acc.near_trigger += 1;
+        else if (row.timing_state === "TOO_EXTENDED") acc.too_extended += 1;
+        else acc.defensive += 1;
+        return acc;
+      },
+      { buy_ready: 0, near_trigger: 0, too_extended: 0, defensive: 0 }
+    );
+    const shortlist = [...rows]
+      .filter((row) => row.signal !== "AVOID")
+      .sort((a, b) => {
+        const timingOrder: Record<TacticalTimingState, number> = {
+          BUY_READY: 0,
+          NEAR_TRIGGER: 1,
+          TOO_EXTENDED: 2,
+          DEFENSIVE: 3,
+        };
+        const timingDiff = timingOrder[a.timing_state] - timingOrder[b.timing_state];
+        if (timingDiff !== 0) return timingDiff;
+        const scoreDiff = Number(b.ranking_score ?? -999) - Number(a.ranking_score ?? -999);
+        if (scoreDiff !== 0) return scoreDiff;
+        return a.symbol.localeCompare(b.symbol);
+      })
+      .slice(0, 5)
+      .map((row) => ({
+        symbol: row.symbol,
+        setup_type: row.setup_type,
+        timing_state: row.timing_state,
+        timing_label: row.timing_label,
+        ranking_score: row.ranking_score,
+        reason_summary: row.reason_summary,
+      }));
 
     const expectedDate = spyBars[0]?.date ?? null;
     const staleSymbols = symbolDates.filter((entry) => entry.source_date && expectedDate && entry.source_date < expectedDate) as Array<{ symbol: string; source_date: string }>;
@@ -301,6 +369,8 @@ export async function GET() {
         watchlist_size: TACTICAL_MOMENTUM_WATCHLIST.length,
         source_date: rows.map((row) => row.source_date).filter(Boolean).sort().slice(-1)[0] ?? null,
         setup_summary: setupSummary,
+        timing_summary: timingSummary,
+        shortlist,
         market: {
           spy_close: round2(spyClose),
           spy_sma50: round2(spySma50),
