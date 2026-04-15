@@ -1,4 +1,5 @@
 import { getStrategyConfig } from "@/lib/strategy_config";
+import { buildTechnicalTargets } from "@/lib/target_engine";
 
 export type RegimeState = "FAVORABLE" | "CAUTION" | "DEFENSIVE";
 
@@ -76,6 +77,12 @@ export type RuleEvaluation = {
       max_holding_days: number;
       management: string;
       stop_style: string;
+      target_model?: string;
+      tp1_reason?: string;
+      tp2_reason?: string;
+      rr_tp1?: number;
+      rr_tp2?: number;
+      resistance_levels?: number[];
     };
     execution_flags?: {
       stale_scan?: boolean;
@@ -303,8 +310,14 @@ export function evaluateCoreMomentumSwing(opts: {
     signal = signal === "BUY" ? "WATCH" : signal === "WATCH" ? "AVOID" : "AVOID";
   }
   const finalStopPct = entry > 0 ? (entry - stop) / entry : 0;
-  const tp1 = entry * 1.05;
-  const tp2 = entry * 1.1;
+  const targets = buildTechnicalTargets({
+    bars,
+    entry,
+    stop,
+    strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
+  });
+  const tp1 = targets.tp1;
+  const tp2 = targets.tp2;
 
   const checks: RuleCheck[] = [
     {
@@ -478,15 +491,21 @@ export function evaluateCoreMomentumSwing(opts: {
         tp1,
         tp2,
         max_holding_days: CORE_MOMENTUM_MAX_HOLDING_DAYS,
-        management: `Take 50% at +5%, hold 50% for +10%, hard stop -8%, time stop ${CORE_MOMENTUM_MAX_HOLDING_DAYS} trading days.`,
+        management: `Take partial into TP1, hold the remainder for TP2, keep the hard stop in place, and use a ${CORE_MOMENTUM_MAX_HOLDING_DAYS}-day time stop.`,
         stop_style: "pct_8",
+        target_model: targets.target_model,
+        tp1_reason: targets.tp1_reason,
+        tp2_reason: targets.tp2_reason,
+        rr_tp1: targets.rr_tp1,
+        rr_tp2: targets.rr_tp2,
+        resistance_levels: targets.resistance_levels,
       },
     },
   } satisfies RuleEvaluation;
 }
 
 export function describeSignalForUi(signal: "BUY" | "WATCH" | "AVOID") {
-  if (signal === "BUY") return `High-conviction momentum continuation with ${pct(0.05)} / ${pct(0.1)} targets.`;
+  if (signal === "BUY") return "High-conviction momentum continuation with chart-derived technical targets.";
   if (signal === "WATCH") return "Trend setup is constructive but not fully strict-BUY yet.";
   return "Setup does not satisfy strict continuation criteria.";
 }

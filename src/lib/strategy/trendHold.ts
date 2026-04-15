@@ -8,6 +8,7 @@ import {
   type RuleEvaluation,
 } from "@/lib/strategy/coreMomentumSwing";
 import { getStrategyConfig } from "@/lib/strategy_config";
+import { buildTechnicalTargets } from "@/lib/target_engine";
 
 export const TREND_HOLD_DEFAULT_VERSION = "v1_trend_hold";
 export const TREND_HOLD_BUY_CAP = 5;
@@ -119,9 +120,15 @@ export function evaluateTrendHold(opts: {
     signal = signal === "BUY" ? "WATCH" : signal === "WATCH" ? "AVOID" : "AVOID";
   }
   const finalStopPct = entry > 0 ? (entry - stop) / entry : 0;
+  const targets = buildTechnicalTargets({
+    bars,
+    entry,
+    stop,
+    strategy_version: TREND_HOLD_DEFAULT_VERSION,
+  });
 
-  const tp1 = entry * 1.1;
-  const tp2 = entry * 1.2;
+  const tp1 = targets.tp1;
+  const tp2 = targets.tp2;
 
   const checks: RuleCheck[] = [
     {
@@ -292,8 +299,14 @@ export function evaluateTrendHold(opts: {
         tp1,
         tp2,
         max_holding_days: TREND_HOLD_MAX_HOLDING_DAYS,
-        management: `Scale at +10% then +20%, hold max ${TREND_HOLD_MAX_HOLDING_DAYS} trading days.`,
+        management: `Scale into technical resistance, trail if leadership persists, and use a max ${TREND_HOLD_MAX_HOLDING_DAYS}-day hold window.`,
         stop_style: "pct_10",
+        target_model: targets.target_model,
+        tp1_reason: targets.tp1_reason,
+        tp2_reason: targets.tp2_reason,
+        rr_tp1: targets.rr_tp1,
+        rr_tp2: targets.rr_tp2,
+        resistance_levels: targets.resistance_levels,
       },
     },
   } satisfies RuleEvaluation;

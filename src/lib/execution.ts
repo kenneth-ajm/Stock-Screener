@@ -5,6 +5,8 @@ export type ExecutionInput = {
   signal: ExecutionSignal;
   idealEntry: number;
   stop: number;
+  tp1?: number | null;
+  tp2?: number | null;
   live?: number | null;
   atr?: number | null;
   confidence?: number | null;
@@ -72,14 +74,16 @@ export function computeExecutionGuidance(input: ExecutionInput): ExecutionOutput
   }
 
   const riskPerShare = entryUsed - stop;
-  const tp1 = entryUsed * 1.05;
-  const tp2 = entryUsed * 1.1;
+  const tp1 = safeNumber(input.tp1);
+  const tp2 = safeNumber(input.tp2);
   const stopDistancePct = riskPerShare / entryUsed;
   const reasons: string[] = [];
   const strategyVersion = String(input.strategyVersion ?? "v2_core_momentum");
   const isTrend = strategyVersion === "v1_trend_hold";
-  const tp1Used = isTrend ? entryUsed * 1.1 : tp1;
-  const tp2Used = isTrend ? entryUsed * 1.2 : tp2;
+  const tp1Used =
+    tp1 !== null && tp1 > entryUsed ? tp1 : isTrend ? entryUsed * 1.1 : entryUsed * 1.05;
+  const tp2Used =
+    tp2 !== null && tp2 > Math.max(entryUsed, tp1Used) ? tp2 : isTrend ? entryUsed * 1.2 : entryUsed * 1.1;
   const stopTooWide = isTrend
     ? stopDistancePct > EXECUTION_LIMITS.TREND_MAX_STOP_DISTANCE_PCT
     : stopDistancePct > EXECUTION_LIMITS.MAX_STOP_DISTANCE_PCT;

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { QUALITY_DIP_WATCHLIST, type QualityDipWatchItem } from "@/lib/quality_dip_watchlist";
+import { buildTechnicalTargets } from "@/lib/target_engine";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,10 @@ type QualityDipRow = {
   stock_above_sma200: boolean | null;
   market_spy_above_sma200: boolean;
   signal: DipSignal;
+  entry_price: number | null;
+  stop_price: number | null;
+  tp1_price: number | null;
+  tp2_price: number | null;
   reason_summary: string;
   source_date: string | null;
   bars_count: number;
@@ -43,7 +48,7 @@ function round2(n: number | null) {
 async function fetchBars(supa: any, symbol: string, limit = 260) {
   const { data, error } = await supa
     .from("price_bars")
-    .select("date,high,close")
+    .select("date,high,low,close")
     .eq("symbol", symbol)
     .order("date", { ascending: false })
     .limit(limit);
@@ -53,12 +58,13 @@ async function fetchBars(supa: any, symbol: string, limit = 260) {
     .map((row: any) => ({
       date: typeof row?.date === "string" ? row.date : null,
       high: toNumber(row?.high),
+      low: toNumber(row?.low),
       close: toNumber(row?.close),
     }))
-    .filter((row) => row.date && row.close != null && row.high != null) as Array<{ date: string; high: number; close: number }>;
+    .filter((row) => row.date && row.close != null && row.high != null && row.low != null) as Array<{ date: string; high: number; low: number; close: number }>;
 }
 
-function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; high: number; close: number }>, spyAboveSma200: boolean): QualityDipRow {
+function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; high: number; low: number; close: number }>, spyAboveSma200: boolean): QualityDipRow {
   if (!Array.isArray(barsDesc) || barsDesc.length < 30) {
     return {
       symbol: item.symbol,
@@ -70,6 +76,10 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
       stock_above_sma200: null,
       market_spy_above_sma200: spyAboveSma200,
       signal: "AVOID",
+      entry_price: null,
+      stop_price: null,
+      tp1_price: null,
+      tp2_price: null,
       reason_summary: "Insufficient price history (need at least 30 daily bars).",
       source_date: barsDesc?.[0]?.date ?? null,
       bars_count: barsDesc.length,
@@ -120,6 +130,14 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
     stockAboveSma200 == null ? "trend unknown" : stockAboveSma200 ? "trend intact" : "broken trend";
   const marketText = marketStrong ? "SPY healthy" : "SPY weak";
   const dropText = `${round2(dropPct)}% below 30-bar high`;
+  const entry = round2(current);
+  const stop = round2(current * 0.94);
+  const targets = buildTechnicalTargets({
+    bars: asc,
+    entry: entry ?? current,
+    stop: stop ?? current * 0.94,
+    strategy_version: "quality_dip_v1",
+  });
 
   return {
     symbol: item.symbol,
@@ -131,6 +149,10 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
     stock_above_sma200: stockAboveSma200,
     market_spy_above_sma200: marketStrong,
     signal,
+    entry_price: entry,
+    stop_price: stop,
+    tp1_price: targets.tp1,
+    tp2_price: targets.tp2,
     reason_summary: `${dipText} • ${dropText} • ${trendText} • ${marketText}`,
     source_date: latest.date,
     bars_count: barsDesc.length,

@@ -341,6 +341,10 @@ type QualityDipRow = {
   stock_above_sma200: boolean | null;
   market_spy_above_sma200: boolean;
   signal: QualityDipSignal;
+  entry_price: number | null;
+  stop_price: number | null;
+  tp1_price: number | null;
+  tp2_price: number | null;
   reason_summary: string;
   source_date: string | null;
   bars_count: number;
@@ -399,6 +403,9 @@ type TacticalMomentumRow = {
   stop_price: number | null;
   tp1_price: number | null;
   tp2_price: number | null;
+  target_model: string | null;
+  tp1_reason: string | null;
+  tp2_reason: string | null;
   reason_summary: string;
   source_date: string | null;
   bars_count: number;
@@ -1961,6 +1968,14 @@ export default function IdeasWorkspaceClient({
         tp1_size_pct: finalTp1SizePct,
         tp2_size_pct: finalTp2SizePct,
       };
+      const selectedTradePlan =
+        selected.reason_json && typeof selected.reason_json === "object"
+          ? (selected.reason_json as Record<string, any>).trade_plan
+          : null;
+      const selectedTpModel =
+        typeof selectedTradePlan?.target_model === "string" && selectedTradePlan.target_model.trim()
+          ? selectedTradePlan.target_model.trim()
+          : "technical_resistance_r";
 
       const res = await fetch("/api/positions/add", {
         method: "POST",
@@ -1972,7 +1987,7 @@ export default function IdeasWorkspaceClient({
           shares: qty,
           strategy_version: strategy,
           max_hold_days: strategy === "v1_trend_hold" ? 45 : 7,
-          tp_model: strategy === "v1_trend_hold" ? "percent_10_20" : "percent_5_10",
+          tp_model: selectedTpModel,
           entry_fee: entryFeeValue,
           exit_fee: exitFeeValue,
           ...tpPayload,
@@ -2632,6 +2647,21 @@ export default function IdeasWorkspaceClient({
           stock_above_sma50: row.stock_above_sma50,
           stock_above_sma200: row.stock_above_sma200,
           market_spy_above_sma200: row.market_spy_above_sma200,
+          target_model: row.target_model,
+          tp1_reason: row.tp1_reason,
+          tp2_reason: row.tp2_reason,
+        },
+        trade_plan: {
+          entry,
+          stop,
+          tp1: Number.isFinite(tp1) && tp1 > 0 ? tp1 : round2(entry + riskPerShare * 1.5),
+          tp2: Number.isFinite(tp2) && tp2 > 0 ? tp2 : round2(entry + riskPerShare * 3),
+          max_holding_days: 7,
+          management: "Take partial into technical resistance and be quick to reduce if follow-through weakens.",
+          stop_style: "structure_plus_risk",
+          target_model: row.target_model ?? "technical_resistance_r",
+          tp1_reason: row.tp1_reason ?? "technical resistance",
+          tp2_reason: row.tp2_reason ?? "technical continuation target",
         },
       },
       symbol_facts: {
@@ -2662,11 +2692,11 @@ export default function IdeasWorkspaceClient({
   }
 
   function toQualityDipTradeRow(row: QualityDipRow): IdeaRow | null {
-    const entry = Number(row.current_price ?? 0);
+    const entry = Number(row.entry_price ?? row.current_price ?? 0);
     if (!Number.isFinite(entry) || entry <= 0) return null;
-    const stop = round2(entry * 0.94);
-    const tp1 = round2(entry * 1.06);
-    const tp2 = round2(entry * 1.12);
+    const stop = Number(row.stop_price ?? round2(entry * 0.94));
+    const tp1 = Number(row.tp1_price ?? 0) || round2(entry * 1.06);
+    const tp2 = Number(row.tp2_price ?? 0) || round2(entry * 1.12);
     const mappedSignal: "BUY" | "WATCH" | "AVOID" =
       row.signal === "CONSIDER_BUY" ? "BUY" : row.signal === "WATCH" ? "WATCH" : "AVOID";
     const profile = buildQualityDipProfile(row);
@@ -2705,6 +2735,19 @@ export default function IdeasWorkspaceClient({
           drop_pct_from_30d_high: row.drop_pct_from_30d_high,
           stock_above_sma200: row.stock_above_sma200,
           market_spy_above_sma200: row.market_spy_above_sma200,
+          target_model: "technical_resistance_r",
+        },
+        trade_plan: {
+          entry,
+          stop,
+          tp1,
+          tp2,
+          max_holding_days: 7,
+          management: "Use the dip rebound into nearby resistance for TP1, then the next overhead level for TP2.",
+          stop_style: "dip_support_pct",
+          target_model: "technical_resistance_r",
+          tp1_reason: "nearest overhead resistance from the recent chart structure",
+          tp2_reason: "next overhead resistance / continuation target",
         },
       },
       symbol_facts: {
@@ -3917,10 +3960,10 @@ function changePill(status: string | null | undefined) {
                               </span>
                             </td>
                             <td className="px-3 py-2.5 text-[11px] text-slate-600 whitespace-nowrap">
-                              {row.current_price != null ? (
+                              {row.entry_price != null || row.current_price != null ? (
                                 <>
-                                  E {row.current_price.toFixed(2)} · S {(row.current_price * 0.94).toFixed(2)}
-                                  <div>TP { (row.current_price * 1.06).toFixed(2)} / {(row.current_price * 1.12).toFixed(2)}</div>
+                                  E {(row.entry_price ?? row.current_price ?? 0).toFixed(2)} · S {(row.stop_price ?? 0).toFixed(2)}
+                                  <div>TP {(row.tp1_price ?? 0).toFixed(2)} / {(row.tp2_price ?? 0).toFixed(2)}</div>
                                 </>
                               ) : (
                                 "—"

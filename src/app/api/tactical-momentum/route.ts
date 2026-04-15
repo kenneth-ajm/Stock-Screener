@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { TACTICAL_MOMENTUM_WATCHLIST, type TacticalMomentumWatchItem } from "@/lib/tactical_momentum_watchlist";
+import { buildTechnicalTargets } from "@/lib/target_engine";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,9 @@ type TacticalMomentumRow = {
   stop_price: number | null;
   tp1_price: number | null;
   tp2_price: number | null;
+  target_model: string | null;
+  tp1_reason: string | null;
+  tp2_reason: string | null;
   reason_summary: string;
   source_date: string | null;
   bars_count: number;
@@ -135,6 +139,9 @@ function evaluateRow(item: TacticalMomentumWatchItem, barsDesc: PriceBar[], spyH
       stop_price: null,
       tp1_price: null,
       tp2_price: null,
+      target_model: null,
+      tp1_reason: null,
+      tp2_reason: null,
       reason_summary: "Insufficient price history for tactical momentum evaluation.",
       source_date: barsDesc?.[0]?.date ?? null,
       bars_count: barsDesc.length,
@@ -193,9 +200,12 @@ function evaluateRow(item: TacticalMomentumWatchItem, barsDesc: PriceBar[], spyH
   const entry = signal === "BUY" ? latest.close : Math.max(latest.close, prior20High);
   const supportFloor = Math.max(entry * 0.95, low10 * 0.995);
   const stop = supportFloor < entry ? supportFloor : entry * 0.95;
-  const riskPerShare = Math.max(entry - stop, entry * 0.03);
-  const tp1 = entry + riskPerShare * 1.5;
-  const tp2 = entry + riskPerShare * 3;
+  const targets = buildTechnicalTargets({
+    bars: asc,
+    entry,
+    stop,
+    strategy_version: "tactical_momentum_v1",
+  });
 
   const setupLabel =
     setupType === "Q EP Daily"
@@ -257,8 +267,11 @@ function evaluateRow(item: TacticalMomentumWatchItem, barsDesc: PriceBar[], spyH
     signal,
     entry_price: round2(entry),
     stop_price: round2(stop),
-    tp1_price: round2(tp1),
-    tp2_price: round2(tp2),
+    tp1_price: targets.tp1,
+    tp2_price: targets.tp2,
+    target_model: targets.target_model,
+    tp1_reason: targets.tp1_reason,
+    tp2_reason: targets.tp2_reason,
     reason_summary: `${setupLabel} • ${breakoutText} • ${volumeText} • ${trendText} • ${marketText}`,
     source_date: latest.date,
     bars_count: barsDesc.length,

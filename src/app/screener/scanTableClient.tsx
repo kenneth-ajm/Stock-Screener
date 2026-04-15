@@ -21,6 +21,8 @@ type Row = {
   rank?: number | null;
   entry: number;
   stop: number;
+  tp1?: number | null;
+  tp2?: number | null;
   reason_summary?: string | null;
   atr14?: number | null;
   event_risk?: boolean;
@@ -221,7 +223,7 @@ function maxHoldDaysForStrategy(strategyVersion: string) {
 }
 
 function tpModelForStrategy(strategyVersion: string) {
-  return strategyVersion === "v1_trend_hold" ? "percent_10_20" : "percent_5_10";
+  return strategyVersion === "v1_trend_hold" ? "technical_resistance_r" : "technical_resistance_r";
 }
 
 function strategyName(strategyVersion: string) {
@@ -407,6 +409,8 @@ export default function ScanTableClient({
         signal: row.signal,
         idealEntry: Number(row.entry),
         stop: Number(row.stop),
+        tp1: Number(row.tp1),
+        tp2: Number(row.tp2),
         live,
         atr: atr14,
         confidence: Number(row.confidence),
@@ -422,6 +426,8 @@ export default function ScanTableClient({
               signal: effectiveSignal,
               idealEntry: Number(row.entry),
               stop: Number(row.stop),
+              tp1: Number(row.tp1),
+              tp2: Number(row.tp2),
               live,
               atr: atr14,
               confidence: Number(row.confidence),
@@ -876,6 +882,8 @@ export default function ScanTableClient({
         signal: ticketRow?.effectiveSignal ?? "WATCH",
         idealEntry: modelEntryNum,
         stop: stopNum,
+        tp1: Number(ticketRow?.tp1 ?? NaN),
+        tp2: Number(ticketRow?.tp2 ?? NaN),
         live: liveForTicket,
         atr: ticketRow?.atr14 ?? null,
         confidence: Number(ticketRow?.confidence ?? 0),

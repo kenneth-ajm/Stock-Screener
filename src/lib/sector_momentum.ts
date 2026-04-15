@@ -1,4 +1,5 @@
 import type { LctdSource } from "@/lib/scan_status";
+import { buildTechnicalTargets } from "@/lib/target_engine";
 
 export type IndustryGroup = {
   key: string;
@@ -41,6 +42,8 @@ export const SECTOR_MOMENTUM_UNIVERSE_SLUG = "growth_1500";
 type PriceBarLite = {
   symbol: string;
   date: string;
+  high: number;
+  low: number;
   close: number;
   volume: number;
 };
@@ -194,11 +197,13 @@ function barsBySymbol(rows: any[]): Map<string, PriceBarLite[]> {
   for (const row of rows) {
     const symbol = String(row?.symbol ?? "").trim().toUpperCase();
     const date = String(row?.date ?? "");
+    const high = toNum(row?.high);
+    const low = toNum(row?.low);
     const close = toNum(row?.close);
     const volume = toNum(row?.volume);
-    if (!symbol || !date || close == null || volume == null) continue;
+    if (!symbol || !date || high == null || low == null || close == null || volume == null) continue;
     if (!out.has(symbol)) out.set(symbol, []);
-    out.get(symbol)!.push({ symbol, date, close, volume });
+    out.get(symbol)!.push({ symbol, date, high, low, close, volume });
   }
   for (const [, bars] of out) {
     bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
@@ -250,7 +255,7 @@ export async function computeSectorMomentum(opts: {
 
   const { data, error } = await supa
     .from("price_bars")
-    .select("symbol,date,close,volume,source")
+    .select("symbol,date,high,low,close,volume,source")
     .in("symbol", allSymbols)
     .eq("source", "polygon")
     .gte("date", fromDate)
@@ -455,7 +460,7 @@ export async function computeSectorMomentumCandidates(opts: {
 
   const { data, error } = await supa
     .from("price_bars")
-    .select("symbol,date,close,volume,source")
+    .select("symbol,date,high,low,close,volume,source")
     .in("symbol", symbols)
     .eq("source", "polygon")
     .gte("date", fromDate)
@@ -573,8 +578,19 @@ export async function computeSectorMomentumCandidates(opts: {
       const confidence = signal === "BUY" ? Math.max(70, Math.min(99, score)) : signal === "WATCH" ? Math.max(50, Math.min(84, score)) : Math.min(49, score);
       const entry = round2(trigger > 0 ? trigger : latest.close);
       const stop = round2(entry * 0.92);
-      const tp1 = round2(entry * 1.05);
-      const tp2 = round2(entry * 1.1);
+      const targets = buildTechnicalTargets({
+        bars: bars.map((bar) => ({
+          date: bar.date,
+          high: bar.high,
+          low: bar.low,
+          close: bar.close,
+        })),
+        entry,
+        stop,
+        strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION,
+      });
+      const tp1 = targets.tp1;
+      const tp2 = targets.tp2;
 
       const groupStateText =
         group.state === "LEADING"
@@ -674,6 +690,12 @@ export async function computeSectorMomentumCandidates(opts: {
             tp2,
             max_holding_days: 7,
             stop_style: "pct_8",
+            target_model: targets.target_model,
+            tp1_reason: targets.tp1_reason,
+            tp2_reason: targets.tp2_reason,
+            rr_tp1: targets.rr_tp1,
+            rr_tp2: targets.rr_tp2,
+            resistance_levels: targets.resistance_levels,
           },
           caps: {
             top_group_count: topGroupCount,
