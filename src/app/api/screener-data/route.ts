@@ -367,6 +367,7 @@ const loadScreenerDataCached = unstable_cache(
     const fallbackDecisions: string[] = [];
     let rawRows: ScanRow[] = [];
     const autoUniverseDates: Array<{ universe_slug: string; date_used: string | null; rows: number }> = [];
+    let autoSuppressedUniverses: string[] = [];
 
     if (isAutoUniverse) {
       dataSource = "daily_scans_cache_auto_union";
@@ -400,7 +401,27 @@ const loadScreenerDataCached = unstable_cache(
       const populated = autoUniverseDates
         .filter((u) => u.rows > 0)
         .sort((a, b) => String(b.date_used ?? "").localeCompare(String(a.date_used ?? "")));
-      if (populated[0]?.universe_slug) {
+      const freshestDate = populated[0]?.date_used ?? null;
+      if (freshestDate) {
+        const freshestUniverses = new Set(
+          populated.filter((u) => u.date_used === freshestDate).map((u) => u.universe_slug)
+        );
+        autoSuppressedUniverses = populated
+          .filter((u) => u.date_used && u.date_used < freshestDate)
+          .map((u) => u.universe_slug);
+        rawRows = unionRows.filter((row: any) => {
+          const rowUniverse = String((row as any)?.universe_slug ?? "").trim();
+          const rowDate = String((row as any)?.date ?? "").trim();
+          return freshestUniverses.has(rowUniverse) && rowDate === freshestDate;
+        });
+        mappedUniverse = populated[0].universe_slug;
+        resolvedDateUsed = freshestDate;
+        if (autoSuppressedUniverses.length > 0) {
+          fallbackDecisions.push(
+            `auto->freshest_date ${freshestDate}; suppressed stale universes: ${autoSuppressedUniverses.join(", ")}`
+          );
+        }
+      } else if (populated[0]?.universe_slug) {
         mappedUniverse = populated[0].universe_slug;
         resolvedDateUsed = populated[0].date_used ?? resolvedDateUsed;
       }
@@ -1128,6 +1149,7 @@ const loadScreenerDataCached = unstable_cache(
         selected_universe_mode: isAutoUniverse ? "auto_union" : "explicit",
         allowed_universes: allowedUniverses,
         auto_universe_dates: autoUniverseDates,
+        auto_suppressed_universes: autoSuppressedUniverses,
         universe_availability: {
           core_800: coreStats,
           midcap_1000: midcapStats,

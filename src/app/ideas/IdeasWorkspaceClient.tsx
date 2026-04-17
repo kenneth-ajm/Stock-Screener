@@ -281,6 +281,7 @@ type Payload = {
     selected_universe_mode?: string | null;
     allowed_universes?: string[] | null;
     auto_universe_dates?: Array<{ universe_slug: string; date_used: string | null; rows: number }> | null;
+    auto_suppressed_universes?: string[] | null;
     universe_availability?: Record<
       string,
       {
@@ -3219,6 +3220,9 @@ function changePill(status: string | null | undefined) {
       {isScannerStrategy ? (
       <div className="mt-[-8px] text-[11px] text-slate-500">
         Auto selects the latest populated universe for each strategy. Unavailable explicit universes are marked as not scanned yet.
+        {Array.isArray(data?.meta?.auto_suppressed_universes) && data.meta.auto_suppressed_universes.length > 0
+          ? ` Auto is currently hiding older scan rows from: ${data.meta.auto_suppressed_universes.join(", ")}.`
+          : ""}
       </div>
       ) : null}
 
