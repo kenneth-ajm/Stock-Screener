@@ -44,6 +44,33 @@ function stateClass(state: LongTermRow["state"]) {
   return "border-slate-200 bg-slate-100 text-slate-700";
 }
 
+const longTermLegend = [
+  {
+    term: "Starter",
+    meaning: "A first small long-term buy candidate. The stock is still above its 200-day trend and has pulled back enough to consider starting slowly.",
+  },
+  {
+    term: "Add On",
+    meaning: "A stock that still looks healthy, but is not offering much of a dip. Better for adding gradually if you already want long-term exposure.",
+  },
+  {
+    term: "Watch",
+    meaning: "Worth keeping on the radar, but not clean enough for a new long-term buy today.",
+  },
+  {
+    term: "Repair",
+    meaning: "The long-term setup needs time to heal, usually because price is below the 200-day average. This is a patience bucket, not a buy-now bucket.",
+  },
+  {
+    term: "From 1Y high",
+    meaning: "How far the latest close is below the highest price from roughly the past year. A 15% reading means the stock is about 15% below that high.",
+  },
+  {
+    term: "SMA200",
+    meaning: "The 200-day simple moving average. It is used here as a basic long-term trend line.",
+  },
+];
+
 export default async function LongTermPage() {
   const { supabase, user, portfolios } = await getWorkspaceContext("/long-term");
 
@@ -149,6 +176,24 @@ export default async function LongTermPage() {
         ))}
       </div>
 
+      <section className="surface-panel mt-5 p-4">
+        <div className="flex flex-col gap-1">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Legend</div>
+          <h2 className="section-title">How to read the long-term list</h2>
+          <p className="max-w-3xl text-sm leading-6 text-slate-600">
+            This page is for slow portfolio candidates, not same-day trades. The labels are meant to help decide whether a name is ready for a small starter buy, better suited for gradual accumulation, or needs more time.
+          </p>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {longTermLegend.map((item) => (
+            <div key={item.term} className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+              <div className="text-sm font-semibold text-slate-900">{item.term}</div>
+              <p className="mt-1 text-xs leading-5 text-slate-600">{item.meaning}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <div className="mt-5 space-y-5">
         {Array.from(grouped.entries()).map(([group, groupRows]) => (
           <section key={group} className="surface-panel p-4">
@@ -166,7 +211,7 @@ export default async function LongTermPage() {
                     <th className="px-3 py-2">Company</th>
                     <th className="px-3 py-2 text-right">Close</th>
                     <th className="px-3 py-2 text-right">SMA200</th>
-                    <th className="px-3 py-2 text-right">Drawdown</th>
+                    <th className="px-3 py-2 text-right">From 1Y high</th>
                     <th className="px-3 py-2">State</th>
                     <th className="px-3 py-2">Note</th>
                   </tr>
