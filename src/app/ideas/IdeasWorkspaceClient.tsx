@@ -2832,6 +2832,47 @@ function changePill(status: string | null | undefined) {
   }
 }
 
+const strategyGuide =
+  strategy === "tactical_momentum"
+    ? {
+        title: "Today",
+        horizon: "Same-day or very short-term momentum trades",
+        pool: "Scans active market universes from cached daily bars, then ranks liquid names showing breakout, episodic pivot, or near-trigger behavior.",
+        buyList:
+          "Names reach the buy list when price action, relative volume, breakout proximity, trend alignment, and SPY context are strong enough for immediate review.",
+      }
+    : strategy === "quality_dip"
+      ? {
+          title: "Dip Buys",
+          horizon: "Quick dip-bounce trades from a fixed quality watchlist",
+          pool: "Only your fixed quality/dip list is checked here. This is intentionally not a market-wide scanner.",
+          buyList:
+            "Names reach the buy list when the pullback is in the preferred zone, the stock trend is still intact, and SPY is supportive.",
+        }
+      : strategy === "v1"
+        ? {
+            title: "Swing 2-7D",
+            horizon: "Two-to-seven day breakout and continuation trades",
+            pool: "Uses the cached swing scan across the selected universe, with Auto choosing the freshest populated universe.",
+            buyList:
+              "Names reach the buy list when trend, setup quality, entry zone, risk/reward, volume, and market regime pass the swing filters.",
+          }
+        : strategy === "v1_sector_momentum"
+          ? {
+              title: "Sector Context",
+              horizon: "Leadership discovery and sector/industry confirmation",
+              pool: "Looks for strong industry groups and representative leaders from cached sector momentum scans.",
+              buyList:
+                "Names are listed because their group or theme is showing leadership; use this as context before making an actual trade.",
+            }
+          : {
+              title: "Hold Lab",
+              horizon: "Longer hold / trend-continuation candidates",
+              pool: "Uses cached trend-hold scans for stocks already showing stronger multi-week trend structure.",
+              buyList:
+                "Names reach the list when the trend remains constructive, pullbacks are controlled, and the setup still has room versus risk.",
+            };
+
   return (
     <div className="space-y-5">
       {toast ? (
@@ -3089,6 +3130,21 @@ function changePill(status: string | null | undefined) {
           )}
         </div>
       </div>
+
+      <section className="surface-panel p-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-3xl">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{strategyGuide.horizon}</div>
+            <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-900">{strategyGuide.title}</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">{strategyGuide.pool}</p>
+          </div>
+          <div className="max-w-md rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm leading-6 text-emerald-900">
+            <span className="font-semibold">Why names appear here: </span>
+            {strategyGuide.buyList}
+          </div>
+        </div>
+      </section>
+
       {isScannerStrategy && marketDataIsStale ? (
         <div className="mt-[-8px] rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
           <div className="font-medium">Market data is stale</div>
@@ -3906,7 +3962,7 @@ function changePill(status: string | null | undefined) {
                   <thead className="text-left text-[11px] text-slate-500">
                     <tr className="border-b border-[#e2d2b7]">
                       <th className="px-3 py-2.5">Symbol</th>
-                      <th className="px-3 py-2.5">Company</th>
+                      <th className="px-3 py-2.5">Company / Why listed</th>
                       <th className="px-3 py-2.5">Price</th>
                       <th className="px-3 py-2.5">% Drop</th>
                       <th className="px-3 py-2.5">Context</th>
@@ -4154,7 +4210,7 @@ function changePill(status: string | null | undefined) {
                   <thead className="text-left text-[11px] text-slate-500">
                     <tr className="border-b border-[#e2d2b7]">
                       <th className="px-3 py-2.5">Symbol</th>
-                      <th className="px-3 py-2.5">Company</th>
+                      <th className="px-3 py-2.5">Company / Why listed</th>
                       <th className="px-3 py-2.5">Setup</th>
                       <th className="px-3 py-2.5">Timing</th>
                       <th className="px-3 py-2.5">Price</th>
@@ -4319,6 +4375,7 @@ function changePill(status: string | null | undefined) {
                   <th className="px-4 py-3.5">Signal</th>
                   <th className="px-4 py-3.5">Rank</th>
                   <th className="px-4 py-3.5">Quality</th>
+                  <th className="px-4 py-3.5">Why listed</th>
                   <th className="px-4 py-3.5">Entry</th>
                   <th className="px-4 py-3.5">Live</th>
                   <th className="px-4 py-3.5">Delta</th>
@@ -4333,7 +4390,7 @@ function changePill(status: string | null | undefined) {
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td className="px-4 py-5 text-sm text-slate-600" colSpan={13}>
+                    <td className="px-4 py-5 text-sm text-slate-600" colSpan={14}>
                       {emptyStateMessage ?? "No rows available."}
                     </td>
                   </tr>
@@ -4416,6 +4473,16 @@ function changePill(status: string | null | undefined) {
                       {row.dossier_summary ? (
                         <div className="mt-1 max-w-[16rem] text-[10px] leading-4 text-slate-500">
                           {row.dossier_summary}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="max-w-[18rem] text-[11px] leading-5 text-slate-600">
+                        {row.reason_summary ?? row.transition_plan?.summary ?? row.quality_summary ?? "Signal matched this tab's scan filters."}
+                      </div>
+                      {row.leadership_context?.summary ? (
+                        <div className="mt-1 max-w-[18rem] text-[10px] leading-4 text-slate-500">
+                          {row.leadership_context.summary}
                         </div>
                       ) : null}
                     </td>
