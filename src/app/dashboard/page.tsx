@@ -82,24 +82,6 @@ type QuoteMap = Record<
 >;
 const PRICE_MISMATCH_THRESHOLD_PCT = 0.6;
 
-type BrokerSnapshotValue = {
-  connection_ok?: boolean;
-  configured?: boolean;
-  account?: {
-    cash_available?: number | null;
-    equity?: number | null;
-    buying_power?: number | null;
-    currency?: string | null;
-  } | null;
-  positions_count?: number;
-  positions?: Array<{
-    symbol?: string | null;
-    quantity?: number | null;
-    avg_cost?: number | null;
-    market_value?: number | null;
-  }>;
-};
-
 export const dynamic = "force-dynamic";
 
 function resolveQty(row: any) {
@@ -261,26 +243,6 @@ export default async function DashboardPage({
     strategy_version: "v1",
     regime_state: regime?.state ?? null,
   });
-  const brokerStatusKey = `broker_snapshot_last_run:${user.id}`;
-  const { data: brokerStatusRow } = await supabase
-    .from("system_status")
-    .select("updated_at,value")
-    .eq("key", brokerStatusKey)
-    .maybeSingle();
-  const brokerSnapshot = (brokerStatusRow?.value ?? null) as BrokerSnapshotValue | null;
-  const brokerConnected = Boolean(brokerSnapshot?.connection_ok);
-  const defaultPortfolioName = String((defaultPortfolio as any)?.name ?? "").trim().toLowerCase();
-  const isMainPortfolio = defaultPortfolioName === "main";
-  const isBrokerLinked = isMainPortfolio && brokerConnected;
-  const modeReason = isBrokerLinked
-    ? "Default portfolio name is Main and broker snapshot is connected."
-    : !isMainPortfolio
-      ? "Default portfolio is not Main, so dashboard remains manual/internal."
-      : "Main is selected but broker snapshot is missing or disconnected.";
-  const portfolioSourceLabel = isBrokerLinked
-    ? "Source: Broker-linked (Tiger read-only)"
-    : "Source: Manual portfolio";
-  const brokerPositions = Array.isArray(brokerSnapshot?.positions) ? brokerSnapshot.positions : [];
 
   const { data: openRows } =
     portfolioId
@@ -313,16 +275,8 @@ export default async function DashboardPage({
     entry: Number(row.entry_price ?? 0),
   }));
 
-  const openPreviewBroker: Array<{ symbol: string; qty: number; entry: number }> = brokerPositions.map((row) => ({
-    symbol: String(row?.symbol ?? "").trim().toUpperCase(),
-    qty: Number(row?.quantity ?? 0),
-    entry: Number(row?.avg_cost ?? 0),
-  }));
-  const openPreviewRows = isBrokerLinked ? openPreviewBroker : openPreview;
-
-  const totalExposure = isBrokerLinked
-    ? brokerPositions.reduce((sum, row) => sum + (Number(row?.market_value) || 0), 0)
-    : (snapshot?.deployed_cost_basis ?? 0);
+  const openPreviewRows = openPreview;
+  const totalExposure = snapshot?.deployed_cost_basis ?? 0;
   let totalRiskDeployed = 0;
   for (const row of (openRiskRows ?? []) as Array<any>) {
     const entry = Number(row?.entry_price);
@@ -332,66 +286,33 @@ export default async function DashboardPage({
     totalRiskDeployed += Math.max(0, (entry - stop) * qty);
   }
   const maxLossIfAllStopsHit = totalRiskDeployed;
-  const summaryCards = isBrokerLinked
-    ? [
-        {
-          label: "Broker Positions",
-          value: String(brokerSnapshot?.positions_count ?? brokerPositions.length ?? 0),
-          subtitle: "Read-only snapshot",
-          sourceField: "broker.positions_count",
-        },
-        {
-          label: "Tracked Open Positions",
-          value: String(snapshot?.open_count ?? 0),
-          subtitle: "Internal records",
-          sourceField: "internal.snapshot.open_count",
-        },
-        {
-          label: "Capital at Work",
-          value: <PrivacyMoney value={totalExposure} />,
-          subtitle: "Open position value",
-          sourceField: "broker.positions.market_value",
-        },
-        {
-          label: "Planned Risk",
-          value: <PrivacyMoney value={totalRiskDeployed} />,
-          subtitle: "If tracked stops hit",
-          sourceField: "internal.positions.stop_risk",
-        },
-        {
-          label: "Swing Ideas",
-          value: String(momentum.buy + momentum.watch),
-          subtitle: "BUY + WATCH",
-          sourceField: "daily_scans.v1",
-        },
-      ]
-    : [
-        { label: "Open Positions", value: String(snapshot?.open_count ?? 0), subtitle: null, sourceField: "internal.snapshot.open_count" },
-        {
-          label: "Capital at Work",
-          value: <PrivacyMoney value={snapshot?.deployed_cost_basis ?? null} />,
-          subtitle: "Tracked cost basis",
-          sourceField: "internal.snapshot.deployed_cost_basis",
-        },
-        {
-          label: "Planned Risk",
-          value: <PrivacyMoney value={totalRiskDeployed} />,
-          subtitle: "If open stops hit",
-          sourceField: "internal.positions.stop_risk",
-        },
-        {
-          label: "Swing Ideas",
-          value: String(momentum.buy + momentum.watch),
-          subtitle: "BUY + WATCH",
-          sourceField: "daily_scans.v1",
-        },
-        {
-          label: "Market Breadth",
-          value: breadth.breadthState,
-          subtitle: `${breadth.pctAboveSma50.toFixed(0)}% above SMA50`,
-          sourceField: "market_breadth",
-        },
-      ];
+  const summaryCards = [
+    { label: "Open Positions", value: String(snapshot?.open_count ?? 0), subtitle: null, sourceField: "internal.snapshot.open_count" },
+    {
+      label: "Capital at Work",
+      value: <PrivacyMoney value={snapshot?.deployed_cost_basis ?? null} />,
+      subtitle: "Tracked cost basis",
+      sourceField: "internal.snapshot.deployed_cost_basis",
+    },
+    {
+      label: "Planned Risk",
+      value: <PrivacyMoney value={totalRiskDeployed} />,
+      subtitle: "If open stops hit",
+      sourceField: "internal.positions.stop_risk",
+    },
+    {
+      label: "Swing Ideas",
+      value: String(momentum.buy + momentum.watch),
+      subtitle: "BUY + WATCH",
+      sourceField: "daily_scans.v1",
+    },
+    {
+      label: "Market Breadth",
+      value: breadth.breadthState,
+      subtitle: `${breadth.pctAboveSma50.toFixed(0)}% above SMA50`,
+      sourceField: "market_breadth",
+    },
+  ];
   const topSignals = momentum.top.slice(0, 5);
   const topSymbols = Array.from(
     new Set(topSignals.map((row: any) => String(row.symbol ?? "").trim().toUpperCase()).filter(Boolean))
@@ -447,7 +368,7 @@ export default async function DashboardPage({
           <p className="text-sm leading-6 text-slate-600">One screen for today’s watchlist, this week’s swings, long-term context, and tracked positions.</p>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="surface-chip inline-flex px-2.5 py-1 text-xs font-medium text-slate-700">
-              {portfolioSourceLabel}
+              Manual position tracking
             </p>
             <div className="flex items-center gap-2">
               <TickerCheckClient breadthState={breadth.breadthState} breadthLabel={breadth.breadthLabel} />
@@ -461,19 +382,15 @@ export default async function DashboardPage({
               {" • "}env={envLabel}
               {" • "}portfolio_id={portfolioId || "—"}
               {" • "}portfolio_name={String((defaultPortfolio as any)?.name ?? "—")}
-              {" • "}resolved_mode={isBrokerLinked ? "broker_linked" : "manual"}
-              {" • "}mode_reason={modeReason}
-              {" • "}broker_snapshot_found={brokerSnapshot ? "true" : "false"}
-              {" • "}broker_connected={brokerConnected ? "true" : "false"}
-              {" • "}broker_snapshot_updated_at={brokerStatusRow?.updated_at ?? "—"}
-              {" • "}headline_source={isBrokerLinked ? "broker_snapshot" : "internal_portfolio_snapshot"}
+              {" • "}resolved_mode=manual
+              {" • "}headline_source=internal_portfolio_snapshot
               {" • "}headline_fields={summaryCards.map((c) => c.sourceField).join(",")}
             </div>
           ) : null}
         </div>
 
         <section className="surface-panel px-3 py-2.5">
-          <div className={`grid gap-2 ${isBrokerLinked ? "sm:grid-cols-2 lg:grid-cols-5" : "sm:grid-cols-2 lg:grid-cols-5"}`}>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
             {summaryCards.map((card) => (
               <div key={card.label} className="surface-card px-3 py-2">
                 <div className="muted-label uppercase tracking-[0.06em]">{card.label}</div>
@@ -653,7 +570,7 @@ export default async function DashboardPage({
             </div>
             <div className="space-y-1.5 text-sm">
               <div className="text-xs text-slate-500">
-                {isBrokerLinked ? "Showing broker-held positions (read-only snapshot)." : "Showing internal tracked open positions."}
+                Showing manually tracked open positions.
               </div>
               {openPreviewRows.length === 0 ? <div className="text-slate-500">No open positions.</div> : null}
               {Array.from(new Map(openPreviewRows.map((r) => [r.symbol, r])).values()).map((row) => (
@@ -671,37 +588,22 @@ export default async function DashboardPage({
           </div>
           <div className="surface-panel p-3.5">
             <div className="mb-2.5 flex items-center justify-between">
-              <div className="section-title">Execution & Broker</div>
-              <Link
-                href="/broker"
-                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Open broker
+              <div className="section-title">Strategy Health</div>
+              <Link href="/ideas" className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                Open lab
               </Link>
             </div>
             <div className="space-y-2">
-              <div className="surface-card grid grid-cols-2 gap-2 px-3 py-2 text-sm">
-                <div>
-                  <div className="muted-label">Broker status</div>
-                  <div className="mt-0.5 font-semibold text-slate-900">
-                    {brokerConnected ? "Connected" : brokerSnapshot?.configured ? "Configured / Not Connected" : "Not Configured"}
-                  </div>
-                </div>
-                <div>
-                  <div className="muted-label">Last sync</div>
-                  <div className="mt-0.5 text-xs text-slate-700">{brokerStatusRow?.updated_at ?? "—"}</div>
-                </div>
-              </div>
               <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
-                <span className="font-medium text-slate-900">Momentum Swing</span>
+                <span className="font-medium text-slate-900">Swing 2-7D</span>
                 <span className="text-slate-700">BUY {momentum.buy} / WATCH {momentum.watch}</span>
               </div>
               <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
-                <span className="font-medium text-slate-900">Trend Hold</span>
+                <span className="font-medium text-slate-900">Hold Lab</span>
                 <span className="text-slate-700">BUY {trend.buy} / WATCH {trend.watch}</span>
               </div>
               <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
-                <span className="font-medium text-slate-900">Sector Momentum</span>
+                <span className="font-medium text-slate-900">Sector Context</span>
                 <span className="text-slate-700">BUY {sectorMomentum.buy} / WATCH {sectorMomentum.watch}</span>
               </div>
             </div>
