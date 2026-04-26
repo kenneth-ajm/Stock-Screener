@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { TACTICAL_MOMENTUM_WATCHLIST, type TacticalMomentumWatchItem } from "@/lib/tactical_momentum_watchlist";
 import { buildTechnicalTargets } from "@/lib/target_engine";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +40,12 @@ type TacticalMomentumRow = {
 };
 
 type TacticalFreshnessState = "current" | "mixed" | "stale";
+
+type TacticalMomentumScanItem = {
+  symbol: string;
+  name: string;
+  group: string;
+};
 
 type PriceBar = {
   date: string;
@@ -99,8 +104,8 @@ async function fetchBarsForSymbol(supabase: any, symbol: string, limit = 260) {
 async function fetchBarsBySymbol(supabase: any, symbols: string[], limit = 260) {
   const results = new Map<string, PriceBar[]>();
   const uniqueSymbols = Array.from(new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()).filter(Boolean)));
-  for (let i = 0; i < uniqueSymbols.length; i += 8) {
-    const chunk = uniqueSymbols.slice(i, i + 8);
+  for (let i = 0; i < uniqueSymbols.length; i += 25) {
+    const chunk = uniqueSymbols.slice(i, i + 25);
     const chunkResults = await Promise.all(
       chunk.map(async (symbol) => {
         const bars = await fetchBarsForSymbol(supabase, symbol, limit);
@@ -114,7 +119,101 @@ async function fetchBarsBySymbol(supabase: any, symbols: string[], limit = 260) 
   return results;
 }
 
-function evaluateRow(item: TacticalMomentumWatchItem, barsDesc: PriceBar[], spyHealthy: boolean): TacticalMomentumRow {
+async function loadMarketScanSymbols(supabase: any, opts: { scanDate: string; maxSymbols?: number }) {
+  const universeSlugs = ["liquid_2000", "midcap_1000", "growth_1500", "core_800"];
+  const maxSymbols = Math.max(100, Math.min(1200, Number(opts.maxSymbols ?? 500)));
+  const { data: universes, error: universeErr } = await supabase
+    .from("universes")
+    .select("id,slug")
+    .in("slug", universeSlugs);
+  if (universeErr) throw universeErr;
+
+  const universeIdToSlug = new Map<string, string>();
+  for (const universe of universes ?? []) {
+    if ((universe as any)?.id && (universe as any)?.slug) {
+      universeIdToSlug.set(String((universe as any).id), String((universe as any).slug));
+    }
+  }
+
+  const universeIds = [...universeIdToSlug.keys()];
+  const symbolToUniverses = new Map<string, Set<string>>();
+  for (const universeId of universeIds) {
+    const { data: members, error: memberErr } = await supabase
+      .from("universe_members")
+      .select("symbol,universe_id")
+      .eq("universe_id", universeId)
+      .eq("active", true)
+      .limit(2500);
+    if (memberErr) throw memberErr;
+    const slug = universeIdToSlug.get(universeId) ?? "market";
+    for (const member of members ?? []) {
+      const symbol = String((member as any)?.symbol ?? "").trim().toUpperCase();
+      if (!symbol || symbol.includes(".")) continue;
+      if (!symbolToUniverses.has(symbol)) symbolToUniverses.set(symbol, new Set());
+      symbolToUniverses.get(symbol)!.add(slug);
+    }
+  }
+
+  let symbols = [...symbolToUniverses.keys()];
+  if (!symbols.length) {
+    const { data: latestBars, error: latestErr } = await supabase
+      .from("price_bars")
+      .select("symbol,close,volume")
+      .eq("date", opts.scanDate)
+      .eq("source", "polygon")
+      .limit(5000);
+    if (latestErr) throw latestErr;
+    symbols = (latestBars ?? [])
+      .map((row: any) => String(row?.symbol ?? "").trim().toUpperCase())
+      .filter((symbol: string) => symbol && !symbol.includes("."));
+  }
+
+  const liquidityRows: Array<{ symbol: string; close: number; volume: number; dollar: number }> = [];
+  for (let i = 0; i < symbols.length; i += 500) {
+    const chunk = symbols.slice(i, i + 500);
+    const { data: latestBars, error: latestErr } = await supabase
+      .from("price_bars")
+      .select("symbol,close,volume")
+      .in("symbol", chunk)
+      .eq("date", opts.scanDate)
+      .eq("source", "polygon")
+      .limit(500);
+    if (latestErr) throw latestErr;
+    for (const row of latestBars ?? []) {
+      const symbol = String((row as any)?.symbol ?? "").trim().toUpperCase();
+      const close = Number((row as any)?.close);
+      const volume = Number((row as any)?.volume);
+      const dollar = Number.isFinite(close) && close > 0 && Number.isFinite(volume) && volume > 0 ? close * volume : 0;
+      if (!symbol || close < 2 || dollar < 1_000_000) continue;
+      liquidityRows.push({ symbol, close, volume, dollar });
+    }
+  }
+
+  const selected = liquidityRows
+    .sort((a, b) => b.dollar - a.dollar)
+    .slice(0, maxSymbols)
+    .map((row) => row.symbol);
+
+  return {
+    symbols: selected,
+    items: selected.map((symbol) => ({
+      symbol,
+      name: symbol,
+      group: symbolToUniverses.get(symbol)?.has("midcap_1000")
+        ? "Midcap Market"
+        : symbolToUniverses.get(symbol)?.has("growth_1500")
+          ? "Growth Market"
+          : symbolToUniverses.get(symbol)?.has("liquid_2000")
+            ? "Liquid Market"
+            : "Core Market",
+    })),
+    source_universes: universeSlugs.filter((slug) => [...symbolToUniverses.values()].some((set) => set.has(slug))),
+    candidate_symbols_count: symbols.length,
+    scanned_symbols_count: selected.length,
+  };
+}
+
+function evaluateRow(item: TacticalMomentumScanItem, barsDesc: PriceBar[], spyHealthy: boolean): TacticalMomentumRow {
   if (!Array.isArray(barsDesc) || barsDesc.length < 60) {
     return {
       symbol: item.symbol,
@@ -278,8 +377,10 @@ function evaluateRow(item: TacticalMomentumWatchItem, barsDesc: PriceBar[], spyH
   };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const reqUrl = new URL(req.url);
+    const maxSymbolsParam = Number(reqUrl.searchParams.get("limit") ?? reqUrl.searchParams.get("max_symbols") ?? "");
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !key) {
@@ -287,9 +388,7 @@ export async function GET() {
     }
 
     const supabase = createClient(url, key, { auth: { persistSession: false } }) as any;
-    const symbols = TACTICAL_MOMENTUM_WATCHLIST.map((item) => item.symbol);
-    const barsBySymbol = await fetchBarsBySymbol(supabase, [...symbols, "SPY"], 260);
-    const spyBars = barsBySymbol.get("SPY") ?? [];
+    const spyBars = await fetchBarsForSymbol(supabase, "SPY", 260);
     if (spyBars.length < 200) {
       return NextResponse.json({ ok: false, error: "Not enough SPY bars to evaluate market filter" }, { status: 500 });
     }
@@ -299,12 +398,18 @@ export async function GET() {
     const spySma50 = sma(spyAsc.map((bar) => bar.close), 50);
     const spySma200 = sma(spyAsc.map((bar) => bar.close), 200);
     const spyHealthy = Boolean(spySma50 != null && spySma200 != null && spyClose > spySma50 && spyClose > spySma200);
+    const scanDate = spyBars[0]?.date ?? "";
+    const marketScan = await loadMarketScanSymbols(supabase, {
+      scanDate,
+      maxSymbols: Number.isFinite(maxSymbolsParam) ? maxSymbolsParam : 500,
+    });
+    const barsBySymbol = await fetchBarsBySymbol(supabase, marketScan.symbols, 260);
 
     const rows: TacticalMomentumRow[] = [];
     const missingSymbols: string[] = [];
     const symbolDates: Array<{ symbol: string; source_date: string | null }> = [];
 
-    for (const item of TACTICAL_MOMENTUM_WATCHLIST) {
+    for (const item of marketScan.items) {
       const bars = barsBySymbol.get(item.symbol) ?? [];
       if (bars.length < 60) missingSymbols.push(item.symbol);
       const row = evaluateRow(item, bars, spyHealthy);
@@ -341,17 +446,24 @@ export async function GET() {
       },
       { buy_ready: 0, near_trigger: 0, too_extended: 0, defensive: 0 }
     );
-    const shortlist = [...rows]
+    const sortedRows = [...rows].sort((a, b) => {
+      const timingOrder: Record<TacticalTimingState, number> = {
+        BUY_READY: 0,
+        NEAR_TRIGGER: 1,
+        TOO_EXTENDED: 2,
+        DEFENSIVE: 3,
+      };
+      const timingDiff = timingOrder[a.timing_state] - timingOrder[b.timing_state];
+      if (timingDiff !== 0) return timingDiff;
+      const scoreDiff = Number(b.ranking_score ?? -999) - Number(a.ranking_score ?? -999);
+      if (scoreDiff !== 0) return scoreDiff;
+      const rvDiff = Number(b.relative_volume ?? -999) - Number(a.relative_volume ?? -999);
+      if (rvDiff !== 0) return rvDiff;
+      return a.symbol.localeCompare(b.symbol);
+    });
+    const shortlist = sortedRows
       .filter((row) => row.signal !== "AVOID")
       .sort((a, b) => {
-        const timingOrder: Record<TacticalTimingState, number> = {
-          BUY_READY: 0,
-          NEAR_TRIGGER: 1,
-          TOO_EXTENDED: 2,
-          DEFENSIVE: 3,
-        };
-        const timingDiff = timingOrder[a.timing_state] - timingOrder[b.timing_state];
-        if (timingDiff !== 0) return timingDiff;
         const scoreDiff = Number(b.ranking_score ?? -999) - Number(a.ranking_score ?? -999);
         if (scoreDiff !== 0) return scoreDiff;
         return a.symbol.localeCompare(b.symbol);
@@ -376,10 +488,13 @@ export async function GET() {
 
     return NextResponse.json({
       ok: true,
-      rows,
+      rows: sortedRows,
       summary,
       meta: {
-        watchlist_size: TACTICAL_MOMENTUM_WATCHLIST.length,
+        scan_mode: "market",
+        source_universes: marketScan.source_universes,
+        candidate_symbols_count: marketScan.candidate_symbols_count,
+        scanned_symbols_count: marketScan.scanned_symbols_count,
         source_date: rows.map((row) => row.source_date).filter(Boolean).sort().slice(-1)[0] ?? null,
         setup_summary: setupSummary,
         timing_summary: timingSummary,

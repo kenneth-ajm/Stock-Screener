@@ -357,6 +357,10 @@ type QualityDipPayload = {
   summary?: { consider_buy: number; watch: number; avoid: number };
   meta?: {
     watchlist_size?: number;
+    scan_mode?: "market" | "watchlist";
+    source_universes?: string[];
+    candidate_symbols_count?: number;
+    scanned_symbols_count?: number;
     source_date?: string | null;
     freshness?: {
       expected_date?: string | null;
@@ -418,6 +422,10 @@ type TacticalMomentumPayload = {
   summary?: { buy: number; watch: number; avoid: number };
   meta?: {
     watchlist_size?: number;
+    scan_mode?: "market" | "watchlist";
+    source_universes?: string[];
+    candidate_symbols_count?: number;
+    scanned_symbols_count?: number;
     source_date?: string | null;
     setup_summary?: { breakout: number; ep: number; watch: number; defensive: number };
     timing_summary?: { buy_ready: number; near_trigger: number; too_extended: number; defensive: number };
@@ -1569,7 +1577,10 @@ export default function IdeasWorkspaceClient({
       "Financial Momentum",
       "ETF Anchors",
     ];
-    return order.map((group) => ({ group, rows: tacticalRowsView.filter((row) => row.group === group) })).filter((group) => group.rows.length > 0);
+    const rest = Array.from(new Set(tacticalRowsView.map((row) => row.group).filter((group) => !order.includes(group))));
+    return [...order, ...rest.sort()]
+      .map((group) => ({ group, rows: tacticalRowsView.filter((row) => row.group === group) }))
+      .filter((group) => group.rows.length > 0);
   }, [tacticalRowsView]);
   const tacticalSummary = useMemo(() => tacticalData?.summary ?? { buy: 0, watch: 0, avoid: 0 }, [tacticalData]);
   const tacticalSetupSummary = useMemo(() => tacticalData?.meta?.setup_summary ?? { breakout: 0, ep: 0, watch: 0, defensive: 0 }, [tacticalData]);
@@ -2676,7 +2687,7 @@ export default function IdeasWorkspaceClient({
         extension_state: typeof row.distance_to_breakout_pct === "number" ? `${row.distance_to_breakout_pct.toFixed(2)}%_FROM_BREAKOUT` : null,
         volatility_state: typeof row.range_10d_pct === "number" ? `${row.range_10d_pct.toFixed(2)}%_10D_RANGE` : null,
       },
-      universe_slug: "tactical_momentum_watchlist",
+      universe_slug: "tactical_momentum_market",
       source_scan_date: row.source_date,
       sizing: {
         shares,
@@ -3013,8 +3024,13 @@ function changePill(status: string | null | undefined) {
                 {marketRefreshBusy ? "Refreshing..." : "Refresh Daily Bars"}
               </button>
               <span className="surface-chip px-2.5 py-1">
-                Watchlist: {tacticalData?.meta?.watchlist_size ?? tacticalRows.length}
+                Market scan: {tacticalData?.meta?.scanned_symbols_count ?? tacticalRows.length}
               </span>
+              {tacticalData?.meta?.source_universes?.length ? (
+                <span className="surface-chip px-2.5 py-1">
+                  Universes: {tacticalData.meta.source_universes.join(", ")}
+                </span>
+              ) : null}
               <span className="surface-chip px-2.5 py-1">{tacticalFreshnessChip}</span>
               <span className="surface-chip px-2.5 py-1">
                 SPY trend: {tacticalData?.meta?.market?.spy_above_sma200 ? "Healthy" : "Weak"}
@@ -4002,7 +4018,7 @@ function changePill(status: string | null | undefined) {
         ) : null}
         {isTacticalMomentum ? (
           <>
-            {loading ? <div className="p-5 text-sm text-slate-600">Loading Tactical Momentum watchlist…</div> : null}
+            {loading ? <div className="p-5 text-sm text-slate-600">Loading market momentum scan…</div> : null}
             {!loading && !tacticalData?.ok ? (
               <div className="p-5 text-sm text-rose-600">Failed: {tacticalData?.error ?? "Unknown error"}</div>
             ) : null}
@@ -4092,7 +4108,7 @@ function changePill(status: string | null | undefined) {
                       <option value="symbol">Symbol</option>
                     </select>
                     <span className="ml-2 text-[11px] text-slate-500">
-                      Tactical Momentum is a daily-compatible Q-style sleeve built from cached bars only.
+                      Today scans active market universes using cached daily bars only. Dip Buys remains the fixed watchlist.
                     </span>
                   </div>
                   <div className="mt-3 rounded-lg border border-[#eadfce] bg-white px-3 py-2">
@@ -4129,7 +4145,7 @@ function changePill(status: string | null | undefined) {
                     <div className="mt-1 text-[11px] text-slate-500">
                       {tacticalFreshness.state === "mixed"
                         ? `Mixed freshness: ${tacticalFreshness.stale_symbols_count ?? 0} symbols are behind SPY ${tacticalFreshness.expected_date ?? "—"}`
-                        : `Freshness stale: tactical watchlist bars lag SPY ${tacticalFreshness.expected_date ?? "—"}`}
+                        : `Freshness stale: market scan bars lag SPY ${tacticalFreshness.expected_date ?? "—"}`}
                       {tacticalStalePreview ? ` (${tacticalStalePreview}${tacticalStaleSymbols.length > 6 ? ", …" : ""})` : ""}
                     </div>
                   ) : null}
