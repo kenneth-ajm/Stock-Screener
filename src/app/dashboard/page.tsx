@@ -461,7 +461,7 @@ export default async function DashboardPage({
               <div className="section-title">This Week</div>
               <Link
                 href="/swing"
-                className="rounded-lg border border-slate-200 bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800"
+                className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-100"
               >
                 Open
               </Link>

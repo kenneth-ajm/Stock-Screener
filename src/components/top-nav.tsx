@@ -42,7 +42,7 @@ export default function TopNav({
                 href={item.href}
                 className={`whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium tracking-tight transition-all ${
                   active
-                    ? "bg-slate-900 text-white shadow-sm"
+                    ? "border border-emerald-200 bg-white text-emerald-800 shadow-sm"
                     : "text-slate-600 hover:bg-white hover:text-slate-900"
                 }`}
               >
