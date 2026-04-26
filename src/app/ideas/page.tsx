@@ -83,8 +83,8 @@ export default async function IdeasPage({
   return (
     <AppShell currentPath="/ideas" userEmail={user.email ?? ""} portfolios={portfolios}>
       <div className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-[2.1rem]">Ideas</h1>
-        <p className="text-sm leading-6 text-slate-600">Scanner workspace with strategy tabs and a right-side trade ticket.</p>
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-[2.1rem]">Strategy Lab</h1>
+        <p className="text-sm leading-6 text-slate-600">Strategy-specific views kept separate from the main time-horizon desks.</p>
       </div>
       <div className="mt-4">
         <IdeasWorkspaceClient

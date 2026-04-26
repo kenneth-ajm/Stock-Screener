@@ -3,7 +3,6 @@ import { supabaseServer } from "@/lib/supabase/server";
 import ScreenerPanelClient from "./ScreenerPanelClient";
 import UtilitiesClient from "./UtilitiesClient";
 import ScreenerSearchClient from "./ScreenerSearchClient";
-import CashBalanceEditor from "./CashBalanceEditor";
 import RepairDefaultPortfolioButton from "./RepairDefaultPortfolioButton";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -165,18 +164,11 @@ export default async function ScreenerPage({
         </Card>
 
         <Card>
-          <CardHeader title="Active portfolio" subtitle="Sizing uses the active portfolio" />
+          <CardHeader title="Tracking context" subtitle="Position tickets still use the active portfolio" />
           <CardContent>
             {defaultPortfolio ? (
               <div className="space-y-2 text-sm">
                 <div className="text-base font-semibold">{defaultPortfolio.name}</div>
-
-                <div className="muted">
-                  <span className="font-mono">
-                    {defaultPortfolio.account_currency}{" "}
-                    {Number(defaultPortfolio.account_size).toFixed(0)}
-                  </span>
-                </div>
 
                 <div className="muted">
                   Risk/trade:{" "}
@@ -196,14 +188,6 @@ export default async function ScreenerPage({
                     Strategy & logic
                   </a>
                 </div>
-
-                <CashBalanceEditor
-                  initialCashBalance={
-                    typeof defaultPortfolio.cash_balance === "number"
-                      ? defaultPortfolio.cash_balance
-                      : null
-                  }
-                />
 
                 <div className="mt-5 border-t border-slate-200 pt-4 space-y-2">
                   <div className="text-sm font-semibold">Market regime (SPY) — as of LCTD</div>

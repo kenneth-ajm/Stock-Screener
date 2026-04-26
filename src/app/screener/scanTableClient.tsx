@@ -922,18 +922,6 @@ export default function ScanTableClient({
         riskBudget !== null && riskPerShare !== null && riskPerShare > 0
           ? Math.max(0, Math.floor(riskBudget / riskPerShare))
           : null;
-      const sharesByCash =
-        calc.sharesByCash !== null
-          ? Math.max(0, Math.floor(calc.sharesByCash))
-          : cashAvailable !== null && Number.isFinite(entryNum) && entryNum > 0
-            ? Math.max(0, Math.floor(cashAvailable / entryNum))
-            : null;
-      const cashLimited =
-        sharesByRisk !== null && sharesByCash !== null && sharesByCash < sharesByRisk;
-      const exceedsCash =
-        sharesByCash !== null && Number.isFinite(sharesNum) && sharesNum > sharesByCash;
-      const cashRemainingAfter =
-        cashAvailable !== null && positionCost !== null ? cashAvailable - positionCost : null;
       const tpPct1 = strategyVersion === "v1_trend_hold" ? 0.1 : 0.05;
       const tpPct2 = strategyVersion === "v1_trend_hold" ? 0.2 : 0.1;
       const modelTp1 = Number.isFinite(modelEntryNum) ? modelEntryNum * (1 + tpPct1) : NaN;
@@ -1161,16 +1149,12 @@ export default function ScanTableClient({
 
           <div className="grid gap-2 sm:grid-cols-2">
             <KV k="Suggested shares" v={calc.shares !== null ? String(Math.floor(calc.shares)) : "—"} />
-            <KV k="Cash" v={cashAvailable !== null ? fmtMoney(cashAvailable) : "—"} />
-            <KV k="Invested" v={investedValue !== null ? fmtMoney(investedValue) : "—"} />
-            <KV k="Equity" v={equity !== null ? fmtMoney(equity) : "—"} />
             <KV
               k="Risk/trade %"
               v={calc.riskPct !== null ? `${calc.riskPct.toFixed(2)}%` : "—"}
             />
             <KV k="Risk budget (USD)" v={riskBudget !== null ? fmtMoney(riskBudget) : "—"} />
             <KV k="Shares by risk" v={sharesByRisk !== null ? String(sharesByRisk) : "—"} />
-            <KV k="Shares by cash" v={sharesByCash !== null ? String(sharesByCash) : "—"} />
             <KV k="Risk/share" v={riskPerShare !== null ? fmtMoney(riskPerShare) : "—"} />
             <KV
               k={strategyVersion === "v1_trend_hold" ? "TP1 (10%)" : "TP1 (5%)"}
@@ -1182,7 +1166,6 @@ export default function ScanTableClient({
             />
             <KV k="Risk used" v={riskUsed !== null ? fmtMoney(riskUsed) : "—"} />
             <KV k="Position cost" v={positionCost !== null ? fmtMoney(positionCost) : "—"} />
-            <KV k="Cash after open" v={cashRemainingAfter !== null ? fmtMoney(cashRemainingAfter) : "—"} />
             <KV k="Expected hold" v={strategyVersion === "v1_trend_hold" ? "3-8w" : "3-7d"} />
             <KV k="Max hold (days)" v={String(maxHoldDays)} />
             <KV k="Time-stop date" v={fmtDate(timeStopDate)} />
@@ -1215,22 +1198,6 @@ export default function ScanTableClient({
                 />
                 Confirm open anyway
               </label>
-            </div>
-          ) : null}
-
-          {cashLimited ? (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-              <span className="font-semibold">Cash-limited</span>: risk sizing suggests{" "}
-              <span className="font-mono">{sharesByRisk}</span> shares, but cash allows{" "}
-              <span className="font-mono">{sharesByCash}</span>.
-            </div>
-          ) : null}
-
-          {exceedsCash ? (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-              <span className="font-semibold">Exceeds available cash.</span>{" "}
-              This is allowed (soft constraint). Estimated cash after open:{" "}
-              <span className="font-mono">{cashRemainingAfter !== null ? fmtMoney(cashRemainingAfter) : "—"}</span>
             </div>
           ) : null}
 

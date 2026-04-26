@@ -21,30 +21,29 @@ export default function TopNav({
   const buildMarker = getBuildMarker();
   const envLabel = getEnvironmentLabel();
   const nav = [
-    { href: "/dashboard", label: "Dashboard" },
-    { href: "/ideas", label: "Ideas" },
-    { href: "/paper", label: "Paper" },
+    { href: "/dashboard", label: "Trade Desk" },
+    { href: "/today", label: "Today" },
+    { href: "/swing", label: "This Week" },
+    { href: "/long-term", label: "Long-Term" },
     { href: "/positions", label: "Positions" },
-    { href: "/review", label: "Review" },
-    { href: "/broker", label: "Broker" },
-    { href: "/backtest", label: "Backtest" },
-    { href: "/strategy", label: "Strategy" },
+    { href: "/review", label: "Journal" },
+    { href: "/ideas", label: "Strategy Lab" },
   ];
 
   return (
-    <div className="sticky top-0 z-40 border-b border-[#e1d2b8] bg-[#f7f0e4]/97 shadow-[0_1px_0_rgba(111,87,53,0.07)] backdrop-blur">
+    <div className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 shadow-[0_1px_0_rgba(15,23,42,0.04)] backdrop-blur">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3.5 sm:px-6 lg:px-8">
-        <div className="flex items-center gap-1.5 rounded-2xl border border-[#e3d5bf] bg-[#fcf8f1] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
+        <div className="flex items-center gap-1.5 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-1 shadow-sm">
           {nav.map((item) => {
             const active = currentPath === item.href;
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded-xl px-3.5 py-1.5 text-sm font-medium tracking-tight transition-all ${
+                className={`whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium tracking-tight transition-all ${
                   active
-                    ? "border border-[#d9c7a7] bg-[#efe2cb] text-slate-900 shadow-[0_1px_0_rgba(255,255,255,0.5),inset_0_1px_0_rgba(255,255,255,0.4)]"
-                    : "text-slate-700 hover:bg-[#f3eadc]"
+                    ? "bg-slate-900 text-white shadow-sm"
+                    : "text-slate-600 hover:bg-white hover:text-slate-900"
                 }`}
               >
                 {item.label}
@@ -54,7 +53,7 @@ export default function TopNav({
         </div>
         <div className="flex items-center gap-3">
           <HeaderPortfolioSelector portfolios={portfolios} />
-          <div className="rounded-xl border border-[#ddcaab] bg-[#f9f2e6] px-3 py-1.5 text-xs font-medium text-slate-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.62)]">
+          <div className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
             {userEmail}
           </div>
         </div>

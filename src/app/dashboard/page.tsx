@@ -269,7 +269,6 @@ export default async function DashboardPage({
     .maybeSingle();
   const brokerSnapshot = (brokerStatusRow?.value ?? null) as BrokerSnapshotValue | null;
   const brokerConnected = Boolean(brokerSnapshot?.connection_ok);
-  const brokerAccount = brokerSnapshot?.account ?? null;
   const defaultPortfolioName = String((defaultPortfolio as any)?.name ?? "").trim().toLowerCase();
   const isMainPortfolio = defaultPortfolioName === "main";
   const isBrokerLinked = isMainPortfolio && brokerConnected;
@@ -324,13 +323,6 @@ export default async function DashboardPage({
   const totalExposure = isBrokerLinked
     ? brokerPositions.reduce((sum, row) => sum + (Number(row?.market_value) || 0), 0)
     : (snapshot?.deployed_cost_basis ?? 0);
-  const cashAvailable = isBrokerLinked ? (brokerAccount?.cash_available ?? null) : (snapshot?.cash_available ?? null);
-  const riskPerTrade =
-    typeof (defaultPortfolio as any)?.risk_per_trade === "number" &&
-    Number.isFinite(Number((defaultPortfolio as any).risk_per_trade))
-      ? Number((defaultPortfolio as any).risk_per_trade)
-      : 0.02;
-  const accountSize = isBrokerLinked ? (brokerAccount?.equity ?? null) : (snapshot?.account_size ?? null);
   let totalRiskDeployed = 0;
   for (const row of (openRiskRows ?? []) as Array<any>) {
     const entry = Number(row?.entry_price);
@@ -340,24 +332,12 @@ export default async function DashboardPage({
     totalRiskDeployed += Math.max(0, (entry - stop) * qty);
   }
   const maxLossIfAllStopsHit = totalRiskDeployed;
-  const accountRiskPct =
-    typeof accountSize === "number" && Number.isFinite(accountSize) && accountSize > 0
-      ? (totalRiskDeployed / accountSize) * 100
-      : null;
   const summaryCards = isBrokerLinked
     ? [
-        { label: "Broker Equity", value: <PrivacyMoney value={brokerAccount?.equity ?? null} />, subtitle: null, sourceField: "broker.account.equity" },
-        {
-          label: "Broker Cash Available",
-          value: <PrivacyMoney value={brokerAccount?.cash_available ?? null} />,
-          subtitle: null,
-          sourceField: "broker.account.cash_available",
-        },
-        { label: "Buying Power", value: <PrivacyMoney value={brokerAccount?.buying_power ?? null} />, subtitle: null, sourceField: "broker.account.buying_power" },
         {
           label: "Broker Positions",
           value: String(brokerSnapshot?.positions_count ?? brokerPositions.length ?? 0),
-          subtitle: null,
+          subtitle: "Read-only snapshot",
           sourceField: "broker.positions_count",
         },
         {
@@ -366,22 +346,51 @@ export default async function DashboardPage({
           subtitle: "Internal records",
           sourceField: "internal.snapshot.open_count",
         },
+        {
+          label: "Capital at Work",
+          value: <PrivacyMoney value={totalExposure} />,
+          subtitle: "Open position value",
+          sourceField: "broker.positions.market_value",
+        },
+        {
+          label: "Planned Risk",
+          value: <PrivacyMoney value={totalRiskDeployed} />,
+          subtitle: "If tracked stops hit",
+          sourceField: "internal.positions.stop_risk",
+        },
+        {
+          label: "Swing Ideas",
+          value: String(momentum.buy + momentum.watch),
+          subtitle: "BUY + WATCH",
+          sourceField: "daily_scans.v1",
+        },
       ]
     : [
-        { label: "Account Size", value: <PrivacyMoney value={snapshot?.account_size ?? null} />, subtitle: null, sourceField: "internal.snapshot.account_size" },
-        {
-          label: "Cash Available",
-          value: (
-            <>
-              <PrivacyMoney value={snapshot?.cash_available ?? null} /> ({snapshot?.cash_source === "manual" ? "Exact" : "Estimated"})
-            </>
-          ),
-          subtitle: null,
-          sourceField: "internal.snapshot.cash_available",
-        },
-        { label: "Capital Deployed", value: <PrivacyMoney value={snapshot?.deployed_cost_basis ?? null} />, subtitle: "Cost basis", sourceField: "internal.snapshot.deployed_cost_basis" },
         { label: "Open Positions", value: String(snapshot?.open_count ?? 0), subtitle: null, sourceField: "internal.snapshot.open_count" },
-        { label: "Risk / Trade", value: `${(riskPerTrade * 100).toFixed(1)}%`, subtitle: null, sourceField: "internal.portfolio.risk_per_trade" },
+        {
+          label: "Capital at Work",
+          value: <PrivacyMoney value={snapshot?.deployed_cost_basis ?? null} />,
+          subtitle: "Tracked cost basis",
+          sourceField: "internal.snapshot.deployed_cost_basis",
+        },
+        {
+          label: "Planned Risk",
+          value: <PrivacyMoney value={totalRiskDeployed} />,
+          subtitle: "If open stops hit",
+          sourceField: "internal.positions.stop_risk",
+        },
+        {
+          label: "Swing Ideas",
+          value: String(momentum.buy + momentum.watch),
+          subtitle: "BUY + WATCH",
+          sourceField: "daily_scans.v1",
+        },
+        {
+          label: "Market Breadth",
+          value: breadth.breadthState,
+          subtitle: `${breadth.pctAboveSma50.toFixed(0)}% above SMA50`,
+          sourceField: "market_breadth",
+        },
       ];
   const topSignals = momentum.top.slice(0, 5);
   const topSymbols = Array.from(
@@ -433,9 +442,9 @@ export default async function DashboardPage({
       <div className="space-y-5">
         <div className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h1 className="text-3xl font-semibold tracking-tight text-slate-900 sm:text-[2.15rem]">Dashboard</h1>
+            <h1 className="text-3xl font-semibold tracking-tight text-slate-900 sm:text-[2.15rem]">Trade Desk</h1>
           </div>
-          <p className="text-sm leading-6 text-slate-600">Morning briefing for portfolio, market, and ideas.</p>
+          <p className="text-sm leading-6 text-slate-600">One screen for today’s watchlist, this week’s swings, long-term context, and tracked positions.</p>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="surface-chip inline-flex px-2.5 py-1 text-xs font-medium text-slate-700">
               {portfolioSourceLabel}
@@ -473,6 +482,24 @@ export default async function DashboardPage({
               </div>
             ))}
           </div>
+        </section>
+
+        <section className="grid gap-3 md:grid-cols-3">
+          <Link href="/today" className="surface-panel p-4 transition hover:border-emerald-200 hover:bg-emerald-50/40">
+            <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Today</div>
+            <div className="mt-1 text-xl font-semibold tracking-tight text-slate-900">Same-day watchlist</div>
+            <div className="mt-2 text-sm leading-5 text-slate-600">Buy-ready and near-trigger momentum names from daily bars.</div>
+          </Link>
+          <Link href="/swing" className="surface-panel p-4 transition hover:border-sky-200 hover:bg-sky-50/45">
+            <div className="text-xs font-semibold uppercase tracking-wide text-sky-700">This Week</div>
+            <div className="mt-1 text-xl font-semibold tracking-tight text-slate-900">2-7 day swing desk</div>
+            <div className="mt-2 text-sm leading-5 text-slate-600">The primary place for breakout, continuation, and pullback trades.</div>
+          </Link>
+          <Link href="/long-term" className="surface-panel p-4 transition hover:border-slate-300 hover:bg-slate-50">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">Long-Term</div>
+            <div className="mt-1 text-xl font-semibold tracking-tight text-slate-900">Portfolio candidates</div>
+            <div className="mt-2 text-sm leading-5 text-slate-600">Slow list for quality names and ETF anchors, separated from trading.</div>
+          </Link>
         </section>
 
         <section className="grid gap-3 lg:grid-cols-3">
@@ -514,12 +541,12 @@ export default async function DashboardPage({
 
           <section className="surface-panel p-3.5">
             <div className="mb-3 flex items-center justify-between">
-              <div className="section-title">Top Signals Today</div>
+              <div className="section-title">This Week</div>
               <Link
-                href="/ideas?strategy=momentum"
-                className="rounded-lg border border-[#d9ccb5] bg-[#efe6d6] px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-[#e8ddca]"
+                href="/swing"
+                className="rounded-lg border border-slate-200 bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800"
               >
-                Open Ideas
+                Open
               </Link>
             </div>
             <div className="mb-2 grid grid-cols-3 gap-2 text-center">
@@ -540,8 +567,8 @@ export default async function DashboardPage({
               {topSignals.slice(0, 4).map((row: any) => (
                 <Link
                   key={row.symbol}
-                  href={`/ideas?strategy=momentum&symbol=${encodeURIComponent(String(row.symbol))}`}
-                  className="surface-card flex items-center justify-between px-3 py-2.5 transition-colors hover:bg-[#fff9f0]"
+                  href={`/swing?symbol=${encodeURIComponent(String(row.symbol))}`}
+                  className="surface-card flex items-center justify-between px-3 py-2.5 transition-colors hover:border-sky-200 hover:bg-sky-50/45"
                 >
                   <div className="min-w-0 pr-3">
                     <div className="text-sm font-semibold tracking-tight text-slate-900">{row.symbol}</div>
@@ -566,8 +593,8 @@ export default async function DashboardPage({
 
           <section className="surface-panel p-3.5">
             <div className="mb-3 flex items-center justify-between">
-              <div className="section-title">Sector Momentum</div>
-              <Link href="/ideas?strategy=sector" className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]">
+              <div className="section-title">Sector Context</div>
+              <Link href="/ideas?strategy=sector" className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">
                 Open
               </Link>
             </div>
@@ -588,7 +615,7 @@ export default async function DashboardPage({
                   <Link
                     key={c.symbol}
                     href={`/ideas?strategy=sector&symbol=${encodeURIComponent(String(c.symbol))}`}
-                    className="surface-card block px-3 py-2.5 text-xs transition-colors hover:bg-[#fff9f0]"
+                    className="surface-card block px-3 py-2.5 text-xs transition-colors hover:border-emerald-200 hover:bg-emerald-50/40"
                   >
                     <div className="flex items-center justify-between text-sm">
                       <span className="font-semibold text-slate-900">{c.symbol}</span>
@@ -606,7 +633,7 @@ export default async function DashboardPage({
           <div className="surface-panel p-3.5">
             <div className="mb-2.5 flex items-center justify-between">
               <div className="section-title">Portfolio Exposure</div>
-              <Link href="/positions" className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]">
+              <Link href="/positions" className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">
                 Open positions
               </Link>
             </div>
@@ -614,10 +641,6 @@ export default async function DashboardPage({
               <div className="surface-card px-2.5 py-2">
                 <div className="muted-label">Total Exposure</div>
                 <div className="mt-0.5 text-base font-semibold text-slate-900"><PrivacyMoney value={totalExposure} /></div>
-              </div>
-              <div className="surface-card px-2.5 py-2">
-                <div className="muted-label">Cash Available</div>
-                <div className="mt-0.5 text-base font-semibold text-slate-900"><PrivacyMoney value={cashAvailable} /></div>
               </div>
               <div className="surface-card px-2.5 py-2">
                 <div className="muted-label">Risk Deployed</div>
@@ -636,7 +659,7 @@ export default async function DashboardPage({
               {Array.from(new Map(openPreviewRows.map((r) => [r.symbol, r])).values()).map((row) => (
                 <div
                   key={row.symbol}
-                  className="flex items-center justify-between rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3.5 py-2.5"
+                  className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3.5 py-2.5"
                 >
                   <span className="font-medium">{row.symbol}</span>
                   <span className="text-slate-600">
@@ -651,7 +674,7 @@ export default async function DashboardPage({
               <div className="section-title">Execution & Broker</div>
               <Link
                 href="/broker"
-                className="rounded-lg border border-[#d8c8aa] bg-[#f1e4cd] px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-[#ecdcbf]"
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
               >
                 Open broker
               </Link>
@@ -680,12 +703,6 @@ export default async function DashboardPage({
               <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
                 <span className="font-medium text-slate-900">Sector Momentum</span>
                 <span className="text-slate-700">BUY {sectorMomentum.buy} / WATCH {sectorMomentum.watch}</span>
-              </div>
-              <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
-                <span className="font-medium text-slate-900">Account Risk %</span>
-                <span className="text-slate-700">
-                  {accountRiskPct != null && Number.isFinite(accountRiskPct) ? `${accountRiskPct.toFixed(1)}%` : "—"}
-                </span>
               </div>
             </div>
           </div>

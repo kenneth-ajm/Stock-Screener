@@ -140,22 +140,7 @@ export default function ScreenerPanelClient({
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
           Today&apos;s Plan • Slots left: <span className="font-semibold">{data.capacity.slots_left}</span>
           {" • "}
-          Cash available: <span className="font-semibold">{Number(data.capacity.cash_available).toFixed(2)}</span>{" "}
-          <span className="text-xs text-slate-500">
-            ({data.capacity.cash_source === "manual" ? "Exact" : "Estimated"})
-          </span>
-          {" • "}
           Actionable today: <span className="font-semibold">{actionable}</span>
-          {data.capacity.deployed_exceeds_account_size ? (
-            <span className="ml-2 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
-              Deployed exceeds account size (check holdings)
-            </span>
-          ) : null}
-          {data.capacity.cash_source === "estimated" ? (
-            <div className="mt-1 text-xs text-slate-500">
-              Set cash balance to make this accurate.
-            </div>
-          ) : null}
           {(data.capacity.unknown_open_positions_count ?? 0) > 0 ? (
             <div className="mt-1 text-xs text-amber-700">
               {data.capacity.unknown_open_positions_count} open position(s) missing entry/qty excluded from estimate.

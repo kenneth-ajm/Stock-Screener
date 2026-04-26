@@ -21,8 +21,8 @@ body {
   margin: 0;
   color: rgb(var(--text));
   background:
-    radial-gradient(900px 500px at 10% 0%, rgba(16, 185, 129, 0.10), transparent 60%),
-    radial-gradient(900px 500px at 90% 20%, rgba(59, 130, 246, 0.10), transparent 60%),
+    radial-gradient(900px 500px at 10% 0%, rgba(16, 185, 129, 0.08), transparent 60%),
+    radial-gradient(900px 500px at 90% 20%, rgba(14, 165, 233, 0.08), transparent 60%),
     linear-gradient(to bottom, rgb(var(--bg)), rgb(var(--bg)));
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -58,22 +58,22 @@ a {
 }
 
 .surface-panel {
-  border: 1px solid #dfcfb2;
-  background: linear-gradient(180deg, #fff9f1 0%, #fff7ec 100%);
-  border-radius: 1rem;
-  box-shadow: 0 8px 24px rgba(88, 63, 36, 0.05);
+  border: 1px solid #dbe5e7;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 0.75rem;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
 }
 
 .surface-card {
-  border: 1px solid #e6d8c1;
-  background: #fffdf8;
-  border-radius: 0.85rem;
-  box-shadow: 0 2px 10px rgba(88, 63, 36, 0.04);
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.035);
 }
 
 .surface-chip {
-  border: 1px solid #e5d9c8;
-  background: #fffdf8;
+  border: 1px solid #dbe5e7;
+  background: #f8fafc;
   border-radius: 999px;
 }
 

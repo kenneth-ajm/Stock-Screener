@@ -102,26 +102,19 @@ export default async function PositionsPage() {
           <p className="text-sm text-slate-600">Grouped-first open positions workspace with lot-level controls preserved.</p>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-4">
-          <div className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-4 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Account size</div>
-            <div className="mt-1 text-2xl font-semibold tracking-tight">{money(snapshot?.account_size ?? null)}</div>
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="surface-panel p-4">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Open positions</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight">{open.length}</div>
           </div>
-          <div className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-4 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
+          <div className="surface-panel p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Deployed</div>
             <div className="mt-1 text-2xl font-semibold tracking-tight">{money(snapshot?.deployed_cost_basis ?? null)}</div>
             <div className="text-xs text-slate-500">Cost basis</div>
           </div>
-          <div className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-4 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
+          <div className="surface-panel p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Market value</div>
             <div className="mt-1 text-2xl font-semibold tracking-tight">{money(snapshot?.market_value_optional ?? null)}</div>
-          </div>
-          <div className="rounded-2xl border border-[#dfcfb2] bg-[#fff7ec] p-4 shadow-[0_6px_18px_rgba(88,63,36,0.05)]">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Cash available</div>
-            <div className="mt-1 text-2xl font-semibold tracking-tight">
-              {money(snapshot?.cash_available ?? null)}{" "}
-              <span className="text-xs font-medium text-slate-500">({snapshot?.cash_source === "manual" ? "Exact" : "Estimated"})</span>
-            </div>
           </div>
         </div>
 

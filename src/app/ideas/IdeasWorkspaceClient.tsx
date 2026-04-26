@@ -2838,7 +2838,7 @@ function changePill(status: string | null | undefined) {
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Momentum Swing
+            Swing 2-7D
           </button>
           <button
             onClick={() => setStrategy("v1_sector_momentum")}
@@ -2848,7 +2848,7 @@ function changePill(status: string | null | undefined) {
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Sector Momentum
+            Sector Context
           </button>
           <button
             onClick={() => setStrategy("v1_trend_hold")}
@@ -2858,7 +2858,7 @@ function changePill(status: string | null | undefined) {
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Trend Hold
+            Hold Lab
           </button>
           <button
             onClick={() => setStrategy("quality_dip")}
@@ -2868,7 +2868,7 @@ function changePill(status: string | null | undefined) {
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Quality Dip
+            Dip Buys
           </button>
           <button
             onClick={() => setStrategy("tactical_momentum")}
@@ -2878,7 +2878,7 @@ function changePill(status: string | null | undefined) {
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Tactical Momentum
+            Today
           </button>
         </div>
         {isScannerStrategy ? (
@@ -2963,7 +2963,7 @@ function changePill(status: string | null | undefined) {
             disabled={runScanBusy}
             className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {runScanBusy && runScanState.label === "Momentum Scan" ? "Running..." : "Run Momentum Scan"}
+            {runScanBusy && runScanState.label === "Momentum Scan" ? "Running..." : "Run Swing Scan"}
           </button>
           <button
             type="button"
@@ -2971,7 +2971,7 @@ function changePill(status: string | null | undefined) {
             disabled={runScanBusy}
             className="rounded-xl border border-[#d8c8aa] bg-[#f1e4cd] px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:bg-[#ecdcbf] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {runScanBusy && runScanState.label === "Trend Scan" ? "Running..." : "Run Trend Scan"}
+            {runScanBusy && runScanState.label === "Trend Scan" ? "Running..." : "Run Hold Scan"}
           </button>
           <button
             type="button"
@@ -4489,14 +4489,14 @@ function changePill(status: string | null | undefined) {
                 <div className="text-lg font-semibold">{selected.symbol}</div>
                 <div className="text-xs text-slate-500">
                   {strategy === "v1_trend_hold"
-                    ? "Trend Hold"
+                    ? "Hold Lab"
                     : strategy === "v1_sector_momentum"
-                    ? "Sector Momentum"
+                    ? "Sector Context"
                     : isQualityDip
-                    ? "Quality Dip"
+                    ? "Dip Buys"
                     : isTacticalMomentum
-                    ? "Tactical Momentum"
-                    : "Momentum Swing"}
+                    ? "Today"
+                    : "Swing 2-7D"}
                 </div>
               </div>
               <button onClick={() => setSelected(null)} className="rounded-lg border border-[#dcc9aa] bg-[#f3e7d3] px-2.5 py-1 text-xs font-medium">

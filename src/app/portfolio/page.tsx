@@ -298,15 +298,7 @@ export default async function PortfolioPage() {
     }
   }
 
-  const acctSize = snapshot?.account_size ?? portfolio.account_size ?? null;
-  const hasManualCash = snapshot?.cash_source === "manual";
-  const estimatedCash = snapshot?.cash_available ?? null;
   const capitalDeployed = deployedCostBasis;
-  const deployedTooHigh =
-    typeof acctSize === "number" &&
-    Number.isFinite(acctSize) &&
-    acctSize > 0 &&
-    capitalDeployed > acctSize * 1.05;
   let riskDeployed = 0;
 
   for (const p of open) {
@@ -317,8 +309,6 @@ export default async function PortfolioPage() {
       riskDeployed += Math.max(0, (entry - stop) * qty);
     }
   }
-
-  const pctDeployed = typeof acctSize === "number" && acctSize > 0 ? capitalDeployed / acctSize : null;
 
   return (
     <div className="mx-auto max-w-6xl p-6 space-y-6 text-slate-900">
@@ -347,16 +337,11 @@ export default async function PortfolioPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">Open exposure</div>
           <div className="mt-1 text-sm text-slate-800">
             Capital deployed (cost basis): <span className="font-semibold">{formatMoney(capitalDeployed)}</span>
-            {deployedTooHigh ? (
-              <span className="ml-2 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
-                Deployed exceeds account size (check holdings)
-              </span>
-            ) : null}
           </div>
           <div className="mt-1 text-sm text-slate-800">
             Open count: <span className="font-semibold">{open.length}</span>
@@ -366,13 +351,6 @@ export default async function PortfolioPage() {
           </div>
           <div className="mt-1 text-sm text-slate-800">
             Market value: <span className="font-semibold">{formatMoney(marketValue)}</span>
-          </div>
-          <div className="mt-1 text-xs text-slate-500">
-            {pctDeployed !== null ? `${(pctDeployed * 100).toFixed(1)}% of account size` : "—"}
-          </div>
-          <div className="mt-1 text-xs text-slate-500">
-            Estimated cash: <span className="font-semibold">{formatMoney(estimatedCash)}</span>{" "}
-            {hasManualCash ? "(Exact)" : "(Estimated)"}
           </div>
           {unknownOpenCount > 0 ? (
             <div className="mt-1 text-xs text-amber-700">
@@ -407,13 +385,6 @@ export default async function PortfolioPage() {
           <div className="mt-1 text-xs text-slate-500">{realizedTrades} closed trades</div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-slate-500">Account</div>
-          <div className="mt-1 text-sm text-slate-800">
-            Size: <span className="font-semibold">{formatMoney(acctSize)}</span>
-          </div>
-          <div className="mt-1 text-xs text-slate-500">Currency: {portfolio.account_currency ?? "—"}</div>
-        </div>
       </div>
 
       <PositionsClient
