@@ -23,6 +23,7 @@ export default function TopNav({
   const nav = [
     { href: "/dashboard", label: "Trade Desk" },
     { href: "/today", label: "Today" },
+    { href: "/momentum-watchlist", label: "Fast Momentum" },
     { href: "/swing", label: "This Week" },
     { href: "/long-term", label: "Long-Term" },
     { href: "/positions", label: "Positions" },

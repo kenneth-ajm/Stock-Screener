@@ -401,11 +401,16 @@ export default async function DashboardPage({
           </div>
         </section>
 
-        <section className="grid gap-3 md:grid-cols-3">
+        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Link href="/today" className="surface-panel p-4 transition hover:border-emerald-200 hover:bg-emerald-50/40">
             <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Today</div>
             <div className="mt-1 text-xl font-semibold tracking-tight text-slate-900">Same-day watchlist</div>
             <div className="mt-2 text-sm leading-5 text-slate-600">Buy-ready and near-trigger momentum names from daily bars.</div>
+          </Link>
+          <Link href="/momentum-watchlist" className="surface-panel p-4 transition hover:border-fuchsia-200 hover:bg-fuchsia-50/40">
+            <div className="text-xs font-semibold uppercase tracking-wide text-fuchsia-700">Fast Momentum</div>
+            <div className="mt-1 text-xl font-semibold tracking-tight text-slate-900">My trading style</div>
+            <div className="mt-2 text-sm leading-5 text-slate-600">Seeded speculative names for 1-2 day breakouts, retests, and do-not-chase warnings.</div>
           </Link>
           <Link href="/swing" className="surface-panel p-4 transition hover:border-sky-200 hover:bg-sky-50/45">
             <div className="text-xs font-semibold uppercase tracking-wide text-sky-700">This Week</div>
