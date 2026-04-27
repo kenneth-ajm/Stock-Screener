@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type SetupType =
   | "EARLY_BASE"
@@ -132,6 +132,8 @@ function setupClass(value: SetupType) {
 export default function MomentumWatchlistClient() {
   const [payload, setPayload] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [setupFilter, setSetupFilter] = useState<SetupFilter>("ALL");
   const [maxPrice, setMaxPrice] = useState<MaxPriceFilter>("50");
@@ -140,28 +142,36 @@ export default function MomentumWatchlistClient() {
   const [hideFailed, setHideFailed] = useState(true);
   const [popularOnly, setPopularOnly] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/momentum-watchlist", { cache: "no-store" })
-      .then(async (res) => {
+  const loadWatchlist = useCallback(async (opts?: { refresh?: boolean; cancelled?: () => boolean }) => {
+    const isRefresh = Boolean(opts?.refresh);
+    if (isRefresh) setRefreshing(true);
+    try {
+      const res = await fetch("/api/momentum-watchlist", { cache: "no-store" });
         const json = (await res.json().catch(() => null)) as Payload | null;
         if (!res.ok || !json?.ok) throw new Error(json?.error ?? `Request failed (${res.status})`);
-        if (!cancelled) {
+        if (!opts?.cancelled?.()) {
           setPayload(json);
           setError(null);
+          setLastRefreshedAt(new Date().toLocaleTimeString("en-SG", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
         }
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    } catch (e: unknown) {
+      if (!opts?.cancelled?.()) setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (!opts?.cancelled?.()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadWatchlist({ cancelled: () => cancelled });
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadWatchlist]);
 
   const rows = useMemo(() => payload?.rows ?? [], [payload?.rows]);
   const minRvolNum = Number(minRvol);
@@ -209,6 +219,9 @@ export default function MomentumWatchlistClient() {
           <div className="surface-card px-3 py-2.5">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Latest bars</div>
             <div className="mt-1 text-lg font-semibold text-slate-900">{payload?.meta?.source_date ?? "-"}</div>
+            <div className="mt-1 text-[11px] text-slate-500">
+              {lastRefreshedAt ? `Refreshed ${lastRefreshedAt}` : "Refresh uses cached bars"}
+            </div>
           </div>
         </div>
       </section>
@@ -283,9 +296,22 @@ export default function MomentumWatchlistClient() {
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">My Trading Style Scanner</div>
               <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-900">Fast Momentum Watchlist</h2>
             </div>
-            <div className="text-xs font-medium text-slate-500">
-              Showing {filteredRows.length} of {rows.length}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-xs font-medium text-slate-500">
+                Showing {filteredRows.length} of {rows.length}
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadWatchlist({ refresh: true })}
+                disabled={loading || refreshing}
+                className="rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-3 py-1.5 text-xs font-semibold text-fuchsia-800 transition hover:bg-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {refreshing ? "Refreshing..." : "Refresh"}
+              </button>
             </div>
+          </div>
+          <div className="mt-2 text-[11px] text-slate-500">
+            Refresh re-runs the Fast Momentum calculations on the newest cached daily bars. It does not fetch new Polygon bars.
           </div>
         </div>
 
