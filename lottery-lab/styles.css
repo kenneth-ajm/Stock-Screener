@@ -220,6 +220,17 @@ textarea:focus {
   padding: 12px;
 }
 
+.status-line {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.status-line strong {
+  color: var(--text);
+}
+
 .results {
   display: flex;
   flex-direction: column;

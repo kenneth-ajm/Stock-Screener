@@ -449,6 +449,42 @@ function renderErrors(target, errors) {
   target.innerHTML = errors.length ? `<strong>Rows skipped</strong><br>${errors.slice(0, 6).join("<br>")}${errors.length > 6 ? `<br>Plus ${errors.length - 6} more.` : ""}` : "";
 }
 
+function setStatus(id, message) {
+  document.querySelector(id).innerHTML = message;
+}
+
+async function loadArchive({ game, inputSelector, statusSelector, buttonSelector, resultSelector, parse, analyze, render }) {
+  const button = document.querySelector(buttonSelector);
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Loading...";
+  setStatus(statusSelector, "Loading recent archive from SGResult. This can take a few seconds.");
+
+  try {
+    const url = game === "4d" ? "/api/history?game=4d&pages=8&maxDraws=96" : "/api/history?game=toto&pages=30";
+    const response = await fetch(url);
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) throw new Error(payload.error || `Archive request failed with status ${response.status}`);
+
+    const input = document.querySelector(inputSelector);
+    input.value = payload.csv;
+    updateParseNotes();
+    const parsed = parse(payload.csv);
+    document.querySelector(resultSelector).innerHTML = parsed.draws.length
+      ? render(analyze(parsed.draws))
+      : `<div class="empty">The archive loaded but no valid rows were parsed.</div>`;
+    setStatus(
+      statusSelector,
+      `<strong>Loaded ${payload.rows} ${game.toUpperCase()} draws</strong> from ${payload.source}. Paste a larger CSV if you want deeper history than this live archive pull.`,
+    );
+  } catch (error) {
+    setStatus(statusSelector, `<strong>Archive load failed.</strong> ${error instanceof Error ? error.message : String(error)} You can still paste CSV manually.`);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
 function renderFourD(analysis) {
   const pickCards = analysis.picks
     .map(
@@ -525,12 +561,40 @@ document.querySelectorAll(".tab").forEach((button) => {
 
 document.querySelector("#fourD-sample").addEventListener("click", () => {
   document.querySelector("#fourD-input").value = FOUR_D_SAMPLE;
+  setStatus("#fourD-status", "Sample format loaded. This is only two example rows, not real history.");
   updateParseNotes();
 });
 
 document.querySelector("#toto-sample").addEventListener("click", () => {
   document.querySelector("#toto-input").value = TOTO_SAMPLE;
+  setStatus("#toto-status", "Sample format loaded. This is only two example rows, not real history.");
   updateParseNotes();
+});
+
+document.querySelector("#fourD-archive").addEventListener("click", () => {
+  loadArchive({
+    game: "4d",
+    inputSelector: "#fourD-input",
+    statusSelector: "#fourD-status",
+    buttonSelector: "#fourD-archive",
+    resultSelector: "#fourD-results",
+    parse: parseFourDHistory,
+    analyze: analyzeFourD,
+    render: renderFourD,
+  });
+});
+
+document.querySelector("#toto-archive").addEventListener("click", () => {
+  loadArchive({
+    game: "toto",
+    inputSelector: "#toto-input",
+    statusSelector: "#toto-status",
+    buttonSelector: "#toto-archive",
+    resultSelector: "#toto-results",
+    parse: parseTotoHistory,
+    analyze: analyzeToto,
+    render: renderToto,
+  });
 });
 
 document.querySelector("#fourD-input").addEventListener("input", updateParseNotes);
