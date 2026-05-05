@@ -339,17 +339,18 @@ function buildTotoScores(draws) {
   return { numberScores, numberStats, pairScores };
 }
 
-function scoreToto(draws) {
+function scoreToto(draws, setSize = 6) {
   const { numberScores, numberStats, pairScores } = buildTotoScores(draws);
+  const poolSize = setSize === 7 ? 17 : 20;
   const pool = Array.from({ length: 49 }, (_, index) => index + 1)
     .sort((a, b) => numberScores[b] - numberScores[a])
-    .slice(0, 20)
+    .slice(0, poolSize)
     .sort((a, b) => a - b);
   const additionalLean = Array.from({ length: 49 }, (_, index) => index + 1).sort(
     (a, b) => numberStats[b].additional - numberStats[a].additional || numberScores[b] - numberScores[a],
   )[0];
 
-  return combinations(pool, 6)
+  return combinations(pool, setSize)
     .map((numbers) => {
       let score = numbers.reduce((sum, number) => sum + numberScores[number], 0);
       for (let a = 0; a < numbers.length; a++) {
@@ -366,34 +367,39 @@ function scoreToto(draws) {
         run = numbers[i] === numbers[i - 1] + 1 ? run + 1 : 1;
         longestRun = Math.max(longestRun, run);
       }
-      if (oddCount < 2 || oddCount > 4) score -= 4;
-      if (sum < 95 || sum > 205) score -= 3;
-      if (maxDecade > 3) score -= (maxDecade - 3) * 2;
+      if (setSize === 6 && (oddCount < 2 || oddCount > 4)) score -= 4;
+      if (setSize === 7 && (oddCount < 2 || oddCount > 5)) score -= 4;
+      if (setSize === 6 && (sum < 95 || sum > 205)) score -= 3;
+      if (setSize === 7 && (sum < 120 || sum > 245)) score -= 3;
+      if (maxDecade > (setSize === 7 ? 4 : 3)) score -= (maxDecade - (setSize === 7 ? 4 : 3)) * 2;
       if (longestRun > 2) score -= (longestRun - 2) * 2;
-      if (numbers[5] - numbers[0] < 24) score -= 2;
+      if (numbers[numbers.length - 1] - numbers[0] < (setSize === 7 ? 28 : 24)) score -= 2;
       return {
         numbers,
         score,
         additionalLean,
+        systemSize: setSize,
         reasons: [
           "weighted by main-number frequency, recency, and recurring pairs",
-          "penalized for extreme odd/even, sum, decade, and consecutive clustering",
+          setSize === 7
+            ? "System 7 covers 7 six-number combinations from these 7 numbers"
+            : "penalized for extreme odd/even, sum, decade, and consecutive clustering",
         ],
       };
     })
     .sort((a, b) => b.score - a.score);
 }
 
-function diversifyToto(candidates, count = 3) {
+function diversifyToto(candidates, count = 3, maxOverlap = 3) {
   const selected = [];
   for (const candidate of candidates) {
-    if (!selected.some((pick) => candidate.numbers.filter((number) => pick.numbers.includes(number)).length > 3)) selected.push(candidate);
+    if (!selected.some((pick) => candidate.numbers.filter((number) => pick.numbers.includes(number)).length > maxOverlap)) selected.push(candidate);
     if (selected.length === count) return selected;
   }
   return candidates.slice(0, count);
 }
 
-function backtestToto(draws) {
+function backtestToto(draws, setSize = 6) {
   const start = Math.max(30, draws.length - TOTO_BACKTEST_LIMIT);
   let testedDraws = 0;
   let groupOneHits = 0;
@@ -401,7 +407,7 @@ function backtestToto(draws) {
   for (let i = start; i < draws.length; i++) {
     const training = draws.slice(0, i);
     if (training.length < 30) continue;
-    const picks = diversifyToto(scoreToto(training), 3);
+    const picks = diversifyToto(scoreToto(training, setSize), 3, setSize === 7 ? 4 : 3);
     const winning = new Set(draws[i].main);
     const bestMatches = Math.max(...picks.map((pick) => pick.numbers.filter((number) => winning.has(number)).length));
     if (bestMatches === 6) groupOneHits += 1;
@@ -412,7 +418,7 @@ function backtestToto(draws) {
     testedDraws,
     groupOneHits,
     averageBestMatches: testedDraws ? bestMatchTotal / testedDraws : 0,
-    randomExpectedGroupOneHits: testedDraws * (3 / 13983816),
+    randomExpectedGroupOneHits: testedDraws * ((setSize === 7 ? 21 : 3) / 13983816),
   };
 }
 
@@ -422,13 +428,15 @@ function analyzeToto(drawsInput) {
   return {
     drawCount: draws.length,
     latestDate: draws.at(-1)?.date || null,
-    picks: draws.length ? diversifyToto(scoreToto(draws), 3) : [],
+    picks: draws.length ? diversifyToto(scoreToto(draws, 6), 3, 3) : [],
+    system7Picks: draws.length ? diversifyToto(scoreToto(draws, 7), 3, 4) : [],
     hotNumbers: numberStats
       .map((stat, number) => ({ number, count: stat.main, lastSeen: stat.lastSeen }))
       .filter((row) => row.number > 0 && row.count > 0)
       .sort((a, b) => b.count - a.count || String(b.lastSeen || "").localeCompare(String(a.lastSeen || "")))
       .slice(0, 10),
-    backtest: backtestToto(draws),
+    backtest: backtestToto(draws, 6),
+    system7Backtest: backtestToto(draws, 7),
   };
 }
 
@@ -513,7 +521,8 @@ function renderFourD(analysis) {
 }
 
 function renderToto(analysis) {
-  const pickCards = analysis.picks
+  function renderPickCards(picks) {
+    return picks
     .map(
       (pick, index) => `<article class="pick-card">
         <div class="pick-head"><div class="label">Set ${index + 1}</div><div class="score">score ${fixed(pick.score, 1)}</div></div>
@@ -523,6 +532,10 @@ function renderToto(analysis) {
       </article>`,
     )
     .join("");
+  }
+
+  const pickCards = renderPickCards(analysis.picks);
+  const system7Cards = renderPickCards(analysis.system7Picks || []);
   const hotRows = analysis.hotNumbers
     .map((row) => `<div class="hot-row"><strong>${row.number}</strong><span>${fixed(row.count, 1)} score</span></div>`)
     .join("");
@@ -530,14 +543,23 @@ function renderToto(analysis) {
   return `<div class="metrics">
       ${metric("Draws Imported", analysis.drawCount, analysis.latestDate ? `Latest ${analysis.latestDate}` : "No latest date")}
       ${metric("Backtest Window", analysis.backtest.testedDraws, "Rolling one-draw-ahead tests")}
-      ${metric("Group 1 Hits", analysis.backtest.groupOneHits, "Six main numbers matched")}
-      ${metric("Best Avg Match", fixed(analysis.backtest.averageBestMatches, 2), "Best of 3 sets per tested draw")}
+      ${metric("System 6 G1 Hits", analysis.backtest.groupOneHits, "3 standard tickets tested")}
+      ${metric("System 7 G1 Hits", analysis.system7Backtest.groupOneHits, "3 System 7 entries tested")}
     </div>
+    <article class="hot-card">
+      <h2>TOTO System 6 Picks</h2>
+      <div class="detail">Each set is one standard 6-number entry.</div>
+    </article>
     <div class="picks">${pickCards}</div>
+    <article class="hot-card">
+      <h2>TOTO System 7 Picks</h2>
+      <div class="detail">Each set has 7 numbers and expands to 7 standard 6-number combinations. Random Group 1 baseline for three System 7 entries over this backtest window: ${fixed(analysis.system7Backtest.randomExpectedGroupOneHits, 6)} expected hits.</div>
+    </article>
+    <div class="picks">${system7Cards}</div>
     <article class="hot-card">
       <h2>Most Frequent Imported TOTO Main Numbers</h2>
       <div class="hot-grid">${hotRows || "<p class='detail'>No main-number frequency yet.</p>"}</div>
-      <div class="detail">Random Group 1 baseline for this backtest window: ${fixed(analysis.backtest.randomExpectedGroupOneHits, 6)} expected hits.</div>
+      <div class="detail">System 6 best average match: ${fixed(analysis.backtest.averageBestMatches, 2)}. System 7 best average match: ${fixed(analysis.system7Backtest.averageBestMatches, 2)}.</div>
     </article>`;
 }
 
