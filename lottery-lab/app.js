@@ -205,8 +205,72 @@ function buildFourDStats(draws) {
   return { stats, positionCounts, firstTwo, lastTwo, recentTop3Count: Math.max(1, recentTop3.length) };
 }
 
+function addWeighted(map, key, weight) {
+  map.set(key, (map.get(key) || 0) + weight);
+}
+
+function buildFourDSequenceModel(draws) {
+  const latestTop3 = top3List(draws.at(-1) || { first: "0000", second: "0000", third: "0000" });
+  const latestDigitSets = Array.from({ length: 4 }, (_, index) => new Set(latestTop3.map((number) => Number(number[index]))));
+  const latestPrefixes = new Set(latestTop3.map((number) => number.slice(0, 2)));
+  const latestSuffixes = new Set(latestTop3.map((number) => number.slice(2)));
+  const digitNext = Array.from({ length: 4 }, () => Array.from({ length: 10 }, () => 0));
+  const digitTotals = Array.from({ length: 4 }, () => 0);
+  const prefixNext = new Map();
+  const suffixNext = new Map();
+  let prefixTotal = 0;
+  let suffixTotal = 0;
+  const top3Indices = new Map();
+
+  draws.forEach((draw, drawIndex) => {
+    top3List(draw).forEach((number) => {
+      if (!top3Indices.has(number)) top3Indices.set(number, []);
+      top3Indices.get(number).push(drawIndex);
+    });
+  });
+
+  for (let i = 0; i < draws.length - 1; i++) {
+    const prevTop3 = top3List(draws[i]);
+    const nextTop3 = top3List(draws[i + 1]);
+    const recencyWeight = Math.exp(-((draws.length - 2 - i) / 360));
+
+    prevTop3.forEach((prevNumber) => {
+      nextTop3.forEach((nextNumber) => {
+        for (let pos = 0; pos < 4; pos++) {
+          if (latestDigitSets[pos].has(Number(prevNumber[pos]))) {
+            digitNext[pos][Number(nextNumber[pos])] += recencyWeight;
+            digitTotals[pos] += recencyWeight;
+          }
+        }
+
+        if (latestPrefixes.has(prevNumber.slice(0, 2))) {
+          addWeighted(prefixNext, nextNumber.slice(0, 2), recencyWeight);
+          prefixTotal += recencyWeight;
+        }
+
+        if (latestSuffixes.has(prevNumber.slice(2))) {
+          addWeighted(suffixNext, nextNumber.slice(2), recencyWeight);
+          suffixTotal += recencyWeight;
+        }
+      });
+    });
+  }
+
+  return {
+    latestTop3,
+    digitNext,
+    digitTotals,
+    prefixNext,
+    prefixTotal,
+    suffixNext,
+    suffixTotal,
+    top3Indices,
+  };
+}
+
 function scoreFourD(draws) {
   const { stats, positionCounts, firstTwo, lastTwo, recentTop3Count } = buildFourDStats(draws);
+  const sequence = buildFourDSequenceModel(draws);
   const latestIndex = draws.length - 1;
   const candidates = [];
 
@@ -219,26 +283,42 @@ function scoreFourD(draws) {
     let score = 0;
     const reasons = [];
 
-    if (stat) {
-      score += stat.first * 8 + stat.second * 5 + stat.third * 4 + Math.max(0, stat.all - stat.top3) * 0.7;
-      score += 4 * Math.exp(-Math.max(0, age) / 70);
-      if (stat.top3 > 0) reasons.push(`${stat.top3} historical top-3 hit${stat.top3 === 1 ? "" : "s"}`);
-      if (stat.lastTop3Date) reasons.push(`last top-3 seen ${stat.lastTop3Date}`);
-    } else {
-      reasons.push("no exact historical top-3 hit in the imported file");
-    }
+    let digitTransitionScore = 0;
+    digits.forEach((digit, index) => {
+      digitTransitionScore += sequence.digitTotals[index] ? sequence.digitNext[index][digit] / sequence.digitTotals[index] : 0;
+    });
+    const prefixTransitionScore = sequence.prefixTotal ? (sequence.prefixNext.get(number.slice(0, 2)) || 0) / sequence.prefixTotal : 0;
+    const suffixTransitionScore = sequence.suffixTotal ? (sequence.suffixNext.get(number.slice(2)) || 0) / sequence.suffixTotal : 0;
+    score += digitTransitionScore * 95;
+    score += prefixTransitionScore * 120;
+    score += suffixTransitionScore * 120;
 
     digits.forEach((digit, index) => {
-      score += (positionCounts[index][digit] / recentTop3Count) * 7;
+      score += (positionCounts[index][digit] / recentTop3Count) * 10;
     });
-    score += ((firstTwo.get(number.slice(0, 2)) || 0) / recentTop3Count) * 9;
-    score += ((lastTwo.get(number.slice(2)) || 0) / recentTop3Count) * 9;
+    score += ((firstTwo.get(number.slice(0, 2)) || 0) / recentTop3Count) * 8;
+    score += ((lastTwo.get(number.slice(2)) || 0) / recentTop3Count) * 8;
+
+    const seenAt = sequence.top3Indices.get(number) || [];
+    if (seenAt.length >= 3) {
+      const gaps = [];
+      for (let i = 1; i < seenAt.length; i++) gaps.push(seenAt[i] - seenAt[i - 1]);
+      const avgGap = gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
+      const gapFit = Math.exp(-Math.abs(age - avgGap) / Math.max(18, avgGap * 0.75));
+      score += gapFit * Math.min(18, 5 + Math.log1p(seenAt.length) * 4);
+      if (gapFit > 0.45) reasons.push(`cycle timing fit: ${age} draws since seen vs ${fixed(avgGap, 0)} avg gap`);
+    }
+
+    if (stat?.top3) score += Math.sqrt(stat.top3) * 2.5;
     if (uniqueDigits >= 3) score += 1.2;
     if (uniqueDigits === 1) score -= 2.5;
-    if (age < 6) score -= 3.5;
-    else if (age < 18) score -= 1.2;
+    if (age < 6) score -= 9;
+    else if (age < 18) score -= 4;
     score += hashTie(number) * 0.001;
-    reasons.push(`${uniqueDigits} distinct digit${uniqueDigits === 1 ? "" : "s"}`);
+
+    reasons.unshift(`digit transition fit ${fixed(digitTransitionScore * 100, 1)}`);
+    reasons.push(`prefix/suffix follow-through ${fixed((prefixTransitionScore + suffixTransitionScore) * 100, 1)}`);
+    reasons.push(`based on sequence after latest top-3: ${sequence.latestTop3.join(", ")}`);
     candidates.push({ number, score, reasons });
   }
 
