@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SG Lottery Lab</title>
+    <meta
+      name="description"
+      content="Historical-pattern analysis for Singapore 4D and TOTO draws."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Singapore draw analyzer</p>
+          <h1>SG Lottery Lab</h1>
+          <p class="lede">
+            Import 4D and TOTO history, score historical patterns, and generate three transparent candidate sets with
+            rolling backtest context.
+          </p>
+        </div>
+        <div class="tabs" role="tablist" aria-label="Lottery type">
+          <button class="tab active" data-tab="fourD" type="button">4D</button>
+          <button class="tab" data-tab="toto" type="button">TOTO</button>
+        </div>
+      </header>
+
+      <section class="notice">
+        Lottery draws are designed to be random. This lab ranks numbers by imported historical patterns and checks those
+        rules against past draws; treat it as entertainment analysis, not a guaranteed probability edge.
+      </section>
+
+      <section class="workspace active" id="fourD-panel">
+        <form class="input-panel" id="fourD-form">
+          <div>
+            <h2>4D History Import</h2>
+            <p>
+              Paste CSV, TSV, or semicolon-delimited rows. Best columns: date, draw_no, first, second, third, starter,
+              consolation.
+            </p>
+          </div>
+          <textarea id="fourD-input" spellcheck="false"></textarea>
+          <div class="actions">
+            <span id="fourD-parse-note">No rows parsed yet.</span>
+            <div>
+              <button class="button secondary" id="fourD-sample" type="button">Load Sample</button>
+              <button class="button primary" type="submit">Run 4D Scan</button>
+            </div>
+          </div>
+          <div class="errors" id="fourD-errors" hidden></div>
+        </form>
+        <section class="results" id="fourD-results">
+          <div class="empty">Paste 4D history and run the scan to generate three pattern-ranked numbers.</div>
+        </section>
+      </section>
+
+      <section class="workspace" id="toto-panel">
+        <form class="input-panel" id="toto-form">
+          <div>
+            <h2>TOTO History Import</h2>
+            <p>
+              Paste CSV, TSV, or semicolon-delimited rows. Best columns: date, draw_no, n1, n2, n3, n4, n5, n6,
+              additional.
+            </p>
+          </div>
+          <textarea id="toto-input" spellcheck="false"></textarea>
+          <div class="actions">
+            <span id="toto-parse-note">No rows parsed yet.</span>
+            <div>
+              <button class="button secondary" id="toto-sample" type="button">Load Sample</button>
+              <button class="button primary" type="submit">Run TOTO Scan</button>
+            </div>
+          </div>
+          <div class="errors" id="toto-errors" hidden></div>
+        </form>
+        <section class="results" id="toto-results">
+          <div class="empty">Paste TOTO history and run the scan to generate three pattern-ranked ticket sets.</div>
+        </section>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>
