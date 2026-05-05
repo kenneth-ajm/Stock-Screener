@@ -173,7 +173,7 @@ async function loadFourD(maxPages, maxDraws) {
   return { game: "4d", rows: rows.length, csv: lines.join("\n") };
 }
 
-module.exports = async function handler(req, res) {
+async function handler(req, res) {
   try {
     const game = String(req.query.game || "").toLowerCase();
     const pages = Math.min(Math.max(Number(req.query.pages || (game === "4d" ? 8 : 30)), 1), game === "4d" ? 20 : 80);
@@ -190,4 +190,11 @@ module.exports = async function handler(req, res) {
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
   }
+}
+
+handler._internal = {
+  loadFourD,
+  loadToto,
 };
+
+module.exports = handler;
