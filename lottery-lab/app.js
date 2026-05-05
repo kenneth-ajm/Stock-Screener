@@ -458,27 +458,27 @@ async function loadArchive({ game, inputSelector, statusSelector, buttonSelector
   const label = button.textContent;
   button.disabled = true;
   button.textContent = "Loading...";
-  setStatus(statusSelector, "Loading recent archive from SGResult. This can take a few seconds.");
+  setStatus(statusSelector, "Loading full cached official history from this app. No live scraping needed.");
 
   try {
-    const url = game === "4d" ? "/api/history?game=4d&pages=8&maxDraws=96" : "/api/history?game=toto&pages=30";
-    const response = await fetch(url);
-    const payload = await response.json();
-    if (!response.ok || !payload.ok) throw new Error(payload.error || `Archive request failed with status ${response.status}`);
+    const [csvResponse, metaResponse] = await Promise.all([fetch(`/data/${game}.csv`), fetch(`/data/${game}.meta.json`)]);
+    if (!csvResponse.ok) throw new Error(`Cached history request failed with status ${csvResponse.status}`);
+    const csv = await csvResponse.text();
+    const meta = metaResponse.ok ? await metaResponse.json() : null;
 
     const input = document.querySelector(inputSelector);
-    input.value = payload.csv;
+    input.value = csv;
     updateParseNotes();
-    const parsed = parse(payload.csv);
+    const parsed = parse(csv);
     document.querySelector(resultSelector).innerHTML = parsed.draws.length
       ? render(analyze(parsed.draws))
       : `<div class="empty">The archive loaded but no valid rows were parsed.</div>`;
     setStatus(
       statusSelector,
-      `<strong>Loaded ${payload.rows} ${game.toUpperCase()} draws</strong> from ${payload.source}. Paste a larger CSV if you want deeper history than this live archive pull.`,
+      `<strong>Loaded ${parsed.draws.length} ${game.toUpperCase()} draws</strong> from cached ${meta?.source || "official"} history${meta?.generatedAt ? ` generated ${meta.generatedAt.slice(0, 10)}` : ""}.`,
     );
   } catch (error) {
-    setStatus(statusSelector, `<strong>Archive load failed.</strong> ${error instanceof Error ? error.message : String(error)} You can still paste CSV manually.`);
+    setStatus(statusSelector, `<strong>Cached history load failed.</strong> ${error instanceof Error ? error.message : String(error)} You can still paste CSV manually.`);
   } finally {
     button.disabled = false;
     button.textContent = label;
