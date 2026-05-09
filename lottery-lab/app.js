@@ -541,18 +541,48 @@ function setStatus(id, message) {
   document.querySelector(id).innerHTML = message;
 }
 
+function latestDrawNoFromCsv(csv) {
+  return csv
+    .trim()
+    .split(/\r?\n/)
+    .slice(1)
+    .reduce((max, line) => {
+      const drawNo = Number(parseDelimited(line)[1]);
+      return Number.isFinite(drawNo) ? Math.max(max, drawNo) : max;
+    }, 0);
+}
+
+function appendCsvRows(csv, rows) {
+  if (!rows || rows.length === 0) return csv;
+  return `${csv.trimEnd()}\n${rows.join("\n")}`;
+}
+
 async function loadArchive({ game, inputSelector, statusSelector, buttonSelector, resultSelector, parse, analyze, render }) {
   const button = document.querySelector(buttonSelector);
   const label = button.textContent;
   button.disabled = true;
   button.textContent = "Loading...";
-  setStatus(statusSelector, "Loading full cached official history from this app. No live scraping needed.");
+  setStatus(statusSelector, "Loading cached official history, then checking Singapore Pools for newer draw numbers.");
 
   try {
     const [csvResponse, metaResponse] = await Promise.all([fetch(`/data/${game}.csv`), fetch(`/data/${game}.meta.json`)]);
     if (!csvResponse.ok) throw new Error(`Cached history request failed with status ${csvResponse.status}`);
-    const csv = await csvResponse.text();
+    let csv = await csvResponse.text();
     const meta = metaResponse.ok ? await metaResponse.json() : null;
+    const cachedLatestDrawNo = latestDrawNoFromCsv(csv);
+    let addedRows = 0;
+    let liveLatestDate = null;
+
+    if (cachedLatestDrawNo > 0) {
+      const scan = game === "4d" ? 30 : 14;
+      const latestResponse = await fetch(`/api/latest?game=${encodeURIComponent(game)}&after=${cachedLatestDrawNo}&scan=${scan}`);
+      const latestPayload = latestResponse.ok ? await latestResponse.json() : null;
+      if (latestPayload?.ok && Array.isArray(latestPayload.csvRows)) {
+        csv = appendCsvRows(csv, latestPayload.csvRows);
+        addedRows = latestPayload.rows || 0;
+        liveLatestDate = latestPayload.latestDate || null;
+      }
+    }
 
     const input = document.querySelector(inputSelector);
     input.value = csv;
@@ -563,7 +593,9 @@ async function loadArchive({ game, inputSelector, statusSelector, buttonSelector
       : `<div class="empty">The archive loaded but no valid rows were parsed.</div>`;
     setStatus(
       statusSelector,
-      `<strong>Loaded ${parsed.draws.length} ${game.toUpperCase()} draws</strong> from cached ${meta?.source || "official"} history${meta?.generatedAt ? ` generated ${meta.generatedAt.slice(0, 10)}` : ""}.`,
+      `<strong>Loaded ${parsed.draws.length} ${game.toUpperCase()} draws</strong> from cached ${meta?.source || "official"} history${meta?.generatedAt ? ` generated ${meta.generatedAt.slice(0, 10)}` : ""}. ${
+        addedRows ? `Added ${addedRows} newer official draw${addedRows === 1 ? "" : "s"}${liveLatestDate ? ` through ${liveLatestDate}` : ""}.` : "No newer official draw found in the quick check."
+      }`,
     );
   } catch (error) {
     setStatus(statusSelector, `<strong>Cached history load failed.</strong> ${error instanceof Error ? error.message : String(error)} You can still paste CSV manually.`);

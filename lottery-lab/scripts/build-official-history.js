@@ -89,6 +89,8 @@ function extractTdNumbers(html, digits) {
 }
 
 function parseFourD(html, drawNo) {
+  const actualDrawNo = Number(stripTags(html.match(/<th class=['"]drawNumber['"]>([\s\S]*?)<\/th>/i)?.[1] ?? "").match(/\d+/)?.[0] ?? NaN);
+  if (actualDrawNo !== drawNo) return null;
   const drawDateRaw = html.match(/<th class=['"]drawDate['"]>([\s\S]*?)<\/th>/i)?.[1] ?? "";
   const date = normalizeDate(drawDateRaw);
   const first = html.match(/class=['"]tdFirstPrize['"]>\s*(\d{4})\s*<\/td>/i)?.[1] ?? null;
@@ -107,6 +109,8 @@ function parseFourD(html, drawNo) {
 }
 
 function parseToto(html, drawNo) {
+  const actualDrawNo = Number(stripTags(html.match(/<th[^>]*class=['"]drawNumber['"][^>]*>([\s\S]*?)<\/th>/i)?.[1] ?? "").match(/\d+/)?.[0] ?? NaN);
+  if (actualDrawNo !== drawNo) return null;
   const drawDateRaw = html.match(/<th[^>]*class=['"]drawDate['"][^>]*>([\s\S]*?)<\/th>/i)?.[1] ?? "";
   const date = normalizeDate(drawDateRaw);
   const main = Array.from(html.matchAll(/class=['"]win\d['"]>\s*(\d{1,2})\s*<\/td>/gi)).map((m) => Number(m[1]));
