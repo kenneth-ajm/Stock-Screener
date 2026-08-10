@@ -3,6 +3,14 @@ import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export async function proxy(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  // Vercel Cron has no Supabase browser session. The canonical scheduler route
+  // performs its own CRON_SECRET/admin-key validation server-side.
+  if (pathname === "/api/jobs/daily-scheduled-scan") {
+    return NextResponse.next();
+  }
+
   const response = NextResponse.next();
 
   const supabase = createServerClient(
@@ -23,8 +31,6 @@ export async function proxy(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
-  const { pathname } = request.nextUrl;
 
   if (!user && !pathname.startsWith("/auth")) {
     const url = request.nextUrl.clone();

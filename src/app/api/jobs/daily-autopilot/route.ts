@@ -14,14 +14,53 @@ import { finalizeSignals } from "@/lib/finalize_signals";
 import { refreshSpyRegimeForLctd } from "@/lib/spy_regime";
 import { getMarketDataProvider } from "@/lib/market-data";
 import { isUsMarketTradingDay, latestCompletedUsTradingDay, shiftIsoDate } from "@/lib/market-calendar";
+import {
+  CORE_UNIVERSE_SLUG,
+  GROWTH_UNIVERSE_SLUG,
+  LEGACY_MOMENTUM_UNIVERSE_SLUG,
+  MIDCAP_UNIVERSE_SLUG,
+} from "@/lib/strategy_universe";
 
 // Production daily market-data refresh path.
 // Acquisition is provider-neutral; scans continue to read normalized cached price_bars.
-const UNIVERSE_SLUG = "core_800";
+const MOMENTUM_STRATEGY_VERSION = "v1";
+const INGEST_UNIVERSE_SLUGS = [
+  CORE_UNIVERSE_SLUG,
+  LEGACY_MOMENTUM_UNIVERSE_SLUG,
+  MIDCAP_UNIVERSE_SLUG,
+  GROWTH_UNIVERSE_SLUG,
+] as const;
 const STATUS_KEY = "daily_autopilot_core_800";
+
+export const maxDuration = 300;
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withRetry<T>(label: string, operation: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) break;
+      const delayMs = 500 * 2 ** (attempt - 1);
+      console.warn("[daily-autopilot] retry", {
+        label,
+        attempt,
+        delay_ms: delayMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
 }
 
 function candidateIngestDates(lctdDate: string, lookbackDays = 7) {
@@ -39,6 +78,31 @@ function candidateIngestDates(lctdDate: string, lookbackDays = 7) {
   return out;
 }
 
+async function loadAllActiveUniverseSymbols(opts: {
+  supabase: any;
+  universeId: string;
+  universeSlug: string;
+}) {
+  const pageSize = 1000;
+  const symbols: string[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data: members, error } = await opts.supabase
+      .from("universe_members")
+      .select("symbol")
+      .eq("universe_id", opts.universeId)
+      .eq("active", true)
+      .order("symbol", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) throw new Error(`${opts.universeSlug}: ${error.message}`);
+    const page = (members ?? [])
+      .map((member: { symbol?: string | null }) => String(member.symbol ?? "").trim().toUpperCase())
+      .filter(Boolean);
+    symbols.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return Array.from(new Set(symbols));
+}
+
 async function ingestGroupedForDate(opts: {
   supabase: any;
   date: string;
@@ -47,24 +111,32 @@ async function ingestGroupedForDate(opts: {
   const supa = opts.supabase as any;
   const provider = getMarketDataProvider();
   if (!provider.configured) throw new Error(`${provider.label} market data is not configured`);
-  const grouped = await provider.fetchGroupedDailyBars(opts.date);
+  const grouped = await withRetry(
+    `grouped_bars:${opts.date}`,
+    () => provider.fetchGroupedDailyBars(opts.date)
+  );
   const groupedRows = grouped.bars;
 
   const symbolSet = new Set(opts.symbols);
-  const { data: existingRows, error: existingErr } = await supa
-    .from("price_bars")
-    .select("symbol")
-    .eq("date", opts.date)
-    .in("symbol", Array.from(symbolSet))
-    .eq("source", provider.id);
-  if (existingErr) throw existingErr;
+  const existingRows: Array<{ symbol?: string | null }> = [];
+  const eligibleSymbols = Array.from(symbolSet);
+  for (let index = 0; index < eligibleSymbols.length; index += 400) {
+    const { data, error } = await supa
+      .from("price_bars")
+      .select("symbol")
+      .eq("date", opts.date)
+      .in("symbol", eligibleSymbols.slice(index, index + 400))
+      .eq("source", provider.id);
+    if (error) throw error;
+    existingRows.push(...(data ?? []));
+  }
   const alreadyPresent = new Set(
     (existingRows ?? [])
       .map((r: { symbol?: string | null }) => String(r.symbol ?? "").toUpperCase())
       .filter(Boolean)
   );
 
-  const upserts: Array<{
+  const upsertsBySymbol = new Map<string, {
     symbol: string;
     date: string;
     open: number;
@@ -73,7 +145,7 @@ async function ingestGroupedForDate(opts: {
     close: number;
     volume: number;
     source: string;
-  }> = [];
+  }>();
 
   for (const row of groupedRows) {
     const symbol = String(row.symbol ?? "").toUpperCase();
@@ -93,7 +165,7 @@ async function ingestGroupedForDate(opts: {
     ) {
       continue;
     }
-    upserts.push({
+    upsertsBySymbol.set(symbol, {
       symbol,
       date: opts.date,
       open,
@@ -104,6 +176,8 @@ async function ingestGroupedForDate(opts: {
       source: provider.id,
     });
   }
+
+  const upserts = Array.from(upsertsBySymbol.values());
 
   if (upserts.length === 0) {
     return {
@@ -123,10 +197,12 @@ async function ingestGroupedForDate(opts: {
   let written = 0;
   for (let i = 0; i < upserts.length; i += chunkSize) {
     const chunk = upserts.slice(i, i + chunkSize) as any[];
-    const { error } = await supa.from("price_bars").upsert(chunk, {
-      onConflict: "symbol,date",
+    await withRetry(`price_bars_upsert:${opts.date}:${i}`, async () => {
+      const { error } = await supa.from("price_bars").upsert(chunk, {
+        onConflict: "symbol,date",
+      });
+      if (error) throw error;
     });
-    if (error) throw error;
     written += chunk.length;
   }
   return {
@@ -209,7 +285,7 @@ export async function runAutopilot() {
   const marketDataProvider = getMarketDataProvider();
   console.info("[daily-autopilot] run:start", {
     started_at: startedAtIso,
-    universe_slug: UNIVERSE_SLUG,
+    ingest_universe_slugs: INGEST_UNIVERSE_SLUGS,
   });
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -223,25 +299,33 @@ export async function runAutopilot() {
   }
   const lctdDate = lctd.scan_date;
 
-  const { data: universe, error: universeErr } = await supa
+  const { data: universes, error: universeErr } = await supa
     .from("universes")
-    .select("id")
-    .eq("slug", UNIVERSE_SLUG)
-    .maybeSingle();
+    .select("id,slug")
+    .in("slug", [...INGEST_UNIVERSE_SLUGS]);
   if (universeErr) throw new Error(universeErr.message);
-  if (!universe?.id) throw new Error(`Universe not found: ${UNIVERSE_SLUG}`);
+  const universeIdBySlug = new Map<string, string>();
+  for (const universe of universes ?? []) {
+    if (universe?.id && universe?.slug) universeIdBySlug.set(String(universe.slug), String(universe.id));
+  }
+  const missingUniverses = INGEST_UNIVERSE_SLUGS.filter((slug) => !universeIdBySlug.has(slug));
+  if (missingUniverses.length > 0) throw new Error(`Universe not found: ${missingUniverses.join(", ")}`);
 
-  const { data: members, error: membersErr } = await supa
-    .from("universe_members")
-    .select("symbol")
-    .eq("universe_id", universe.id)
-    .eq("active", true)
-    .order("symbol", { ascending: true });
-  if (membersErr) throw new Error(membersErr.message);
-  const symbols = (members ?? [])
-    .map((m: { symbol?: string | null }) => String(m.symbol ?? "").toUpperCase())
-    .filter(Boolean);
-  const symbolsWithSpy = Array.from(new Set([...symbols, "SPY"]));
+  const symbolsByUniverse = new Map<string, string[]>();
+  await Promise.all(
+    INGEST_UNIVERSE_SLUGS.map(async (slug) => {
+      const universeId = universeIdBySlug.get(slug)!;
+      const symbols = await loadAllActiveUniverseSymbols({
+        supabase: supa,
+        universeId,
+        universeSlug: slug,
+      });
+      if (symbols.length === 0) throw new Error(`Universe has no active members: ${slug}`);
+      symbolsByUniverse.set(slug, symbols);
+    })
+  );
+  const allUniverseSymbols = Array.from(new Set([...symbolsByUniverse.values()].flat()));
+  const symbolsWithSpy = Array.from(new Set([...allUniverseSymbols, "SPY"]));
 
   const candidateDates = candidateIngestDates(lctdDate, 7);
   const ingest_attempts: Array<Record<string, unknown>> = [];
@@ -295,48 +379,76 @@ export async function runAutopilot() {
   const selectedAttempt = ingest_attempts.find((a) => a?.has_spy_bar_after_ingest && a?.date === scanDate) ?? null;
   const regime = await refreshSpyRegimeForLctd({ supabase: supa, lctd: scanDate });
 
-  const momentumRun = await runFullStrategyScan({
+  const legacyCoreRun = await runFullStrategyScan({
     supabase: supa,
-    universe_slug: UNIVERSE_SLUG,
+    universe_slug: CORE_UNIVERSE_SLUG,
     strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
     scan_date_used: scanDate,
-    total_members: symbols.length,
+    total_members: symbolsByUniverse.get(CORE_UNIVERSE_SLUG)?.length ?? 0,
   });
   console.info("[daily-autopilot] scan:strategy_complete", {
     strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
+    universe_slug: CORE_UNIVERSE_SLUG,
     scan_date_used: scanDate,
-    processed: momentumRun.processed,
-    scored: momentumRun.scored,
-    upserted: momentumRun.upserted,
+    processed: legacyCoreRun.processed,
+    scored: legacyCoreRun.scored,
+    upserted: legacyCoreRun.upserted,
   });
 
   const trendRun = await runFullStrategyScan({
     supabase: supa,
-    universe_slug: UNIVERSE_SLUG,
+    universe_slug: CORE_UNIVERSE_SLUG,
     strategy_version: TREND_HOLD_DEFAULT_VERSION,
     scan_date_used: scanDate,
-    total_members: symbols.length,
+    total_members: symbolsByUniverse.get(CORE_UNIVERSE_SLUG)?.length ?? 0,
   });
   console.info("[daily-autopilot] scan:strategy_complete", {
     strategy_version: TREND_HOLD_DEFAULT_VERSION,
+    universe_slug: CORE_UNIVERSE_SLUG,
     scan_date_used: scanDate,
     processed: trendRun.processed,
     scored: trendRun.scored,
     upserted: trendRun.upserted,
   });
 
+  const momentumRun = await runFullStrategyScan({
+    supabase: supa,
+    universe_slug: LEGACY_MOMENTUM_UNIVERSE_SLUG,
+    strategy_version: MOMENTUM_STRATEGY_VERSION,
+    scan_date_used: scanDate,
+    total_members: symbolsByUniverse.get(LEGACY_MOMENTUM_UNIVERSE_SLUG)?.length ?? 0,
+  });
+  console.info("[daily-autopilot] scan:strategy_complete", {
+    strategy_version: MOMENTUM_STRATEGY_VERSION,
+    universe_slug: LEGACY_MOMENTUM_UNIVERSE_SLUG,
+    scan_date_used: scanDate,
+    processed: momentumRun.processed,
+    scored: momentumRun.scored,
+    upserted: momentumRun.upserted,
+  });
+
   const finalizations: Record<string, any> = {};
-  for (const strategy_version of [CORE_MOMENTUM_DEFAULT_VERSION, TREND_HOLD_DEFAULT_VERSION]) {
+  const primaryRuns = [
+    { strategy_version: CORE_MOMENTUM_DEFAULT_VERSION, universe_slug: CORE_UNIVERSE_SLUG },
+    { strategy_version: TREND_HOLD_DEFAULT_VERSION, universe_slug: CORE_UNIVERSE_SLUG },
+    { strategy_version: MOMENTUM_STRATEGY_VERSION, universe_slug: LEGACY_MOMENTUM_UNIVERSE_SLUG },
+  ];
+  for (const run of primaryRuns) {
     const finalization = await finalizeSignals({
       supabase: supa,
       date: scanDate,
-      universe_slug: UNIVERSE_SLUG,
-      strategy_version,
+      universe_slug: run.universe_slug,
+      strategy_version: run.strategy_version,
     });
     if (!finalization.ok) {
-      throw new Error(`Finalization failed for ${strategy_version}: ${finalization.error ?? "unknown"}`);
+      throw new Error(
+        `Finalization failed for ${run.strategy_version}@${run.universe_slug}: ${finalization.error ?? "unknown"}`
+      );
     }
-    finalizations[strategy_version] = finalization;
+    finalizations[`${run.strategy_version}@${run.universe_slug}`] = finalization;
+    // Preserve the legacy strategy-only lookup while consumers migrate to the
+    // unambiguous strategy+universe context key.
+    finalizations[run.strategy_version] ??= finalization;
   }
 
   const diagnostics = await runDiagnosticsWithClient(supa);
@@ -359,6 +471,11 @@ export async function runAutopilot() {
     ingest_candidate_dates: candidateDates,
     lctd_source: lctd.lctd_source,
     market_data_provider: marketDataProvider.id,
+    ingest_universe_slugs: INGEST_UNIVERSE_SLUGS,
+    ingest_universe_counts: Object.fromEntries(
+      INGEST_UNIVERSE_SLUGS.map((slug) => [slug, symbolsByUniverse.get(slug)?.length ?? 0])
+    ),
+    ingest_unique_symbols: allUniverseSymbols.length,
     bars_upserted: barsUpsertedTotal,
     ingest_attempts,
     ingest_selected_attempt: selectedAttempt,
@@ -366,12 +483,22 @@ export async function runAutopilot() {
     regime_date_used: regime.regime_date_used,
     spy_regime_stale: regime.regime_stale,
     momentum: {
-      buys: Number(finalizations[CORE_MOMENTUM_DEFAULT_VERSION]?.buy ?? 0),
-      watch: Number(finalizations[CORE_MOMENTUM_DEFAULT_VERSION]?.watch ?? 0),
+      strategy_version: MOMENTUM_STRATEGY_VERSION,
+      universe_slug: LEGACY_MOMENTUM_UNIVERSE_SLUG,
+      buys: Number(finalizations[`${MOMENTUM_STRATEGY_VERSION}@${LEGACY_MOMENTUM_UNIVERSE_SLUG}`]?.buy ?? 0),
+      watch: Number(finalizations[`${MOMENTUM_STRATEGY_VERSION}@${LEGACY_MOMENTUM_UNIVERSE_SLUG}`]?.watch ?? 0),
     },
     trend: {
-      buys: Number(finalizations[TREND_HOLD_DEFAULT_VERSION]?.buy ?? 0),
-      watch: Number(finalizations[TREND_HOLD_DEFAULT_VERSION]?.watch ?? 0),
+      strategy_version: TREND_HOLD_DEFAULT_VERSION,
+      universe_slug: CORE_UNIVERSE_SLUG,
+      buys: Number(finalizations[`${TREND_HOLD_DEFAULT_VERSION}@${CORE_UNIVERSE_SLUG}`]?.buy ?? 0),
+      watch: Number(finalizations[`${TREND_HOLD_DEFAULT_VERSION}@${CORE_UNIVERSE_SLUG}`]?.watch ?? 0),
+    },
+    legacy_core_momentum: {
+      strategy_version: CORE_MOMENTUM_DEFAULT_VERSION,
+      universe_slug: CORE_UNIVERSE_SLUG,
+      buys: Number(finalizations[`${CORE_MOMENTUM_DEFAULT_VERSION}@${CORE_UNIVERSE_SLUG}`]?.buy ?? 0),
+      watch: Number(finalizations[`${CORE_MOMENTUM_DEFAULT_VERSION}@${CORE_UNIVERSE_SLUG}`]?.watch ?? 0),
     },
     finalization: finalizations,
     diagnostics_summary,

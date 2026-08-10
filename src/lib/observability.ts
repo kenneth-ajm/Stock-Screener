@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
-import { CORE_MOMENTUM_DEFAULT_UNIVERSE, CORE_MOMENTUM_DEFAULT_VERSION } from "@/lib/strategy/coreMomentumSwing";
 import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
 import { SECTOR_MOMENTUM_STRATEGY_VERSION, SECTOR_MOMENTUM_UNIVERSE_SLUG } from "@/lib/sector_momentum";
+import { CORE_UNIVERSE_SLUG, LEGACY_MOMENTUM_UNIVERSE_SLUG } from "@/lib/strategy_universe";
 import { getLCTD } from "@/lib/scan_status";
 
 export const OBS_KEYS = {
@@ -90,8 +90,8 @@ export async function getObservabilitySnapshot(supabase?: any) {
   const lctd = await getLCTD(supa);
 
   const strategies = [
-    { strategy_version: CORE_MOMENTUM_DEFAULT_VERSION, universe_slug: CORE_MOMENTUM_DEFAULT_UNIVERSE },
-    { strategy_version: TREND_HOLD_DEFAULT_VERSION, universe_slug: CORE_MOMENTUM_DEFAULT_UNIVERSE },
+    { strategy_version: "v1", universe_slug: LEGACY_MOMENTUM_UNIVERSE_SLUG },
+    { strategy_version: TREND_HOLD_DEFAULT_VERSION, universe_slug: CORE_UNIVERSE_SLUG },
     { strategy_version: SECTOR_MOMENTUM_STRATEGY_VERSION, universe_slug: SECTOR_MOMENTUM_UNIVERSE_SLUG },
   ];
   const latest_scans = [];
@@ -110,7 +110,7 @@ export async function getObservabilitySnapshot(supabase?: any) {
   }
 
   const sectorLatest = latest_scans.find((s) => s.strategy_version === SECTOR_MOMENTUM_STRATEGY_VERSION);
-  const momentumLatest = latest_scans.find((s) => s.strategy_version === CORE_MOMENTUM_DEFAULT_VERSION);
+  const momentumLatest = latest_scans.find((s) => s.strategy_version === "v1");
   const trendLatest = latest_scans.find((s) => s.strategy_version === TREND_HOLD_DEFAULT_VERSION);
   const latest_scan_date = latest_scans
     .map((s) => s.latest_date)

@@ -13,21 +13,28 @@ Core rules:
 ## Official Paths
 
 ### 1) Production Daily Path
-- Route: `POST /api/jobs/daily-scheduled-scan`
+- Route: `GET` or `POST /api/jobs/daily-scheduled-scan`
 - Internally runs:
   - `runAutopilot()` from `/api/jobs/daily-autopilot`
   - sector populate
   - midcap scans
   - breadth + diagnostics snapshots
-- `runAutopilot()` obtains grouped daily bars through `src/lib/market-data`, normalizes them, and writes `price_bars` for `core_800 + SPY` before scans.
+- `runAutopilot()` obtains one grouped daily-bars response through `src/lib/market-data`, then normalizes and writes `price_bars` for the union of active `core_800`, `liquid_2000`, `midcap_1000`, `growth_1500`, and `SPY` symbols.
+- The scheduled strategy matrix is:
+  - Momentum (`v1`): `liquid_2000`, `midcap_1000`
+  - Trend Hold (`v1_trend_hold`): `core_800`, `liquid_2000`
+  - Sector Momentum (`v1_sector_momentum`): `growth_1500`, `midcap_1000`
+- The legacy `v2_core_momentum + core_800` run remains in autopilot for compatibility and diagnostics, but it is not the primary Ideas Momentum feed.
 - This is the canonical production refresh orchestration.
 - Vercel cron config: `vercel.json` schedules `GET /api/jobs/daily-scheduled-scan` at `0 23 * * 1-5` (UTC).
 - Route protection:
   - set `CRON_SECRET` in Vercel
   - Vercel cron sends `Authorization: Bearer <CRON_SECRET>`
   - manual/admin calls can also use `x-admin-key` (`ADMIN_RUN_SCAN_KEY`) if configured.
+  - `src/proxy.ts` allows this route to reach its server-side secret validation without requiring a Supabase browser session; all normal app/admin routes remain session-protected.
+  - production fails closed if neither server-side secret is configured.
 - Daily-autopilot ingest date selection:
-  - tries US-today first
+  - tries the latest completed US trading session first
   - if the active provider returns delayed/empty grouped data, falls back through recent market-session dates
   - avoids getting stuck on a stale existing LCTD when newer finalized market bars are already available.
 
@@ -45,6 +52,12 @@ Core rules:
   - Keep for admin use only; not part of normal interactive Ideas flow.
 
 ### 3) Backfill/Maintenance Path
+- `scripts/backfill-market-gap.mjs`
+  - Approved recovery path after a paused database or missed scheduled sessions.
+  - Reads one Polygon grouped response per missing weekday, skips market holidays when SPY is absent, and upserts only active-universe symbols in batches.
+  - Run outside an interactive Vercel request so a multi-month gap cannot hit serverless duration limits.
+  - Example: `node scripts/backfill-market-gap.mjs --from=2026-05-09`
+  - Universe members are explicitly paginated to avoid Supabase's configured per-response row cap.
 - `POST /api/universe/ingest-liquid-2000`
   - Polygon per-symbol history backfill for selected universe batches.
 - `POST /api/jobs/backfill-core-800`
@@ -89,6 +102,19 @@ Core rules:
 2. Use `admin/run-scan` batch/finalize for interactive manual scans in Ideas.
 3. Use maintenance ingest routes only for controlled backfills.
 4. Keep legacy Stooq routes disabled unless explicitly needed for emergency/manual testing.
+
+## Universe Definition Maintenance
+
+- `POST /api/universe/build-midcap-1000`
+  - Uses Polygon's active US common-stock reference set.
+  - Reads real market capitalization from Polygon's supported per-ticker details endpoint.
+  - Requires `$2B-$20B` market cap, price above `$5`, and at least `$5M` 20-session average dollar volume.
+  - `1000` is a maximum target, not a promise; fewer symbols are retained when fewer pass.
+- `POST /api/universe/build-growth-1500`
+  - Uses the same supported Polygon details and paginated liquidity path.
+  - Requires market cap of at least `$1B`, price above `$5`, and at least `$5M` 20-session average dollar volume.
+- Do not add `market_cap.gte` or `market_cap.lte` to Polygon's bulk ticker-list URL. Those parameters are not applied by that endpoint; universe builders must validate the `market_cap` returned by ticker details.
+- Grouped responses and universe rows are deduplicated by symbol before upsert.
 
 ## How To Verify Daily Refresh Success
 

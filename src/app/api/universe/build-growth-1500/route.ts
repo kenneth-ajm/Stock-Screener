@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import {
+  fetchActiveUsCommonSymbols,
+  fetchPolygonMarketCaps,
+  loadAverageDollarVolume20,
+} from "@/lib/universe_reference";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const DEFAULT_UNIVERSE_SLUG = "growth_1500";
 const TARGET_COUNT = 1500;
@@ -38,74 +44,6 @@ async function fetchGroupedDate(apiKey: string, date: string) {
   return Array.isArray(json?.results) ? json.results : [];
 }
 
-async function fetchEligibleUsCommonSet(apiKey: string) {
-  const out = new Set<string>();
-  let nextUrl: string | null =
-    `https://api.polygon.io/v3/reference/tickers?market=stocks&locale=us&active=true&type=CS` +
-    `&market_cap.gte=${MIN_MARKET_CAP}&limit=1000&sort=ticker&order=asc&apiKey=${encodeURIComponent(apiKey)}`;
-  let pages = 0;
-  while (nextUrl && pages < 30) {
-    pages += 1;
-    const res = await fetch(nextUrl, { cache: "no-store" });
-    if (!res.ok) break;
-    const json = (await res.json().catch(() => null)) as
-      | { results?: Array<{ ticker?: string | null }>; next_url?: string | null }
-      | null;
-    for (const row of json?.results ?? []) {
-      const symbol = String(row?.ticker ?? "").trim().toUpperCase();
-      if (symbol) out.add(symbol);
-    }
-    const rawNext = json?.next_url ? String(json.next_url) : "";
-    nextUrl = rawNext
-      ? `${rawNext}${rawNext.includes("?") ? "&" : "?"}apiKey=${encodeURIComponent(apiKey)}`
-      : null;
-  }
-  return out;
-}
-
-function avg(values: number[]) {
-  if (!values.length) return 0;
-  return values.reduce((a, b) => a + b, 0) / values.length;
-}
-
-async function computeAvgDollarVolume20BySymbol(
-  supabase: any,
-  symbols: string[],
-  scanDate: string
-) {
-  const from = new Date(`${scanDate}T00:00:00Z`);
-  from.setUTCDate(from.getUTCDate() - 45);
-  const fromDate = isoDate(from);
-  const map = new Map<string, number>();
-
-  for (let i = 0; i < symbols.length; i += 300) {
-    const chunk = symbols.slice(i, i + 300);
-    const { data } = await supabase
-      .from("price_bars")
-      .select("symbol,date,close,volume,source")
-      .in("symbol", chunk)
-      .eq("source", "polygon")
-      .gte("date", fromDate)
-      .lte("date", scanDate)
-      .order("date", { ascending: true });
-    const perSymbol = new Map<string, number[]>();
-    for (const row of data ?? []) {
-      const symbol = String((row as any)?.symbol ?? "").trim().toUpperCase();
-      const close = Number((row as any)?.close);
-      const volume = Number((row as any)?.volume);
-      if (!symbol || !Number.isFinite(close) || close <= 0 || !Number.isFinite(volume) || volume <= 0) continue;
-      if (!perSymbol.has(symbol)) perSymbol.set(symbol, []);
-      perSymbol.get(symbol)!.push(close * volume);
-    }
-    for (const [symbol, values] of perSymbol.entries()) {
-      const last20 = values.slice(-20);
-      if (last20.length >= 20) map.set(symbol, avg(last20));
-    }
-  }
-
-  return map;
-}
-
 export async function POST(req: Request) {
   try {
     const apiKey = process.env.POLYGON_API_KEY;
@@ -126,29 +64,37 @@ export async function POST(req: Request) {
     const cap = Number.isFinite(Number(body.limit)) ? Math.max(200, Math.min(2500, Number(body.limit))) : TARGET_COUNT;
 
     const grouped = await fetchGroupedDate(apiKey, scanDate);
-    const ranked = grouped
-      .map((r) => {
+    const rankedBySymbol = new Map<string, { symbol: string; close: number; volume: number; dollar: number }>();
+    for (const r of grouped) {
         const symbol = String(r?.T ?? "").trim().toUpperCase();
         const close = Number(r?.c);
         const volume = Number(r?.v);
         const dollar = Number.isFinite(close) && close > 0 && Number.isFinite(volume) && volume > 0 ? close * volume : 0;
-        return { symbol, close, volume, dollar };
-      })
-      .filter((r) => r.symbol && r.close > MIN_PRICE && r.volume > 0 && r.dollar > 0)
+        if (symbol && close > MIN_PRICE && volume > 0 && dollar > 0) {
+          rankedBySymbol.set(symbol, { symbol, close, volume, dollar });
+        }
+    }
+    const ranked = Array.from(rankedBySymbol.values())
       .sort((a, b) => b.dollar - a.dollar)
       .slice(0, 6000);
 
-    const usCommon = await fetchEligibleUsCommonSet(apiKey);
+    const usCommon = await fetchActiveUsCommonSymbols(apiKey);
     const candidateSymbols = ranked
       .filter((r) => usCommon.has(r.symbol))
       .map((r) => r.symbol);
 
-    const adv20Map = await computeAvgDollarVolume20BySymbol(supabase as any, candidateSymbols, scanDate);
-    const finalSymbols = ranked
-      .filter((r) => usCommon.has(r.symbol))
-      .filter((r) => (adv20Map.get(r.symbol) ?? 0) >= MIN_AVG_DOLLAR_VOLUME_20D)
-      .slice(0, cap)
+    const adv20Map = await loadAverageDollarVolume20({
+      supabase,
+      symbols: candidateSymbols,
+      scanDate,
+    });
+    const liquidCandidates = ranked
+      .filter((r) => usCommon.has(r.symbol) && (adv20Map.get(r.symbol) ?? 0) >= MIN_AVG_DOLLAR_VOLUME_20D)
       .map((r) => r.symbol);
+    const marketCaps = await fetchPolygonMarketCaps(apiKey, liquidCandidates);
+    const finalSymbols = liquidCandidates
+      .filter((symbol) => (marketCaps.get(symbol) ?? 0) >= MIN_MARKET_CAP)
+      .slice(0, cap);
 
     if (finalSymbols.length === 0) {
       return NextResponse.json({
@@ -195,6 +141,8 @@ export async function POST(req: Request) {
       universe_id: universeId,
       date: scanDate,
       count: finalSymbols.length,
+      candidates_with_liquidity: liquidCandidates.length,
+      candidates_with_market_cap: marketCaps.size,
       filters: {
         market_cap_gt: MIN_MARKET_CAP,
         avg_dollar_volume_20d_gt: MIN_AVG_DOLLAR_VOLUME_20D,
