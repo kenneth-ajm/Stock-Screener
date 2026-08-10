@@ -336,6 +336,9 @@ type Payload = {
       provider_id?: string | null;
       provider_label?: string | null;
       provider_configured?: boolean | null;
+      quote_provider_id?: string | null;
+      quote_provider_label?: string | null;
+      quote_provider_configured?: boolean | null;
       quote_mode?: "consolidated_realtime" | "indicative" | "cached_eod_only" | null;
       is_stale?: boolean;
       reasons?: string[] | null;
@@ -495,6 +498,11 @@ type QuoteMap = Record<
 type MarketDataHealthPayload = {
   ok: boolean;
   provider?: {
+    id?: string;
+    label?: string;
+    configured?: boolean;
+  } | null;
+  quote_provider?: {
     id?: string;
     label?: string;
     configured?: boolean;
@@ -3016,8 +3024,12 @@ const strategyGuide =
         <div className="ml-auto flex flex-col items-end gap-2">
           <div className="flex flex-wrap items-center justify-end gap-1.5 text-[11px] text-slate-600">
             <span className="surface-chip px-2 py-0.5">
-              {marketDataHealth?.provider?.label ?? "Data provider"}
-              {marketDataHealth?.provider?.configured === false ? " (cached only)" : ""}
+              Bars: {marketDataHealth?.provider?.label ?? "checking..."}
+              {marketDataHealth?.provider?.configured === false ? " (refresh unavailable)" : ""}
+            </span>
+            <span className="surface-chip px-2 py-0.5">
+              Quotes: {marketDataHealth?.quote_provider?.label ?? "cached close"}
+              {marketDataHealth?.quote_provider?.configured === false ? " (fallback)" : ""}
             </span>
             <span className="surface-chip px-2 py-0.5">
               Completed bars: {marketDataHealth?.cache?.latest_spy_date ?? "checking..."}

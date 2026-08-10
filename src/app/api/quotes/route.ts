@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { getMarketDataProvider } from "@/lib/market-data";
+import { getMarketQuoteProvider } from "@/lib/market-data";
+import type { MarketQuote } from "@/lib/market-data";
 import { supabaseServer } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -62,26 +63,35 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, quotes: {}, provider: null, quote_mode: "none" });
   }
 
-  const provider = getMarketDataProvider();
+  const provider = getMarketQuoteProvider();
   const database = admin();
+  let providerQuotes = new Map<string, MarketQuote>();
+  if (provider.configured) {
+    try {
+      if (provider.fetchLatestQuotes) {
+        providerQuotes = await provider.fetchLatestQuotes(symbols);
+      } else {
+        const results = await Promise.allSettled(symbols.map((symbol) => provider.fetchLatestQuote(symbol)));
+        results.forEach((result, index) => {
+          if (result.status === "fulfilled" && result.value) providerQuotes.set(symbols[index], result.value);
+        });
+      }
+    } catch (error: unknown) {
+      console.warn("[quotes] quote provider batch unavailable; using cached closes", {
+        provider: provider.id,
+        symbols: symbols.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   const entries = await Promise.all(
     symbols.map(async (symbol) => {
-      if (provider.configured) {
-        try {
-          const quote = await provider.fetchLatestQuote(symbol);
-          if (quote) {
-            return [
-              symbol,
-              { price: quote.price, asOf: quote.as_of, source: "snapshot" as const },
-            ] as const;
-          }
-        } catch (error) {
-          console.warn("[quotes] provider quote unavailable; using cached close", {
-            provider: provider.id,
-            symbol,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+      const quote = providerQuotes.get(symbol);
+      if (quote) {
+        return [
+          symbol,
+          { price: quote.price, asOf: quote.as_of, source: "snapshot" as const },
+        ] as const;
       }
       return [symbol, await cachedClose(database, symbol)] as const;
     })

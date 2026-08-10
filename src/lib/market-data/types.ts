@@ -1,4 +1,5 @@
 export type MarketDataProviderId = "polygon";
+export type MarketQuoteProviderId = MarketDataProviderId | "alpaca";
 
 export type DailyPriceBar = {
   symbol: string;
@@ -73,4 +74,13 @@ export interface MarketDataProvider {
   fetchDailyBars(symbol: string, from: string, to: string): Promise<SymbolDailyBarsResult>;
   fetchLatestQuote(symbol: string): Promise<MarketQuote | null>;
   probe(): Promise<ProviderProbeResult>;
+}
+
+export interface MarketQuoteProvider {
+  readonly id: MarketQuoteProviderId;
+  readonly label: string;
+  readonly configured: boolean;
+  readonly capabilities: ProviderCapabilities;
+  fetchLatestQuote(symbol: string): Promise<MarketQuote | null>;
+  fetchLatestQuotes?(symbols: string[]): Promise<Map<string, MarketQuote>>;
 }

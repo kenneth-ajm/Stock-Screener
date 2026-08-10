@@ -5,8 +5,9 @@ This document defines the approved `price_bars` ingestion/refresh architecture a
 
 Core rules:
 - `price_bars` is the scanner's normalized, cache-first source of truth.
-- The active acquisition provider is selected server-side with `MARKET_DATA_PROVIDER`.
-- Polygon remains the active provider during the first provider-abstraction phase.
+- The completed daily-bar provider is selected server-side with `MARKET_DATA_PROVIDER`.
+- The current-price overlay provider is selected independently with `MARKET_QUOTE_PROVIDER`.
+- Polygon remains the scanner source of truth; quote overlays never write `price_bars` or alter signals.
 - Daily timeframe only.
 - Scanner/manual Ideas scans should use cached DB bars and must not run heavyweight refresh by default.
 
@@ -135,19 +136,24 @@ Core rules:
 
 ## Provider Boundary
 
-- Provider interface: `src/lib/market-data/types.ts`
-- Provider selector: `src/lib/market-data/index.ts`
-- Current adapter: `src/lib/market-data/polygon.ts`
+- Provider interfaces: `src/lib/market-data/types.ts`
+- Provider selectors: `src/lib/market-data/index.ts`
+- Completed daily-bar adapter: `src/lib/market-data/polygon.ts`
+- Current-price overlay adapter: `src/lib/market-data/alpaca.ts`
 - Authenticated health route: `GET /api/market-data/status`
 - Add `?probe=1` to test daily-bar and quote access without exposing credentials.
 
-The production daily ingest, Quality Pullback refresh, and quote endpoint now use this boundary. Scanner and signal code continue to read only normalized cached rows. If provider quote access fails, `/api/quotes` returns the latest cached close with `quote_mode=cached_eod_only` rather than failing the complete trade workflow.
+The production daily ingest and Quality Pullback refresh use the completed-bar provider. Scanner and signal code continue to read only normalized cached Polygon rows. The quote provider is a separate, server-only execution overlay and never writes `price_bars` or changes signals. If quote access fails, `/api/quotes` returns the latest cached Polygon close rather than failing the trade workflow.
 
 Current configuration:
 
 ```bash
 MARKET_DATA_PROVIDER=polygon
 POLYGON_API_KEY=...
+MARKET_QUOTE_PROVIDER=alpaca
+ALPACA_API_KEY=...
+ALPACA_API_SECRET=...
+ALPACA_DATA_FEED=iex
 ```
 
-An Alpaca adapter can be added later without changing scanner or UI signal calculations.
+Alpaca's IEX feed is used only for indicative current prices. It is not treated as a consolidated market quote and does not replace Polygon as the daily-bar source of truth.

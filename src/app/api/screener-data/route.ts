@@ -25,7 +25,7 @@ import {
 } from "@/lib/sector_momentum";
 import { allowedUniversesForStrategy, defaultUniverseForStrategy } from "@/lib/strategy_universe";
 import { OBS_KEYS } from "@/lib/observability";
-import { getMarketDataProviderInfo } from "@/lib/market-data";
+import { getMarketDataProviderInfo, getMarketQuoteProviderInfo } from "@/lib/market-data";
 import { latestCompletedUsTradingDay, shiftIsoDate } from "@/lib/market-calendar";
 
 const DEFAULT_UNIVERSE = "core_800";
@@ -839,7 +839,7 @@ const loadScreenerDataCached = unstable_cache(
     const priorUniverses = Array.from(
       new Set(rowsFinal.map((row) => String(row.universe_slug ?? "").trim()).filter(Boolean))
     );
-    let priorByKey = new Map<string, { symbol: string; universe_slug: string; date: string; signal: "BUY" | "WATCH" | "AVOID"; quality_score: number | null }>();
+    const priorByKey = new Map<string, { symbol: string; universe_slug: string; date: string; signal: "BUY" | "WATCH" | "AVOID"; quality_score: number | null }>();
     if (priorSymbols.length > 0 && priorUniverses.length > 0) {
       const earliestCurrentDate = rowsFinal
         .map((row) => String(row.source_scan_date ?? "").trim())
@@ -1071,6 +1071,7 @@ const loadScreenerDataCached = unstable_cache(
     const schedulerScanDate = schedulerValue?.scan_date_used ? String(schedulerValue.scan_date_used) : null;
     const expectedLatestTradingDay = latestCompletedUsTradingDay();
     const marketDataProvider = getMarketDataProviderInfo();
+    const marketQuoteProvider = getMarketQuoteProviderInfo();
     const marketDataReasons: string[] = [];
     if (!marketDataProvider.configured) {
       marketDataReasons.push(`${marketDataProvider.label} provider is not configured; cached bars cannot refresh`);
@@ -1160,9 +1161,12 @@ const loadScreenerDataCached = unstable_cache(
           provider_id: marketDataProvider.id,
           provider_label: marketDataProvider.label,
           provider_configured: marketDataProvider.configured,
-          quote_mode: marketDataProvider.capabilities.consolidated_realtime_quotes
+          quote_provider_id: marketQuoteProvider.id,
+          quote_provider_label: marketQuoteProvider.label,
+          quote_provider_configured: marketQuoteProvider.configured,
+          quote_mode: marketQuoteProvider.capabilities.consolidated_realtime_quotes
             ? "consolidated_realtime"
-            : marketDataProvider.capabilities.indicative_quotes
+            : marketQuoteProvider.capabilities.indicative_quotes
               ? "indicative"
               : "cached_eod_only",
           is_stale: marketDataReasons.length > 0,

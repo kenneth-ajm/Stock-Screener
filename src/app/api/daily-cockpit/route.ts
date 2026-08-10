@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import { unstable_cache } from "next/cache";
 import { loadTacticalMomentumPayloadForServer } from "@/app/api/tactical-momentum/route";
 import { loadQualityDipPayloadForServer } from "@/app/api/quality-dip/route";
-import { getMarketDataProvider, getMarketDataProviderInfo } from "@/lib/market-data";
+import { getMarketQuoteProvider, getMarketQuoteProviderInfo } from "@/lib/market-data";
 import { latestCompletedUsTradingDay, marketSessionsBehind } from "@/lib/market-calendar";
 import { getOrRepairDefaultPortfolio } from "@/lib/get_or_repair_default_portfolio";
 import { getPortfolioSnapshot } from "@/lib/portfolio_snapshot";
@@ -404,7 +404,7 @@ export async function GET() {
       (row): row is CockpitCandidate => Boolean(row)
     );
 
-    const providerInfo = getMarketDataProviderInfo();
+    const providerInfo = getMarketQuoteProviderInfo();
     const quoteSymbols = Array.from(
       new Set([
         ...candidates
@@ -416,12 +416,27 @@ export async function GET() {
     ).slice(0, 18);
     const quoteBySymbol = new Map<string, { price: number; as_of: string }>();
     if (providerInfo.configured && quoteSymbols.length > 0) {
-      const provider = getMarketDataProvider();
-      const quoteResults = await Promise.allSettled(quoteSymbols.map((symbol) => provider.fetchLatestQuote(symbol)));
-      quoteResults.forEach((result, index) => {
-        if (result.status !== "fulfilled" || !result.value) return;
-        quoteBySymbol.set(quoteSymbols[index], { price: result.value.price, as_of: result.value.as_of });
-      });
+      const provider = getMarketQuoteProvider();
+      try {
+        if (provider.fetchLatestQuotes) {
+          const quotes = await provider.fetchLatestQuotes(quoteSymbols);
+          quotes.forEach((quote, symbol) => {
+            quoteBySymbol.set(symbol, { price: quote.price, as_of: quote.as_of });
+          });
+        } else {
+          const quoteResults = await Promise.allSettled(quoteSymbols.map((symbol) => provider.fetchLatestQuote(symbol)));
+          quoteResults.forEach((result, index) => {
+            if (result.status !== "fulfilled" || !result.value) return;
+            quoteBySymbol.set(quoteSymbols[index], { price: result.value.price, as_of: result.value.as_of });
+          });
+        }
+      } catch (error: unknown) {
+        console.warn("[daily-cockpit] quote provider unavailable; using cached closes", {
+          provider: provider.id,
+          symbols: quoteSymbols.length,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     candidates = candidates.map((candidate) => {
@@ -515,7 +530,7 @@ export async function GET() {
     if (!qualityOk) warnings.push(`Quality Pullback unavailable: ${String(qualityPayload.error ?? "unknown error")}`);
     const sessionsBehind = marketSessionsBehind(sourceDate, expectedDate);
     if (sessionsBehind != null && sessionsBehind > 0) warnings.push(`Daily bars are ${sessionsBehind} completed session(s) behind.`);
-    if (!providerInfo.configured) warnings.push("Market-data provider is not configured; current-price overlays use cached closes.");
+    if (!providerInfo.configured) warnings.push("Quote provider is not configured; current-price overlays use cached closes.");
 
     const payload: DailyCockpitPayload = {
       ok: tacticalOk || qualityOk,
