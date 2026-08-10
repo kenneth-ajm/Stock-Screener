@@ -358,6 +358,7 @@ export default function ScanTableClient({
   const [filter, setFilter] = useState<"BUY+WATCH" | "BUY" | "WATCH" | "AVOID" | "ALL">("BUY+WATCH");
 
   const [quotes, setQuotes] = useState<Record<string, QuoteValue>>({});
+  const [companyNames, setCompanyNames] = useState<Record<string, string>>({});
   const [quoteBusy, setQuoteBusy] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [auto, setAuto] = useState(false);
@@ -499,6 +500,31 @@ export default function ScanTableClient({
     const syms = filtered.map((r) => (r.symbol ?? "").trim().toUpperCase()).filter(Boolean);
     return Array.from(new Set(syms)).slice(0, 50);
   }, [filtered]);
+
+  const companySymbolsKey = useMemo(
+    () =>
+      Array.from(
+        new Set(rows.map((row) => String(row.symbol ?? "").trim().toUpperCase()).filter(Boolean))
+      )
+        .slice(0, 60)
+        .join(","),
+    [rows]
+  );
+
+  useEffect(() => {
+    if (!companySymbolsKey) return;
+    let mounted = true;
+    fetch(`/api/company-names?symbols=${encodeURIComponent(companySymbolsKey)}`, { cache: "no-store" })
+      .then((response) => response.json().catch(() => null))
+      .then((payload) => {
+        if (!mounted || !payload?.ok || !payload?.names) return;
+        setCompanyNames((current) => ({ ...current, ...(payload.names as Record<string, string>) }));
+      })
+      .catch(() => null);
+    return () => {
+      mounted = false;
+    };
+  }, [companySymbolsKey]);
 
   const ticketRow = useMemo(() => {
     const sym = (ticketSymbol ?? "").trim().toUpperCase();
@@ -1365,31 +1391,31 @@ export default function ScanTableClient({
         </button>
       </div>
 
-      <div className="text-sm muted">
+      <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 px-3 py-2.5 text-sm text-slate-600">
         Confidence is a 0–100 score from strict momentum continuation checks: trend alignment, RSI band, volume confirmation, extension control, and regime gating.
       </div>
 
       <div className="grid gap-3 sm:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-slate-500">SHOWING</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{fmtInt(countsShown.showing)}</div>
+        <div className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-white to-emerald-50/70 p-4 shadow-sm">
+          <div className="text-xs font-medium text-emerald-700">SHOWING</div>
+          <div className="mt-1 text-2xl font-semibold text-emerald-950">{fmtInt(countsShown.showing)}</div>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-slate-500">BUY</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{fmtInt(countsShown.buy)}</div>
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 shadow-sm">
+          <div className="text-xs font-medium text-emerald-700">BUY</div>
+          <div className="mt-1 text-2xl font-semibold text-emerald-800">{fmtInt(countsShown.buy)}</div>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-slate-500">WATCH</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{fmtInt(countsShown.watch)}</div>
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-4 shadow-sm">
+          <div className="text-xs font-medium text-amber-700">WATCH</div>
+          <div className="mt-1 text-2xl font-semibold text-amber-800">{fmtInt(countsShown.watch)}</div>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs text-slate-500">AVOID</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{fmtInt(countsShown.avoid)}</div>
+        <div className="rounded-2xl border border-rose-100 bg-rose-50/50 p-4 shadow-sm">
+          <div className="text-xs font-medium text-rose-600">AVOID</div>
+          <div className="mt-1 text-2xl font-semibold text-rose-800">{fmtInt(countsShown.avoid)}</div>
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div className="flex flex-col gap-2 border-b border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-sm">
+        <div className="flex flex-col gap-2 border-b border-emerald-100 bg-emerald-50/30 p-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-xs text-slate-500">
             Live prices overlay (signals remain daily). <span className="text-slate-400">Scan date: {scanDate}</span>
             {lastUpdatedAt ? (
@@ -1470,6 +1496,12 @@ export default function ScanTableClient({
                             </span>
                           ) : null}
                         </div>
+                        <div
+                          className="mt-1 truncate text-[11px] font-medium text-slate-500"
+                          title={companyNames[String(r.symbol).toUpperCase()] ?? undefined}
+                        >
+                          {companyNames[String(r.symbol).toUpperCase()] ?? "Company name unavailable"}
+                        </div>
                         <div className="mt-2 flex flex-wrap gap-1">
                         {r.staleScan ? (
                           <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[9px] font-semibold text-amber-700">
@@ -1511,7 +1543,9 @@ export default function ScanTableClient({
                         <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 lg:hidden">Price</div>
                         <div className="mt-0.5 flex items-baseline justify-between gap-3 lg:block">
                           <span className="text-slate-500">Live</span>
-                          <span className="font-semibold text-slate-900">{typeof live === "number" ? `$${fmt2(live)}` : "—"}</span>
+                          <span className={`font-semibold ${typeof live === "number" ? "text-emerald-700" : "text-slate-900"}`}>
+                            {typeof live === "number" ? `$${fmt2(live)}` : "—"}
+                          </span>
                         </div>
                         {typeof live === "number" && r.liveSource === "eod_close" ? (
                           <span className="mt-1 inline-flex rounded-full border border-slate-300 bg-slate-50 px-1.5 py-0.5 text-[9px] font-semibold text-slate-700">
@@ -1534,14 +1568,19 @@ export default function ScanTableClient({
                       <div className="text-xs text-slate-600">
                         <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 lg:hidden">Score / hold</div>
                         <div className="mt-0.5">Confidence <span className="font-semibold text-slate-900">{r.confidence}</span></div>
-                        <div>Quality <span className="font-semibold text-slate-900">{fmtInt(Number(r.quality_score ?? r.confidence ?? 0))}</span></div>
+                        <div>
+                          Quality{" "}
+                          <span className={`font-semibold ${Number(r.quality_score ?? r.confidence ?? 0) >= 80 ? "text-emerald-700" : "text-slate-900"}`}>
+                            {fmtInt(Number(r.quality_score ?? r.confidence ?? 0))}
+                          </span>
+                        </div>
                         <div className="mt-1 text-[10px] text-slate-500">
                           {r.risk_grade ? `Grade ${r.risk_grade}` : "Grade —"} · {strategyVersion === "v1_trend_hold" ? "3–8 weeks" : "3–7 days"}
                         </div>
                       </div>
 
                       <div className="col-span-2 flex items-center gap-1.5 sm:justify-end lg:col-span-1 lg:flex-col lg:items-stretch">
-                        <Button onClick={() => doOpen(r)} disabled={modalBusy}>Open</Button>
+                        <Button variant="success" onClick={() => doOpen(r)} disabled={modalBusy}>Open</Button>
                         <Button variant="secondary" onClick={() => doDetails(r)} disabled={modalBusy}>Details</Button>
                         <button
                           type="button"

@@ -1,6 +1,6 @@
 import { cx } from "@/lib/ui";
 
-type Variant = "primary" | "secondary" | "ghost";
+type Variant = "primary" | "secondary" | "ghost" | "success";
 
 export function Button({
   children,
@@ -20,6 +20,8 @@ export function Button({
   const styles =
     variant === "primary"
       ? "bg-slate-900 text-white hover:bg-slate-800"
+      : variant === "success"
+      ? "bg-emerald-700 text-white hover:bg-emerald-800"
       : variant === "ghost"
       ? "bg-transparent hover:bg-slate-100"
       : "bg-white hover:bg-slate-50 border border-slate-200";
