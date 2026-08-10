@@ -45,15 +45,57 @@ export async function finalizeSignals(opts: FinalizeArgs) {
     return { ok: false, error: "Missing universe_slug for finalizeSignals" };
   }
 
-  const { data, error } = await supa
-    .from("daily_scans")
-    .select("*")
-    .eq("date", opts.date)
-    .eq("universe_slug", universe_slug)
-    .eq("strategy_version", opts.strategy_version);
+  const { data: universe, error: universeError } = await supa
+    .from("universes")
+    .select("id")
+    .eq("slug", universe_slug)
+    .maybeSingle();
+  if (universeError || !universe?.id) {
+    return { ok: false, error: universeError?.message ?? `Universe not found: ${universe_slug}` };
+  }
 
-  if (error) return { ok: false, error: error.message };
-  const rawRows = Array.isArray(data) ? (data as any[]) : [];
+  const activeSymbols = new Set<string>();
+  for (let offset = 0; ; offset += 1000) {
+    const { data: members, error: memberError } = await supa
+      .from("universe_members")
+      .select("symbol")
+      .eq("universe_id", universe.id)
+      .eq("active", true)
+      .range(offset, offset + 999);
+    if (memberError) return { ok: false, error: memberError.message };
+    for (const member of members ?? []) {
+      const symbol = String(member?.symbol ?? "").trim().toUpperCase();
+      if (symbol) activeSymbols.add(symbol);
+    }
+    if ((members?.length ?? 0) < 1000) break;
+  }
+
+  let rawRows: any[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await supa
+      .from("daily_scans")
+      .select("*")
+      .eq("date", opts.date)
+      .eq("universe_slug", universe_slug)
+      .eq("strategy_version", opts.strategy_version)
+      .range(offset, offset + 999);
+    if (error) return { ok: false, error: error.message };
+    rawRows.push(...(Array.isArray(data) ? data : []));
+    if ((data?.length ?? 0) < 1000) break;
+  }
+
+  const inactiveIds = rawRows
+    .filter((row) => !activeSymbols.has(String(row?.symbol ?? "").trim().toUpperCase()))
+    .map((row) => String(row?.id ?? "").trim())
+    .filter(Boolean);
+  for (let index = 0; index < inactiveIds.length; index += 500) {
+    const { error } = await supa.from("daily_scans").delete().in("id", inactiveIds.slice(index, index + 500));
+    if (error) return { ok: false, error: `Inactive scan-row prune failed: ${error.message}` };
+  }
+  if (inactiveIds.length) {
+    const removedIds = new Set(inactiveIds);
+    rawRows = rawRows.filter((row) => !removedIds.has(String(row?.id ?? "").trim()));
+  }
   if (!rawRows.length) {
     return {
       ok: true,
@@ -62,6 +104,7 @@ export async function finalizeSignals(opts: FinalizeArgs) {
       strategy_version: opts.strategy_version,
       fetched_total: 0,
       updated_rows: 0,
+      pruned_inactive_rows: inactiveIds.length,
       before_counts: { buy: 0, watch: 0, avoid: 0 },
       after_counts: { buy: 0, watch: 0, avoid: 0 },
       post_filter_downgrades: 0,
@@ -77,6 +120,10 @@ export async function finalizeSignals(opts: FinalizeArgs) {
       updated: 0,
     };
   }
+
+  const rawById = new Map(
+    rawRows.map((row) => [String(row?.id ?? ""), row] as const)
+  );
 
   const rows: ScanRow[] = rawRows.map((row) => ({
     id: row.id ?? null,
@@ -152,7 +199,12 @@ export async function finalizeSignals(opts: FinalizeArgs) {
   const updatesById = sorted
     .filter((row) => row.id !== null && row.id !== undefined)
     .map((row) => ({
+      ...(rawById.get(String(row.id)) ?? {}),
       id: row.id,
+      date: row.date,
+      universe_slug: row.universe_slug,
+      strategy_version: row.strategy_version,
+      symbol: row.symbol,
       signal: row.signal,
       rank: row.rank,
       rank_score: row.rank_score,
@@ -174,31 +226,18 @@ export async function finalizeSignals(opts: FinalizeArgs) {
     };
   }
 
-  const chunkSize = 100;
+  // Persist one bounded upsert per chunk instead of one HTTP request per row.
+  // The immutable scan-row id keeps this update scoped to the current context.
+  const chunkSize = 250;
   for (let i = 0; i < updatesById.length; i += chunkSize) {
     const chunk = updatesById.slice(i, i + chunkSize);
-    const chunkResults = await Promise.all(
-      chunk.map(async (row) => {
-        const { error: updateError } = await supa
-          .from("daily_scans")
-          .update({
-            signal: row.signal,
-            rank: row.rank,
-            rank_score: row.rank_score,
-            reason_summary: row.reason_summary,
-            reason_json: row.reason_json,
-            updated_at: row.updated_at,
-          })
-          .eq("id", row.id);
-        return updateError;
-      })
-    );
-
-    const failed = chunkResults.find(Boolean);
-    if (failed) {
+    const { error: updateError } = await supa
+      .from("daily_scans")
+      .upsert(chunk, { onConflict: "id" });
+    if (updateError) {
       return {
         ok: false,
-        error: String((failed as any)?.message ?? "Update failed"),
+        error: String(updateError.message ?? "Update failed"),
         date: opts.date,
         universe_slug,
         strategy_version: opts.strategy_version,
@@ -233,5 +272,6 @@ export async function finalizeSignals(opts: FinalizeArgs) {
     avoid: after.avoid,
     updated: updatesById.length,
     updated_rows: updatesById.length,
+    pruned_inactive_rows: inactiveIds.length,
   };
 }

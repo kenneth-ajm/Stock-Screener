@@ -6,132 +6,10 @@ import {
   SECTOR_MOMENTUM_STRATEGY_VERSION,
   type SectorMomentumCandidate,
 } from "@/lib/sector_momentum";
-import { GROWTH_UNIVERSE_SLUG } from "@/lib/strategy_universe";
+import { LEGACY_MOMENTUM_UNIVERSE_SLUG } from "@/lib/strategy_universe";
 import { OBS_KEYS, writeObservabilityStatus } from "@/lib/observability";
 import { scoreSignalQuality } from "@/lib/signal_quality";
 import { buildTradeRiskLayer } from "@/lib/trade_risk_layer";
-
-const TARGET_GROWTH_COUNT = 1500;
-const MIN_PRICE = 5;
-const MIN_AVG_DOLLAR_VOLUME_20D = 5_000_000;
-type LiquidityRow = { symbol: string; close: number; volume: number; dollar: number };
-
-function isoDate(d: Date) {
-  return d.toISOString().slice(0, 10);
-}
-
-function avg(values: number[]) {
-  if (!values.length) return 0;
-  return values.reduce((a, b) => a + b, 0) / values.length;
-}
-
-async function ensureGrowthUniverseFromExistingBars(supabase: any, scanDate: string) {
-  const { data: existingUniverse } = await supabase
-    .from("universes")
-    .select("id,slug")
-    .eq("slug", GROWTH_UNIVERSE_SLUG)
-    .maybeSingle();
-  let universeId = existingUniverse?.id ?? null;
-
-  if (!universeId) {
-    const { data: created, error: createErr } = await supabase
-      .from("universes")
-      .insert({
-        slug: GROWTH_UNIVERSE_SLUG,
-        name: "Growth 1500 (derived from existing price_bars)",
-      })
-      .select("id")
-      .maybeSingle();
-    if (createErr || !created?.id) {
-      throw new Error(createErr?.message ?? "Failed creating growth_1500 universe");
-    }
-    universeId = created.id;
-  }
-
-  const { count: currentActive } = await supabase
-    .from("universe_members")
-    .select("symbol", { count: "exact", head: true })
-    .eq("universe_id", universeId)
-    .eq("active", true);
-  if (Number(currentActive) > 0) {
-    return { universe_id: universeId, active_count: Number(currentActive), derived_refresh: false };
-  }
-
-  const { data: latestRows } = await supabase
-    .from("price_bars")
-    .select("symbol,close,volume")
-    .eq("date", scanDate)
-    .eq("source", "polygon");
-  const rankedLatest: LiquidityRow[] = (latestRows ?? [])
-    .map((r: any) => {
-      const symbol = String(r?.symbol ?? "").trim().toUpperCase();
-      const close = Number(r?.close);
-      const volume = Number(r?.volume);
-      const dollar =
-        Number.isFinite(close) && close > 0 && Number.isFinite(volume) && volume > 0 ? close * volume : 0;
-      return { symbol, close, volume, dollar };
-    })
-    .filter((r: LiquidityRow) => r.symbol && r.close > MIN_PRICE && r.volume > 0 && r.dollar > 0)
-    .sort((a: LiquidityRow, b: LiquidityRow) => b.dollar - a.dollar)
-    .slice(0, 6000);
-  const candidateSymbols = rankedLatest.map((r: LiquidityRow) => r.symbol);
-  if (!candidateSymbols.length) {
-    throw new Error("No eligible symbols found in price_bars for growth_1500 derivation");
-  }
-
-  const from = new Date(`${scanDate}T00:00:00Z`);
-  from.setUTCDate(from.getUTCDate() - 45);
-  const fromDate = isoDate(from);
-  const adv20 = new Map<string, number>();
-  for (let i = 0; i < candidateSymbols.length; i += 300) {
-    const chunk = candidateSymbols.slice(i, i + 300);
-    const { data } = await supabase
-      .from("price_bars")
-      .select("symbol,date,close,volume,source")
-      .in("symbol", chunk)
-      .eq("source", "polygon")
-      .gte("date", fromDate)
-      .lte("date", scanDate)
-      .order("date", { ascending: true });
-    const per = new Map<string, number[]>();
-    for (const row of data ?? []) {
-      const symbol = String((row as any)?.symbol ?? "").trim().toUpperCase();
-      const close = Number((row as any)?.close);
-      const volume = Number((row as any)?.volume);
-      if (!symbol || !Number.isFinite(close) || close <= 0 || !Number.isFinite(volume) || volume <= 0) continue;
-      if (!per.has(symbol)) per.set(symbol, []);
-      per.get(symbol)!.push(close * volume);
-    }
-    for (const [symbol, values] of per.entries()) {
-      const last20 = values.slice(-20);
-      if (last20.length >= 20) adv20.set(symbol, avg(last20));
-    }
-  }
-
-  let finalSymbols = rankedLatest
-    .filter((r: LiquidityRow) => (adv20.get(r.symbol) ?? 0) >= MIN_AVG_DOLLAR_VOLUME_20D)
-    .slice(0, TARGET_GROWTH_COUNT)
-    .map((r: LiquidityRow) => r.symbol);
-  if (!finalSymbols.length) {
-    // Fallback for sparse history: use same-day dollar liquidity from existing bars.
-    finalSymbols = rankedLatest
-      .filter((r: LiquidityRow) => r.dollar >= MIN_AVG_DOLLAR_VOLUME_20D)
-      .slice(0, TARGET_GROWTH_COUNT)
-      .map((r: LiquidityRow) => r.symbol);
-  }
-  if (!finalSymbols.length) {
-    throw new Error("No symbols passed derived liquidity filter for growth_1500");
-  }
-
-  await supabase.from("universe_members").update({ active: false }).eq("universe_id", universeId);
-  const rows = finalSymbols.map((symbol) => ({ universe_id: universeId, symbol, active: true }));
-  const { error: memberErr } = await supabase.from("universe_members").upsert(rows, {
-    onConflict: "universe_id,symbol",
-  });
-  if (memberErr) throw new Error(memberErr.message);
-
-  return { universe_id: universeId, active_count: finalSymbols.length, derived_refresh: true };
-}
 
 async function ensureExistingUniverseMembers(supabase: any, universeSlug: string) {
   const { data: universe } = await supabase
@@ -191,12 +69,9 @@ export async function runPopulate(opts?: { universe_slug?: string }) {
   }
   const scanDate = lctd.scan_date;
   const universeSlug =
-    String(opts?.universe_slug ?? GROWTH_UNIVERSE_SLUG).trim() || GROWTH_UNIVERSE_SLUG;
+    String(opts?.universe_slug ?? LEGACY_MOMENTUM_UNIVERSE_SLUG).trim() || LEGACY_MOMENTUM_UNIVERSE_SLUG;
 
-  const universe =
-    universeSlug === GROWTH_UNIVERSE_SLUG
-      ? await ensureGrowthUniverseFromExistingBars(supabase, scanDate)
-      : await ensureExistingUniverseMembers(supabase, universeSlug);
+  const universe = await ensureExistingUniverseMembers(supabase, universeSlug);
 
   const sector = await computeSectorMomentumCandidates({
     supabase,

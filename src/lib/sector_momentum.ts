@@ -37,7 +37,7 @@ export type SectorMomentumResult = {
 };
 
 export const SECTOR_MOMENTUM_STRATEGY_VERSION = "v1_sector_momentum";
-export const SECTOR_MOMENTUM_UNIVERSE_SLUG = "growth_1500";
+export const SECTOR_MOMENTUM_UNIVERSE_SLUG = "liquid_2000";
 
 type PriceBarLite = {
   symbol: string;

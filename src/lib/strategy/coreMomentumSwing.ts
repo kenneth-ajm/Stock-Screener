@@ -395,9 +395,11 @@ export function evaluateCoreMomentumSwing(opts: {
     },
     {
       key: "market_cap",
-      label: "Market cap > $2B (if available)",
+      label: "Market-cap eligibility",
       ok: marketCapOk,
-      detail: marketCapAvailable ? `$${Math.round(marketCap as number).toLocaleString()}` : "Unavailable",
+      detail: marketCapAvailable
+        ? `$${Math.round(marketCap as number).toLocaleString()}`
+        : "Enforced by canonical universe cohort; not rescored here",
     },
     {
       key: "regime_gate",

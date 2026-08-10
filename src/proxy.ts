@@ -11,6 +11,16 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Local maintenance can run without manufacturing a browser session. The
+  // production route remains behind the normal Supabase session boundary.
+  if (
+    (pathname === "/api/admin/rebuild-universes" || pathname === "/api/admin/run-scan") &&
+    process.env.NODE_ENV !== "production" &&
+    (request.nextUrl.hostname === "localhost" || request.nextUrl.hostname === "127.0.0.1")
+  ) {
+    return NextResponse.next();
+  }
+
   const response = NextResponse.next();
 
   const supabase = createServerClient(

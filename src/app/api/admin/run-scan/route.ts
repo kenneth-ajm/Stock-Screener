@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 // Heavy refresh_bars mode exists for admin maintenance and calls daily-autopilot.
 
 const STRATEGIES = ["v1", "v1_trend_hold", "v1_sector_momentum"] as const;
-const UNIVERSES = ["liquid_2000", "core_800", "growth_1500", "midcap_1000"] as const;
+const UNIVERSES = ["liquid_2000", "core_800", "midcap_1000"] as const;
 
 type StrategyVersion = (typeof STRATEGIES)[number];
 type UniverseSlug = (typeof UNIVERSES)[number];
@@ -21,7 +21,7 @@ type UniverseSlug = (typeof UNIVERSES)[number];
 const STRATEGY_UNIVERSES: Record<StrategyVersion, UniverseSlug[]> = {
   v1: ["liquid_2000", "midcap_1000"],
   v1_trend_hold: ["core_800", "liquid_2000"],
-  v1_sector_momentum: ["growth_1500", "midcap_1000"],
+  v1_sector_momentum: ["liquid_2000", "midcap_1000"],
 };
 
 function makeServiceClient() {
@@ -473,6 +473,9 @@ async function runFinalize(opts: {
       }),
       55_000
     );
+    if (!(finalization as any)?.ok) {
+      throw new Error(String((finalization as any)?.error ?? "Signal finalization failed"));
+    }
 
     const after = await countRowsForDate({
       supabase: opts.supabase,

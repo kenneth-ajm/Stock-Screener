@@ -49,7 +49,7 @@ export async function GET() {
     const [momentum, trend, sector] = await Promise.all([
       latestScanStats(supabase as any, "v2_core_momentum", "core_800"),
       latestScanStats(supabase as any, "v1_trend_hold", "core_800"),
-      latestScanStats(supabase as any, "v1_sector_momentum", "growth_1500"),
+      latestScanStats(supabase as any, "v1_sector_momentum", "liquid_2000"),
     ]);
 
     const { data: defaultPortfolio } = await (supabase as any)

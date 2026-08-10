@@ -4,11 +4,11 @@
 
 The default Momentum Swing experience uses the populated union of:
 
-- `liquid_2000`: the broad liquid US-listed opportunity pool
-- `midcap_1000`: the additional mid-cap opportunity pool
+- `liquid_2000`: Broad Liquid US common stocks
+- `midcap_1000`: liquid Mid-Cap Opportunities
 
-Trend Hold uses `core_800` plus `liquid_2000`. Sector Momentum uses
-`growth_1500` plus `midcap_1000`.
+Trend Hold uses Established Leaders (`core_800`) plus Broad Liquid US.
+Sector Momentum uses Broad Liquid US plus Mid-Cap Opportunities.
 
 Auto mode includes only universes populated for the same latest scan date. A
 stale universe is reported but is not silently mixed with fresher rows.
@@ -18,9 +18,19 @@ full membership of the underlying universes.
 
 ## What the Universes Mean
 
-`liquid_2000`, `midcap_1000`, and the legacy `core_800` are liquidity-oriented
-trading universes. They are not quality indexes and they do not imply that a
-company is safe, profitable, or a large-cap household name.
+The canonical cohorts are rebuilt together from one completed Polygon date:
+
+- Established Leaders: active US common stocks, price at least $10, ADV20 at
+  least $25M, and market capitalization at least $10B.
+- Broad Liquid US: active US common stocks, price at least $5, ADV20 at least
+  $10M, market capitalization at least $1B, ranked by liquidity with a target
+  of 2,000 names.
+- Mid-Cap Opportunities: active US common stocks, price at least $5, ADV20 at
+  least $10M, and market capitalization from $2B to under $10B.
+
+The stable slugs remain for historical compatibility. `growth_1500` is retired
+from active routing because the platform did not have fundamental growth data
+that justified the label.
 
 The correct long-term target is a canonical US security master sourced from
 Polygon ticker metadata, with explicit eligibility rules for active US common

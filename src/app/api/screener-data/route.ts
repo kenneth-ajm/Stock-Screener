@@ -220,6 +220,24 @@ function applyDisplayCaps(rows: ScanRow[]) {
   return rankRows([...buyRanked, ...watchRanked, ...avoidRanked]).slice(0, MAX_ROWS);
 }
 
+function dedupeAutoUniverseRows(rows: ScanRow[]) {
+  const universePriority: Record<string, number> = { core_800: 3, midcap_1000: 2, liquid_2000: 1 };
+  const bySymbol = new Map<string, ScanRow>();
+  for (const row of rows) {
+    const symbol = String(row.symbol ?? "").trim().toUpperCase();
+    if (!symbol) continue;
+    const existing = bySymbol.get(symbol);
+    if (!existing) {
+      bySymbol.set(symbol, row);
+      continue;
+    }
+    const currentPriority = universePriority[String(row.universe_slug ?? "")] ?? 0;
+    const existingPriority = universePriority[String(existing.universe_slug ?? "")] ?? 0;
+    if (currentPriority > existingPriority) bySymbol.set(symbol, row);
+  }
+  return Array.from(bySymbol.values());
+}
+
 const SIGNAL_PRIORITY: Record<ScanRow["signal"], number> = { AVOID: 0, WATCH: 1, BUY: 2 };
 
 function restoreLegacyPresentationCappedSignal(row: ScanRow): ScanRow {
@@ -376,6 +394,7 @@ const loadScreenerDataCached = unstable_cache(
     let rawRows: ScanRow[] = [];
     const autoUniverseDates: Array<{ universe_slug: string; date_used: string | null; rows: number }> = [];
     let autoSuppressedUniverses: string[] = [];
+    let autoDuplicateRowsRemoved = 0;
 
     if (isAutoUniverse) {
       dataSource = "daily_scans_cache_auto_union";
@@ -422,6 +441,9 @@ const loadScreenerDataCached = unstable_cache(
           const rowDate = String((row as any)?.date ?? "").trim();
           return freshestUniverses.has(rowUniverse) && rowDate === freshestDate;
         });
+        const rowsBeforeDedupe = rawRows.length;
+        rawRows = dedupeAutoUniverseRows(rawRows);
+        autoDuplicateRowsRemoved = rowsBeforeDedupe - rawRows.length;
         mappedUniverse = populated[0].universe_slug;
         resolvedDateUsed = freshestDate;
         if (autoSuppressedUniverses.length > 0) {
@@ -1106,11 +1128,10 @@ const loadScreenerDataCached = unstable_cache(
       ...row,
       stalking_candidate: stalking.queue.find((candidate) => candidate.symbol === row.symbol) ?? null,
     }));
-    const [coreStats, midcapStats, liquidStats, growthStats] = await Promise.all([
+    const [coreStats, midcapStats, liquidStats] = await Promise.all([
       latestUniverseStats(supabase as any, strategyVersion, "core_800"),
       latestUniverseStats(supabase as any, strategyVersion, "midcap_1000"),
       latestUniverseStats(supabase as any, strategyVersion, "liquid_2000"),
-      latestUniverseStats(supabase as any, strategyVersion, "growth_1500"),
     ]);
     const { data: schedulerStatus } = await (supabase as any)
       .from("system_status")
@@ -1175,11 +1196,11 @@ const loadScreenerDataCached = unstable_cache(
         allowed_universes: allowedUniverses,
         auto_universe_dates: autoUniverseDates,
         auto_suppressed_universes: autoSuppressedUniverses,
+        auto_duplicate_rows_removed: autoDuplicateRowsRemoved,
         universe_availability: {
           core_800: coreStats,
           midcap_1000: midcapStats,
           liquid_2000: liquidStats,
-          growth_1500: growthStats,
         },
         response_shape: {
           raw_rows_is_array: Array.isArray(rawRows),

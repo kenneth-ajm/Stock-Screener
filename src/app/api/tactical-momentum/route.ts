@@ -122,7 +122,7 @@ async function fetchBarsBySymbol(supabase: any, symbols: string[], limit = 260) 
 }
 
 async function loadMarketScanSymbols(supabase: any, opts: { scanDate: string; maxSymbols?: number }) {
-  const universeSlugs = ["liquid_2000", "midcap_1000", "growth_1500", "core_800"];
+  const universeSlugs = ["liquid_2000", "midcap_1000", "core_800"];
   const maxSymbols = Math.max(100, Math.min(1200, Number(opts.maxSymbols ?? 500)));
   const { data: universes, error: universeErr } = await supabase
     .from("universes")
@@ -203,11 +203,9 @@ async function loadMarketScanSymbols(supabase: any, opts: { scanDate: string; ma
       name: symbol,
       group: symbolToUniverses.get(symbol)?.has("midcap_1000")
         ? "Midcap Market"
-        : symbolToUniverses.get(symbol)?.has("growth_1500")
-          ? "Growth Market"
-          : symbolToUniverses.get(symbol)?.has("liquid_2000")
-            ? "Liquid Market"
-            : "Core Market",
+        : symbolToUniverses.get(symbol)?.has("liquid_2000")
+          ? "Broad Liquid Market"
+          : "Established Market",
     })),
     source_universes: universeSlugs.filter((slug) => [...symbolToUniverses.values()].some((set) => set.has(slug))),
     candidate_symbols_count: symbols.length,

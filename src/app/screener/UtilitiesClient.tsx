@@ -112,21 +112,16 @@ export default function UtilitiesClient({
 
   // --- actions ---
 
-  async function buildCore800() {
-    // Build a high-liquidity universe tuned for swing momentum
+  async function rebuildCanonicalUniverses() {
     await callJson(
-      "Build Core 800 universe",
-      "/api/universe/build-liquid-2000",
+      "Rebuild canonical universes",
+      "/api/admin/rebuild-universes",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          universe_slug: DEFAULT_UNIVERSE,
-          min_price: 5,
-          max_price: 999999,
-          limit: 800,
-        }),
-      }
+        body: JSON.stringify({}),
+      },
+      300000
     );
   }
 
@@ -436,8 +431,8 @@ export default function UtilitiesClient({
                 ? "Backfilling..."
                 : "Backfill core_800 (auto)"}
           </Button>
-          <Button variant="secondary" onClick={buildCore800} disabled={!!busy}>
-            {busy === "Build Core 800 universe" ? "Building..." : "Build / Refresh Core 800"}
+          <Button variant="secondary" onClick={rebuildCanonicalUniverses} disabled={!!busy}>
+            {busy === "Rebuild canonical universes" ? "Rebuilding..." : "Rebuild canonical universes"}
           </Button>
         </div>
       </div>

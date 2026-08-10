@@ -1774,11 +1774,9 @@ export default function IdeasWorkspaceClient({
   const coreAvailability = universeAvailability["core_800"] ?? null;
   const midcapAvailability = universeAvailability["midcap_1000"] ?? null;
   const liquidAvailability = universeAvailability["liquid_2000"] ?? null;
-  const growthAvailability = universeAvailability["growth_1500"] ?? null;
   const isCoreEnabled = !coreAvailability ? true : Boolean(coreAvailability.has_scans);
   const isMidcapEnabled = !midcapAvailability ? true : Boolean(midcapAvailability.has_scans);
   const isLiquidEnabled = !liquidAvailability ? true : Boolean(liquidAvailability.has_scans);
-  const isGrowthEnabled = !growthAvailability ? true : Boolean(growthAvailability.has_scans);
   const emptyStateMessage = useMemo(() => {
     if (loading) return "Loading ideas…";
     if (!data?.ok) return `Failed to load data: ${data?.error ?? "Unknown error"}`;
@@ -2221,7 +2219,7 @@ export default function IdeasWorkspaceClient({
       const strategyUniverses: Record<Exclude<StrategyVersion, "quality_dip" | "tactical_momentum">, string[]> = {
         v1: ["liquid_2000", "midcap_1000"],
         v1_trend_hold: ["core_800", "liquid_2000"],
-        v1_sector_momentum: ["growth_1500", "midcap_1000"],
+        v1_sector_momentum: ["liquid_2000", "midcap_1000"],
       };
       const universes = strategyUniverses[strategyToRun] ?? [];
 
@@ -2444,7 +2442,7 @@ export default function IdeasWorkspaceClient({
         requestId,
         strategyRequested: strategyToRun,
         strategyResolved: strategyToRun,
-        universeResolved: strategyToRun === "v1" ? ["liquid_2000", "midcap_1000"] : strategyToRun === "v1_trend_hold" ? ["core_800", "liquid_2000"] : ["growth_1500", "midcap_1000"],
+        universeResolved: strategyToRun === "v1" ? ["liquid_2000", "midcap_1000"] : strategyToRun === "v1_trend_hold" ? ["core_800", "liquid_2000"] : ["liquid_2000", "midcap_1000"],
         barsMode: "cached_db_only",
         startedAt: new Date(startedAtMs).toISOString(),
         endedAt: new Date().toISOString(),
@@ -3118,7 +3116,7 @@ const strategyGuide =
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Core 800
+            Established Leaders
           </button>
           <button
             onClick={() => setUniverseMode("midcap_1000")}
@@ -3131,7 +3129,7 @@ const strategyGuide =
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Midcap 1000
+            Mid-Cap Opportunities
           </button>
           <button
             onClick={() => setUniverseMode("liquid_2000")}
@@ -3144,20 +3142,7 @@ const strategyGuide =
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Liquid 2000
-          </button>
-          <button
-            onClick={() => setUniverseMode("growth_1500")}
-            disabled={!isGrowthEnabled}
-            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
-              universeMode === "growth_1500"
-                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
-                : !isGrowthEnabled
-                ? "cursor-not-allowed border-transparent bg-transparent text-slate-400"
-                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
-            }`}
-          >
-            Growth 1500
+            Broad Liquid US
           </button>
         </div>
         ) : null}
@@ -3992,8 +3977,6 @@ const strategyGuide =
           {" • "}midcap_latest={midcapAvailability?.latest_date ?? "—"}
           {" • "}liquid_has_scans={String(Boolean(liquidAvailability?.has_scans))}
           {" • "}liquid_latest={liquidAvailability?.latest_date ?? "—"}
-          {" • "}growth_has_scans={String(Boolean(growthAvailability?.has_scans))}
-          {" • "}growth_latest={growthAvailability?.latest_date ?? "—"}
           {" • "}requested_date={data?.meta?.requested_date ?? "—"}
           {" • "}rows={rows.length}
           {" • "}rows_filtered={filteredRows.length}

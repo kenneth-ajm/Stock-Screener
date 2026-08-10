@@ -17,7 +17,7 @@ export default async function SwingPage({
   const openTicketRaw = String(params.open_ticket ?? "").trim().toLowerCase();
   const universeRaw = String(params.universe ?? "").trim().toLowerCase();
   const initialUniverse =
-    universeRaw === "midcap_1000" || universeRaw === "liquid_2000" || universeRaw === "growth_1500" || universeRaw === "core_800"
+    universeRaw === "midcap_1000" || universeRaw === "liquid_2000" || universeRaw === "core_800"
       ? universeRaw
       : "auto";
 

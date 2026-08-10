@@ -42,10 +42,10 @@ export default async function StrategyPage() {
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-2">
         <div className="text-lg font-semibold">0) Universe</div>
         <div className="text-sm text-slate-700">
-          Momentum Swing scans <b>Liquid 2000 + Midcap 1000</b>. Trend Continuation scans <b>Core 800 + Liquid 2000</b>. All models remain US equities, daily timeframe, and long-only.
+          Momentum Swing scans <b>Broad Liquid US + Mid-Cap Opportunities</b>. Trend Continuation scans <b>Established Leaders + Broad Liquid US</b>. The separate strict core screen uses <b>Established Leaders</b>. All models remain US equities, daily timeframe, and long-only.
         </div>
         <div className="text-sm text-slate-700">
-          Liquidity is enforced in the signal engine: average dollar volume must be at least <b>$50M/day</b>.
+          Cohort liquidity is enforced before scoring. Individual strategies may require more: strict core momentum requires at least <b>$50M ADV20</b>, Trend Hold at least <b>$5M</b>, and Sector Momentum at least <b>$15M</b>.
         </div>
       </section>
 
@@ -69,7 +69,7 @@ export default async function StrategyPage() {
           <li><b>BUY</b> requires all: Close &gt; SMA50 and SMA200, SMA20 &gt; SMA50, SMA50 rising, RSI 50–65, volume spike ≥ 1.2x, and distance from SMA20 ≤ 1.5 ATR.</li>
           <li><b>WATCH</b> requires a rising, aligned trend, RSI 45–70, controlled extension, and sufficient liquidity. Relative volume is shown as the missing entry trigger, not used to hide an otherwise valid candidate.</li>
           <li><b>Regime gate</b>: if SPY regime is DEFENSIVE, BUY is downgraded to WATCH.</li>
-          <li><b>Global caps</b> per day/universe: BUY ≤ 5 and WATCH ≤ 10 (overflow downgrades deterministically).</li>
+          <li><b>No display quotas</b>: BUY and WATCH counts reflect every stored row that passes the strategy and post-strategy filters.</li>
         </ul>
       </section>
 

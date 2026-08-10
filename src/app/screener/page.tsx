@@ -21,8 +21,8 @@ function strategyLabel(version: string) {
 
 function strategyCoverage(version: string) {
   return version === TREND_STRATEGY_VERSION
-    ? "Core 800 + Liquid 2000"
-    : "Liquid 2000 + Midcap 1000";
+    ? "Established Leaders + Broad Liquid US"
+    : "Broad Liquid US + Mid-Cap Opportunities";
 }
 
 type AutopilotStatus = {
