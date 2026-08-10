@@ -1416,29 +1416,19 @@ export default function ScanTableClient({
 
         {quoteError ? <div className="px-3 py-2 text-xs text-rose-600 border-b border-slate-200">{quoteError}</div> : null}
 
-        <div className="overflow-x-auto">
-          <table className="min-w-[980px] w-full text-sm">
-            <thead className="text-left text-xs text-slate-500">
-              <tr className="border-b border-slate-200">
-                <th className="p-3">SYMBOL</th>
-                <th className="p-3">SIGNAL</th>
-                <th className="p-3">CONF</th>
-                <th className="p-3">QUALITY</th>
-                <th className="p-3">ENTRY</th>
-                <th className="p-3">LIVE</th>
-                <th className="p-3">STOP</th>
-                <th className="p-3">TP1 / TP2</th>
-                <th className="p-3 text-right">ACTIONS</th>
-              </tr>
-            </thead>
+        <div>
+          <div className="hidden grid-cols-[1.2fr_1.65fr_0.9fr_1.1fr_1fr_auto] gap-3 border-b border-slate-200 bg-slate-50/70 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 lg:grid">
+            <div>Stock / decision</div>
+            <div>Why it is listed</div>
+            <div>Price</div>
+            <div>Risk / targets</div>
+            <div>Score / hold</div>
+            <div className="text-right">Actions</div>
+          </div>
 
-            <tbody>
+          <div className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr>
-                  <td className="p-3 text-slate-500" colSpan={9}>
-                    No rows for this filter.
-                  </td>
-                </tr>
+                <div className="p-4 text-sm text-slate-500">No rows for this filter.</div>
               ) : (
                 filtered.map((r) => {
                   const live = r.livePrice;
@@ -1459,93 +1449,118 @@ export default function ScanTableClient({
                   notes.push(strategyVersion === "v1_trend_hold" ? "Hold: 3-8w" : "Hold: 3-7d");
 
                   return (
-                    <tr key={r.symbol} className="border-b border-slate-100">
-                      <td className="p-3 font-semibold text-slate-900">{r.symbol}</td>
-                      <td className="p-3">
-                        <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${signalPill(r.effectiveSignal)}`}>
-                          {r.effectiveSignal}
-                        </span>
+                    <div
+                      key={r.symbol}
+                      className="grid gap-3 px-4 py-4 transition-colors hover:bg-slate-50/70 sm:grid-cols-2 lg:grid-cols-[1.2fr_1.65fr_0.9fr_1.1fr_1fr_auto] lg:items-start"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-base font-semibold tracking-tight text-slate-950">{r.symbol}</span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${signalPill(r.effectiveSignal)}`}>
+                            {r.effectiveSignal}
+                          </span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${actionPill(r.execution.action)}`}>
+                            {actionLabel(r.execution.action)}
+                          </span>
+                          {(r.effectiveSignal === "BUY" || r.effectiveSignal === "WATCH") &&
+                          typeof r.rank === "number" &&
+                          Number.isFinite(r.rank) ? (
+                            <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                              #{Math.round(r.rank)}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1">
                         {r.staleScan ? (
-                          <span className="ml-2 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">
-                            STALE (run rescan)
+                          <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[9px] font-semibold text-amber-700">
+                            STALE
                           </span>
                         ) : null}
                         {r.priceMismatch ? (
-                          <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
+                          <span className="rounded-full border border-rose-300 bg-rose-50 px-2 py-0.5 text-[9px] font-semibold text-rose-700">
                             PRICE MISMATCH
                           </span>
                         ) : null}
                         {r.eventRisk ? (
-                          <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
+                          <span className="rounded-full border border-rose-300 bg-rose-50 px-2 py-0.5 text-[9px] font-semibold text-rose-700">
                             EVENT RISK
                           </span>
                         ) : null}
                         {r.newsRisk ? (
-                          <span className="ml-2 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">
+                          <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[9px] font-semibold text-amber-700">
                             NEWS RISK
                           </span>
                         ) : null}
-                        <span className={`ml-2 rounded-full border px-2 py-1 text-[10px] font-semibold ${actionPill(r.execution.action)}`}>
-                          {actionLabel(r.execution.action)}
-                        </span>
-                        {(r.effectiveSignal === "BUY" || r.effectiveSignal === "WATCH") &&
-                        typeof r.rank === "number" &&
-                        Number.isFinite(r.rank) ? (
-                          <span className="ml-2 rounded-full border border-slate-300 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-700">
-                            #{Math.round(r.rank)}
-                          </span>
-                        ) : null}
                         {r.execution.flags.stopTooWide ? (
-                          <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
+                          <span className="rounded-full border border-rose-300 bg-rose-50 px-2 py-0.5 text-[9px] font-semibold text-rose-700">
                             STOP TOO WIDE
                           </span>
                         ) : null}
-                        {notes.length > 0 ? (
-                          <div className="mt-1 text-[10px] text-slate-500">{notes.join(" • ")}</div>
-                        ) : null}
-                      </td>
-                      <td className="p-3 text-slate-800 font-semibold">{r.confidence}</td>
-                      <td className="p-3 text-slate-800">
-                        <div className="font-semibold">{fmtInt(Number(r.quality_score ?? r.confidence ?? 0))}</div>
-                        <div className="text-[10px] text-slate-500">{r.risk_grade ? `Setup grade ${r.risk_grade}` : "Setup grade —"}</div>
-                      </td>
-                      <td className="p-3 text-slate-800">{fmt2(Number(r.entry))}</td>
-                      <td className="p-3 text-slate-800">
-                        {typeof live === "number" ? fmt2(live) : "—"}
+                        </div>
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 lg:hidden">Why it is listed</div>
+                        <div className="mt-0.5 text-xs leading-5 text-slate-700">
+                          {r.quality_summary ?? r.trade_risk_layer?.summary ?? r.reason_summary ?? "No explanation available."}
+                        </div>
+                        {notes.length > 0 ? <div className="mt-1 text-[10px] leading-4 text-slate-500">{notes.join(" • ")}</div> : null}
+                      </div>
+
+                      <div className="text-xs text-slate-600">
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 lg:hidden">Price</div>
+                        <div className="mt-0.5 flex items-baseline justify-between gap-3 lg:block">
+                          <span className="text-slate-500">Live</span>
+                          <span className="font-semibold text-slate-900">{typeof live === "number" ? `$${fmt2(live)}` : "—"}</span>
+                        </div>
                         {typeof live === "number" && r.liveSource === "eod_close" ? (
-                          <span className="ml-2 rounded-full border border-slate-300 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-700">
+                          <span className="mt-1 inline-flex rounded-full border border-slate-300 bg-slate-50 px-1.5 py-0.5 text-[9px] font-semibold text-slate-700">
                             EOD
                           </span>
                         ) : null}
-                      </td>
-                      <td className="p-3 text-slate-800">{fmt2(Number(r.stop))}</td>
-                      <td className="p-3 text-slate-800">
-                        {fmt2(r.execution.tp1)} / {fmt2(r.execution.tp2)}
-                      </td>
-
-                      <td className="p-3">
-                        <div className="flex justify-end gap-2 whitespace-nowrap">
-                          <Button variant="secondary" onClick={() => doCalc(r)} disabled={modalBusy}>
-                            Calc
-                          </Button>
-                          <Button onClick={() => doOpen(r)} disabled={modalBusy}>
-                            Open
-                          </Button>
-                          <Button variant="secondary" onClick={() => doDetails(r)} disabled={modalBusy}>
-                            Details
-                          </Button>
+                        <div className="mt-1 flex items-baseline justify-between gap-3 lg:block">
+                          <span className="text-slate-500">Entry</span>
+                          <span className="font-medium text-slate-800">${fmt2(Number(r.entry))}</span>
                         </div>
-                      </td>
-                    </tr>
+                      </div>
+
+                      <div className="text-xs text-slate-600">
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 lg:hidden">Risk / targets</div>
+                        <div className="mt-0.5 flex justify-between gap-3 lg:block"><span>Stop</span> <span className="font-medium text-rose-700">${fmt2(Number(r.stop))}</span></div>
+                        <div className="mt-1 flex justify-between gap-3 lg:block"><span>TP1</span> <span className="font-medium text-slate-800">${fmt2(r.execution.tp1)}</span></div>
+                        <div className="flex justify-between gap-3 lg:block"><span>TP2</span> <span className="font-medium text-slate-800">${fmt2(r.execution.tp2)}</span></div>
+                      </div>
+
+                      <div className="text-xs text-slate-600">
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 lg:hidden">Score / hold</div>
+                        <div className="mt-0.5">Confidence <span className="font-semibold text-slate-900">{r.confidence}</span></div>
+                        <div>Quality <span className="font-semibold text-slate-900">{fmtInt(Number(r.quality_score ?? r.confidence ?? 0))}</span></div>
+                        <div className="mt-1 text-[10px] text-slate-500">
+                          {r.risk_grade ? `Grade ${r.risk_grade}` : "Grade —"} · {strategyVersion === "v1_trend_hold" ? "3–8 weeks" : "3–7 days"}
+                        </div>
+                      </div>
+
+                      <div className="col-span-2 flex items-center gap-1.5 sm:justify-end lg:col-span-1 lg:flex-col lg:items-stretch">
+                        <Button onClick={() => doOpen(r)} disabled={modalBusy}>Open</Button>
+                        <Button variant="secondary" onClick={() => doDetails(r)} disabled={modalBusy}>Details</Button>
+                        <button
+                          type="button"
+                          onClick={() => doCalc(r)}
+                          disabled={modalBusy}
+                          className="rounded-lg px-2 py-1 text-[10px] font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+                        >
+                          Size
+                        </button>
+                      </div>
+                    </div>
                   );
                 })
               )}
-            </tbody>
-          </table>
+          </div>
         </div>
 
         <div className="p-3 text-xs text-slate-500">
-          Tip: On mobile, swipe sideways to see all columns. Live data may be delayed depending on your Polygon plan.
+          Live quotes are an execution overlay; signals remain based on completed daily bars. Open a row for the full checklist and trade ticket.
         </div>
       </div>
 
