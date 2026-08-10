@@ -7,6 +7,7 @@ import { applyEarningsRiskToAction, type EarningsRisk } from "@/lib/earnings_ris
 import { buildIdeaCatalystContext, type TickerProfile } from "@/lib/idea_catalyst";
 import { applyBreadthToAction } from "@/lib/market_breadth";
 import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
+import { buildDailyRecommendation, type DailyRecommendationState } from "@/lib/daily_recommendation";
 
 type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold" | "quality_dip" | "tactical_momentum";
 type IdeasFilter = "all" | "buy" | "watch" | "actionable";
@@ -153,6 +154,24 @@ type IdeaRow = {
     sizing_mode?: "cash_only";
   };
 };
+
+function recommendationForIdea(
+  row: IdeaRow,
+  actionOverride?: "BUY_NOW" | "WAIT" | "SKIP" | null
+) {
+  return buildDailyRecommendation({
+    signal: row.signal,
+    action: actionOverride ?? row.action ?? null,
+    candidate_state: row.candidate_state ?? null,
+    quality_score: row.quality_score ?? row.confidence ?? null,
+    risk_grade: row.risk_grade ?? null,
+    trade_prep_state: row.trade_risk_layer?.prep_state ?? null,
+    setup_type: row.setup_type ?? null,
+    blockers: row.blockers ?? null,
+    triggers_to_buy: row.transition_plan?.triggers_to_buy ?? null,
+    leadership_state: row.leadership_context?.state ?? null,
+  });
+}
 
 type Payload = {
   ok: boolean;
@@ -968,6 +987,7 @@ export default function IdeasWorkspaceClient({
   const [marketDataHealth, setMarketDataHealth] = useState<MarketDataHealthPayload | null>(null);
   const [earningsBySymbol, setEarningsBySymbol] = useState<EarningsRiskMap>({});
   const [profileBySymbol, setProfileBySymbol] = useState<Record<string, TickerProfile | null>>({});
+  const [companyNames, setCompanyNames] = useState<Record<string, string>>({});
   const [newsBySymbol, setNewsBySymbol] = useState<Record<string, NewsItem[]>>({});
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [entryFee, setEntryFee] = useState("");
@@ -1042,6 +1062,15 @@ export default function IdeasWorkspaceClient({
   const runScanBusy = runScanState.status === "starting" || runScanState.status === "running";
   const qualityRefreshBusy = qualityRefreshState.status === "running";
   const marketRefreshBusy = marketRefreshState.status === "running";
+
+  useEffect(() => {
+    try {
+      const cached = window.sessionStorage.getItem("ideas_company_names_v1");
+      if (cached) setCompanyNames(JSON.parse(cached) as Record<string, string>);
+    } catch {
+      // Company names are an enhancement; corrupt browser cache falls back to symbols.
+    }
+  }, []);
 
   useEffect(() => {
     setStrategy(initialStrategy);
@@ -1673,6 +1702,71 @@ export default function IdeasWorkspaceClient({
   const topOverlapIdeas = correlationSummary?.top_overlap ?? [];
   const stalkingSummary = data?.meta?.stalking_summary ?? null;
   const stalkingQueue = data?.meta?.stalking_queue ?? [];
+  const builtInCompanyNames = useMemo(() => {
+    const names: Record<string, string> = {};
+    for (const row of qualityRows) {
+      if (row.symbol && row.name) names[row.symbol.toUpperCase()] = row.name;
+    }
+    for (const row of tacticalRows) {
+      if (row.symbol && row.name) names[row.symbol.toUpperCase()] = row.name;
+    }
+    return names;
+  }, [qualityRows, tacticalRows]);
+  const companyLookupSymbols = useMemo(
+    () =>
+      uniqueStrings([
+        ...rows.map((row) => row.symbol),
+        ...closestToActionable.slice(0, 6).map((row) => row.symbol),
+        ...stalkingQueue.slice(0, 6).map((row) => row.symbol),
+        ...bestPortfolioFits.slice(0, 6).map((row) => row.symbol),
+        selected?.symbol ?? null,
+      ])
+        .map((symbol) => symbol.toUpperCase())
+        .filter((symbol) => !companyNames[symbol] && !builtInCompanyNames[symbol])
+        .slice(0, 40),
+    [rows, closestToActionable, stalkingQueue, bestPortfolioFits, selected?.symbol, companyNames, builtInCompanyNames]
+  );
+  const companyLookupKey = companyLookupSymbols.join(",");
+
+  useEffect(() => {
+    if (!isScannerStrategy || !companyLookupKey) return;
+    let mounted = true;
+    fetch(`/api/company-names?symbols=${encodeURIComponent(companyLookupKey)}`, { cache: "no-store" })
+      .then((response) => response.json().catch(() => null))
+      .then((payload) => {
+        if (!mounted || !payload?.ok || !payload?.names) return;
+        setCompanyNames((current) => {
+          const next = { ...current, ...(payload.names as Record<string, string>) };
+          try {
+            window.sessionStorage.setItem("ideas_company_names_v1", JSON.stringify(next));
+          } catch {
+            // A missing session cache must never block Ideas rendering.
+          }
+          return next;
+        });
+      })
+      .catch(() => null);
+    return () => {
+      mounted = false;
+    };
+  }, [isScannerStrategy, companyLookupKey]);
+
+  function companyNameForSymbol(symbol: string | null | undefined) {
+    const normalized = String(symbol ?? "").trim().toUpperCase();
+    return companyNames[normalized] ?? builtInCompanyNames[normalized] ?? profileBySymbol[normalized]?.name ?? null;
+  }
+
+  const dailyRecommendationCounts = useMemo(
+    () =>
+      rows.reduce(
+        (counts, row) => {
+          counts[recommendationForIdea(row).state] += 1;
+          return counts;
+        },
+        { READY_NOW: 0, WAIT_FOR_TRIGGER: 0, RESEARCH: 0, PASS: 0 } as Record<DailyRecommendationState, number>
+      ),
+    [rows]
+  );
   const filteredRows = useMemo(() => {
     if (selectedFilter === "all") return rows;
     if (selectedFilter === "buy") return rows.filter((r) => r.signal === "BUY");
@@ -2861,6 +2955,13 @@ export default function IdeasWorkspaceClient({
   return "border-rose-200 bg-rose-50 text-rose-700";
 }
 
+function recommendationPill(state: DailyRecommendationState) {
+  if (state === "READY_NOW") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (state === "WAIT_FOR_TRIGGER") return "border-sky-200 bg-sky-50 text-sky-700";
+  if (state === "RESEARCH") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
 function candidateStatePill(state: string | null | undefined) {
   switch (state) {
     case "ACTIONABLE_TODAY":
@@ -3424,9 +3525,9 @@ const strategyGuide =
       <div className="surface-card px-3.5 py-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Action Focus</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Daily Decision Desk</div>
             <div className="mt-1 text-sm text-slate-600">
-              Keep the default view simple: what is closest, what is actionable, and what is worth stalking next.
+              Leadership finds the stock. Setup quality earns attention. A price-volume trigger and valid risk plan earn an entry.
             </div>
           </div>
           <button
@@ -3439,20 +3540,20 @@ const strategyGuide =
         </div>
         <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
-            <div className="text-[10px] text-slate-500">Actionable today</div>
-            <div className="text-sm font-semibold text-slate-900">{Number(candidateStateCounts?.actionable_today ?? 0)}</div>
+            <div className="text-[10px] text-slate-500">Ready now</div>
+            <div className="text-sm font-semibold text-slate-900">{dailyRecommendationCounts.READY_NOW}</div>
           </div>
           <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
-            <div className="text-[10px] text-slate-500">Near entry</div>
-            <div className="text-sm font-semibold text-slate-900">{Number(candidateStateCounts?.near_entry ?? 0)}</div>
+            <div className="text-[10px] text-slate-500">Wait for trigger</div>
+            <div className="text-sm font-semibold text-slate-900">{dailyRecommendationCounts.WAIT_FOR_TRIGGER}</div>
           </div>
           <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
-            <div className="text-[10px] text-slate-500">Ready tomorrow</div>
-            <div className="text-sm font-semibold text-slate-900">{Number(stalkingSummary?.ready_tomorrow ?? 0)}</div>
+            <div className="text-[10px] text-slate-500">Research list</div>
+            <div className="text-sm font-semibold text-slate-900">{dailyRecommendationCounts.RESEARCH}</div>
           </div>
           <div className="rounded-lg border border-[#eadfce] bg-[#fffaf2] px-3 py-2">
-            <div className="text-[10px] text-slate-500">Main blocker</div>
-            <div className="text-sm font-semibold text-slate-900">{blockerSummary[0]?.label ?? "—"}</div>
+            <div className="text-[10px] text-slate-500">Pass for now</div>
+            <div className="text-sm font-semibold text-slate-900">{dailyRecommendationCounts.PASS}</div>
           </div>
         </div>
         <div className="mt-3 grid gap-2 lg:grid-cols-2">
@@ -3465,7 +3566,12 @@ const strategyGuide =
                 closestToActionable.slice(0, 3).map((row) => (
                   <div key={`focus-${row.symbol}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                        {companyNameForSymbol(row.symbol) ? (
+                          <div className="max-w-[14rem] truncate text-[10px] font-normal text-slate-500">{companyNameForSymbol(row.symbol)}</div>
+                        ) : null}
+                      </div>
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${candidateStatePill(row.candidate_state)}`}>
                         {row.candidate_state_label ?? row.candidate_state ?? "Review"}
                       </span>
@@ -3485,7 +3591,12 @@ const strategyGuide =
                 stalkingQueue.slice(0, 3).map((row) => (
                   <div key={`focus-stalk-${row.symbol}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                        {companyNameForSymbol(row.symbol) ? (
+                          <div className="max-w-[14rem] truncate text-[10px] font-normal text-slate-500">{companyNameForSymbol(row.symbol)}</div>
+                        ) : null}
+                      </div>
                       <span className="rounded-full border border-[#dcc9aa] bg-[#f8f0e2] px-2 py-0.5 text-[10px] font-semibold text-slate-700">
                         {row.stalking_label ?? "Monitor"}
                       </span>
@@ -3541,7 +3652,10 @@ const strategyGuide =
                 closestToActionable.slice(0, 3).map((row) => (
                   <div key={row.symbol} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                        {companyNameForSymbol(row.symbol) ? <div className="max-w-[13rem] truncate text-[10px] text-slate-500">{companyNameForSymbol(row.symbol)}</div> : null}
+                      </div>
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${candidateStatePill(row.candidate_state)}`}>
                         {row.candidate_state_label ?? row.candidate_state ?? "—"}
                       </span>
@@ -3585,6 +3699,7 @@ const strategyGuide =
                     topImprovers.slice(0, 3).map((row) => (
                       <div key={`${row.symbol}-${row.label}`}>
                         <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                        {companyNameForSymbol(row.symbol) ? <div className="max-w-[13rem] truncate text-[10px] text-slate-500">{companyNameForSymbol(row.symbol)}</div> : null}
                         <div className="text-[11px] text-slate-600">{row.summary ?? row.label ?? "—"}</div>
                       </div>
                     ))
@@ -3600,6 +3715,7 @@ const strategyGuide =
                     topAtRisk.slice(0, 3).map((row) => (
                       <div key={`${row.symbol}-${row.label}`}>
                         <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                        {companyNameForSymbol(row.symbol) ? <div className="max-w-[13rem] truncate text-[10px] text-slate-500">{companyNameForSymbol(row.symbol)}</div> : null}
                         <div className="text-[11px] text-slate-600">{row.summary ?? row.label ?? "—"}</div>
                       </div>
                     ))
@@ -3662,7 +3778,10 @@ const strategyGuide =
                   bestPortfolioFits.slice(0, 3).map((row) => (
                     <div key={`${row.symbol}-${row.fit_state}`} className="rounded-lg border border-[#efe5d6] bg-white px-2.5 py-2">
                       <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                      {companyNameForSymbol(row.symbol) ? <div className="max-w-[13rem] truncate text-[10px] text-slate-500">{companyNameForSymbol(row.symbol)}</div> : null}
+                    </div>
                         <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${fitPill(row.fit_state)}`}>
                           {row.fit_label ?? row.fit_state ?? "—"}
                         </span>
@@ -4301,7 +4420,12 @@ const strategyGuide =
                         tacticalShortlist.map((row) => (
                           <div key={`tactical-shortlist-${row.symbol}`} className="rounded-lg border border-[#efe5d6] bg-[#fffaf2] px-2.5 py-2">
                             <div className="flex items-center justify-between gap-2">
-                              <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                              <div>
+                                <div className="text-sm font-semibold text-slate-900">{row.symbol}</div>
+                                {companyNameForSymbol(row.symbol) ? (
+                                  <div className="max-w-[13rem] truncate text-[10px] text-slate-500">{companyNameForSymbol(row.symbol)}</div>
+                                ) : null}
+                              </div>
                               <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tacticalTimingPill(row.timing_state)}`}>
                                 {row.timing_label}
                               </span>
@@ -4490,191 +4614,119 @@ const strategyGuide =
                 ))}
               </div>
             </div>
-            <table className="w-full text-sm leading-6">
-              <thead className="text-left text-xs text-slate-500">
-                <tr className="border-b border-[#e2d2b7]">
-                  <th className="px-4 py-3.5">Symbol</th>
-                  <th className="px-4 py-3.5">Signal</th>
-                  <th className="px-4 py-3.5">Rank</th>
-                  <th className="px-4 py-3.5">Quality</th>
-                  <th className="px-4 py-3.5">Why listed</th>
-                  <th className="px-4 py-3.5">Entry</th>
-                  <th className="px-4 py-3.5">Live</th>
-                  <th className="px-4 py-3.5">Delta</th>
-                  <th className="px-4 py-3.5">Stop</th>
-                  <th className="px-4 py-3.5">TP1</th>
-                  <th className="px-4 py-3.5">Zone</th>
-                  <th className="px-4 py-3.5">Action</th>
-                  <th className="px-4 py-3.5">Position Cost</th>
-                  <th className="px-4 py-3.5">Quick</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRows.length === 0 ? (
-                  <tr>
-                    <td className="px-4 py-5 text-sm text-slate-600" colSpan={14}>
-                      {emptyStateMessage ?? "No rows available."}
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1040px] table-fixed text-sm leading-5">
+                <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
+                  <tr className="border-b border-[#e2d2b7]">
+                    <th className="w-[17%] px-4 py-3">Company</th>
+                    <th className="w-[13%] px-4 py-3">Decision</th>
+                    <th className="w-[25%] px-4 py-3">Why now</th>
+                    <th className="w-[14%] px-4 py-3">Price / Entry</th>
+                    <th className="w-[14%] px-4 py-3">Risk plan</th>
+                    <th className="w-[9%] px-4 py-3">Hold</th>
+                    <th className="w-[8%] px-4 py-3">Action</th>
                   </tr>
-                ) : null}
-                {filteredRows.map((row) => {
-                const q = quoteBySymbol[row.symbol];
-                const sym = String(row.symbol ?? "").trim().toUpperCase();
-                const earnings = earningsBySymbol[sym] ?? null;
-                const rawLive = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
-                const entry = Number(row.entry ?? 0);
-                const mismatch =
-                  rawLive !== null &&
-                  entry > 0 &&
-                  Math.abs((rawLive - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
-                const live = mismatch ? null : rawLive;
-                const deltaPct = live !== null && entry > 0 ? ((live - entry) / entry) * 100 : null;
-                const reason = mismatch
-                    ? "Price mismatch"
-                    : live !== null
-                    ? getEntryStatus({
-                        price: live,
-                        zone_low: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_low,
-                        zone_high: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_high,
-                      })
-                    : "No live price";
-                const zoneStatus =
-                  live === null || !Number.isFinite(entry) || entry <= 0
-                    ? null
-                    : reason === "Below trigger"
-                    ? "BELOW_TRIGGER"
-                    : live <= entry
-                    ? "IN_ZONE"
-                    : live <= entry * 1.02
-                    ? "ABOVE_ENTRY"
-                    : "TOO_EXTENDED";
-                const exec = applyBreadthToAction(
-                  applyEarningsRiskToAction(mapExecutionState(reason), earnings),
-                  breadth
-                );
-                return (
-                  <tr
-                    key={row.symbol}
-                    className="cursor-pointer border-b border-[#efe5d6] transition-colors hover:bg-[#fff9f0]"
-                    onClick={() => openTradeTicket(row)}
-                  >
-                    <td className="px-4 py-3.5 font-semibold tracking-tight">
-                      <div>{row.symbol}</div>
-                      {row.candidate_state_label ? (
-                        <div className="mt-1">
-                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${candidateStatePill(row.candidate_state)}`}>
-                            {row.candidate_state_label}
-                          </span>
-                        </div>
-                      ) : null}
-                      {row.industry_group ? (
-                        <div className="mt-0.5 text-[10px] font-normal text-slate-500">{row.industry_group}</div>
-                      ) : null}
-                      {row.setup_type ? (
-                        <div className="mt-0.5 text-[10px] font-normal text-slate-500">{row.setup_type}</div>
-                      ) : null}
-                      {row.change_status ? (
-                        <div className="mt-1">
-                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${changePill(row.change_status)}`}>
-                            {row.change_status}
-                          </span>
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${signalPill(row.signal)}`}>
-                        {row.signal}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3.5">{row.rank ?? "—"}</td>
-                    <td className="px-4 py-3.5">
-                      <div className="font-semibold">{Number(row.quality_score ?? row.confidence ?? 0).toFixed(0)}</div>
-                      <div className="text-[10px] text-slate-500">
-                        {row.risk_grade ? `Risk ${row.risk_grade}` : "Risk —"}
-                      </div>
-                      {row.dossier_summary ? (
-                        <div className="mt-1 max-w-[16rem] text-[10px] leading-4 text-slate-500">
-                          {row.dossier_summary}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <div className="max-w-[18rem] text-[11px] leading-5 text-slate-600">
-                        {row.reason_summary ?? row.transition_plan?.summary ?? row.quality_summary ?? "Signal matched this tab's scan filters."}
-                      </div>
-                      {row.leadership_context?.summary ? (
-                        <div className="mt-1 max-w-[18rem] text-[10px] leading-4 text-slate-500">
-                          {row.leadership_context.summary}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3.5">{entry.toFixed(2)}</td>
-                    <td className="px-4 py-3.5">
-                      {live !== null ? live.toFixed(2) : "—"}
-                      {mismatch ? <span className="ml-2 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">MISMATCH</span> : null}
-                    </td>
-                    <td className="px-4 py-3.5">{fmtSignedPct(deltaPct)}</td>
-                    <td className="px-4 py-3.5">{Number(row.stop ?? 0).toFixed(2)}</td>
-                    <td className="px-4 py-3.5">{Number(row.tp1 ?? 0).toFixed(2)}</td>
-                    <td className="px-4 py-3.5">
-                      {zoneStatus ? (
-                        <span
-                          className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                            zoneStatus === "IN_ZONE"
-                              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                              : zoneStatus === "ABOVE_ENTRY"
-                              ? "border-amber-200 bg-amber-50 text-amber-700"
-                              : zoneStatus === "BELOW_TRIGGER"
-                              ? "border-sky-200 bg-sky-50 text-sky-700"
-                              : "border-rose-200 bg-rose-50 text-rose-700"
-                          }`}
-                        >
-                          {zoneStatus}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <div className="space-y-1">
-                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
-                          {exec.action}
-                        </span>
-                        <div className="text-[11px] text-slate-500">{exec.reasonLabel}</div>
-                        {earnings?.earningsLabel ? (
-                          <div className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                            {earnings.earningsLabel}
+                </thead>
+                <tbody>
+                  {filteredRows.length === 0 ? (
+                    <tr>
+                      <td className="px-4 py-5 text-sm text-slate-600" colSpan={7}>
+                        {emptyStateMessage ?? "No rows available."}
+                      </td>
+                    </tr>
+                  ) : null}
+                  {filteredRows.map((row) => {
+                    const q = quoteBySymbol[row.symbol];
+                    const sym = String(row.symbol ?? "").trim().toUpperCase();
+                    const earnings = earningsBySymbol[sym] ?? null;
+                    const rawLive = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
+                    const entry = Number(row.entry ?? 0);
+                    const mismatch = rawLive !== null && entry > 0 && Math.abs((rawLive - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
+                    const live = mismatch ? null : rawLive;
+                    const referencePrice = live ?? (Number(row.symbol_facts?.close ?? 0) || null);
+                    const deltaPct = live !== null && entry > 0 ? ((live - entry) / entry) * 100 : null;
+                    const reason = mismatch
+                      ? "Price mismatch"
+                      : live !== null
+                        ? getEntryStatus({
+                            price: live,
+                            zone_low: getBuyZone({ strategy_version: strategy, model_entry: entry }).zone_low,
+                            zone_high: getBuyZone({ strategy_version: strategy, model_entry: entry }).zone_high,
+                          })
+                        : "No live price";
+                    const exec = applyBreadthToAction(applyEarningsRiskToAction(mapExecutionState(reason), earnings), breadth);
+                    const runtimeAction = exec.action === "BUY NOW" ? "BUY_NOW" : exec.action === "WAIT" ? "WAIT" : "SKIP";
+                    const recommendation = recommendationForIdea(row, runtimeAction);
+                    const companyName = companyNameForSymbol(row.symbol);
+                    const holdPlan = strategy === "v1_trend_hold" ? "10–20 sessions" : "3–7 sessions";
+                    return (
+                      <tr
+                        key={row.symbol}
+                        className="cursor-pointer border-b border-[#efe5d6] align-top transition-colors hover:bg-[#fff9f0]"
+                        onClick={() => openTradeTicket(row)}
+                      >
+                        <td className="px-4 py-3.5">
+                          <div className="font-semibold tracking-tight text-slate-950">{row.symbol}</div>
+                          <div className="mt-0.5 truncate text-[11px] text-slate-500" title={companyName ?? undefined}>
+                            {companyName ?? "Company name unavailable"}
                           </div>
-                        ) : null}
-                        {exec.breadthLabel ? (
-                          <div className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                            {exec.breadthLabel}
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {row.setup_type ? (
+                              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600">{row.setup_type}</span>
+                            ) : null}
+                            {row.change_status && row.change_status !== "UNCHANGED" ? (
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${changePill(row.change_status)}`}>{row.change_status}</span>
+                            ) : null}
                           </div>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3.5">{Number(row.sizing?.est_cost ?? 0).toFixed(2)}</td>
-                    <td className="px-4 py-3.5">
-                      {row.signal === "BUY" || row.signal === "WATCH" ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openTradeTicket(row);
-                          }}
-                          className="rounded-lg border border-[#dcc9aa] bg-[#f8f0e2] px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-[#f2e6d4]"
-                        >
-                          Paper Trade
-                        </button>
-                      ) : (
-                        <span className="text-slate-300">—</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-              </tbody>
-            </table>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${recommendationPill(recommendation.state)}`}>
+                            {recommendation.label}
+                          </span>
+                          <div className="mt-2 text-[10px] text-slate-500">{recommendation.selection_label}</div>
+                          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-500">
+                            <span className={`rounded-full border px-1.5 py-0.5 font-semibold ${signalPill(row.signal)}`}>{row.signal}</span>
+                            <span>Q{Number(row.quality_score ?? row.confidence ?? 0).toFixed(0)}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="text-xs font-medium leading-5 text-slate-800">{recommendation.headline}</div>
+                          <div className="mt-1 text-[11px] leading-5 text-slate-500">Next: {recommendation.next_step}</div>
+                        </td>
+                        <td className="px-4 py-3.5 text-[11px] text-slate-600">
+                          <div className="font-semibold text-slate-900">{referencePrice ? `$${referencePrice.toFixed(2)}` : "Price unavailable"}</div>
+                          <div className="mt-1">Entry ${entry.toFixed(2)}</div>
+                          <div>{deltaPct === null ? exec.reasonLabel : `${fmtSignedPct(deltaPct)} vs entry`}</div>
+                          {mismatch ? <div className="mt-1 text-rose-600">Quote mismatch</div> : null}
+                        </td>
+                        <td className="px-4 py-3.5 text-[11px] text-slate-600">
+                          <div>Stop <span className="font-medium text-slate-800">${Number(row.stop ?? 0).toFixed(2)}</span></div>
+                          <div className="mt-1">TP1 ${Number(row.tp1 ?? 0).toFixed(2)}</div>
+                          <div>TP2 ${Number(row.tp2 ?? 0).toFixed(2)}</div>
+                          <div className="mt-1 text-[10px] text-slate-500">{recommendation.risk_label}{row.risk_grade ? ` · grade ${row.risk_grade}` : ""}</div>
+                        </td>
+                        <td className="px-4 py-3.5 text-[11px] text-slate-600">
+                          <div className="font-medium text-slate-800">{holdPlan}</div>
+                          <div className="mt-1">Review daily</div>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openTradeTicket(row);
+                            }}
+                            className="rounded-lg border border-[#dcc9aa] bg-[#f8f0e2] px-2.5 py-1.5 text-[10px] font-semibold text-slate-700 whitespace-nowrap hover:bg-[#f2e6d4]"
+                          >
+                            Open ticket
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </>
         ) : null}
           </>
@@ -4692,6 +4744,9 @@ const strategyGuide =
             <div className="flex items-center justify-between border-b border-[#e3d2b6] px-4 py-3">
               <div>
                 <div className="text-lg font-semibold">{selected.symbol}</div>
+                {companyNameForSymbol(selected.symbol) ? (
+                  <div className="max-w-sm truncate text-xs text-slate-500">{companyNameForSymbol(selected.symbol)}</div>
+                ) : null}
                 <div className="text-xs text-slate-500">
                   {strategy === "v1_trend_hold"
                     ? "Trend Continuation · 10–20 sessions"

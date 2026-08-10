@@ -11,6 +11,17 @@ The decision pipeline separates four questions:
 3. Trade quality: Does the chart-derived stop and target structure provide acceptable reward relative to risk?
 4. Portfolio fit: Is there enough cash and capacity without excessive concentration?
 
+## Recommendation vocabulary
+
+The scanner signal and the user-facing recommendation are intentionally separate:
+
+- Ready now: leadership/setup, entry trigger, and executable risk plan all pass at the current price context.
+- Wait for trigger: the candidate is valid or close, but price/volume has not confirmed the entry or the current quote is outside the planned zone.
+- Research: the stock has enough evidence to monitor, but no valid entry exists yet.
+- Pass: trend, liquidity, setup, or risk structure is currently unsuitable.
+
+This layer must never promote an AVOID row to Ready now or rewrite cached scan history. It translates detailed evidence into one daily decision and leaves the original BUY/WATCH/AVOID signal visible for auditability.
+
 ## Signal meanings
 
 - BUY: The candidate, timing trigger, market regime, event-risk check, and trade-risk checks all pass. This is a prompt for final review, not an instruction or guarantee.
@@ -50,6 +61,10 @@ Sector Momentum is supporting evidence. It identifies group leadership but is no
 - Moskowitz, Ooi, and Pedersen document return persistence over one-to-twelve-month formation horizons across liquid futures markets. This supports trend persistence as context, but its horizon and instruments do not directly validate a 3–7 day US-stock entry rule: https://w4.stern.nyu.edu/facdir/lpederse/papers/TimeSeriesMomentum.pdf
 - Novy-Marx finds that gross profitability has predictive power in the cross-section of average stock returns, especially among large liquid stocks. A future quality overlay should use reliable financial-statement data rather than infer fundamentals from price: https://www.nber.org/papers/w15940
 - Investor.gov explains that diversification can reduce portfolio risk but cannot eliminate losses. Portfolio capacity and concentration controls remain necessary even when a signal is strong: https://www.investor.gov/introduction-investing/investing-basics/glossary/diversification
+- Kristjan Kullamägi's published breakout framework ranks current one-, three-, and six-month leaders, waits for an orderly consolidation, and requires range expansion before entry. It also treats the chart stop and asymmetric payoff as part of the setup rather than an afterthought: https://qullamaggie.com/my-3-timeless-setups-that-have-made-me-tens-of-millions/
+- Investor's Business Daily's published buying checklist combines earnings/sales quality, relative strength, industry leadership, liquidity, market direction, a sound base, and breakout volume. The current platform can measure the price/volume and market components, but must label fundamental components unavailable until a reliable server-side fundamentals source exists: https://www.investors.com/wp-content/uploads/2017/08/IBD_BuyingChecklist.pdf
+- AQR's summary of momentum-crash research warns that momentum behaves differently around severe market reversals. That supports retaining market-regime and exposure controls instead of increasing BUY frequency simply by lowering thresholds: https://www.aqr.com/insights/research/journal-article/momentum-crashes
+- NBER's review of behavioral evidence describes post-earnings-announcement drift as underreaction to earnings news. This supports a future catalyst layer only when actual surprise and revision data are available; headline sentiment is not an adequate substitute: https://www.nber.org/reporter-2020-02/behavioral-biases-analysts-and-investors
 
 These sources motivate candidate and risk features. They do not establish that this implementation is profitable. Strategy thresholds must be evaluated with out-of-sample paper trades and backtests that include fees, slippage, delisted names where available, and regime variation.
 
@@ -60,4 +75,5 @@ These sources motivate candidate and risk features. They do not establish that t
 3. Add profitability, balance-sheet safety, and earnings-revision data only when a reliable server-side source is available.
 4. Add sector-relative strength and price-relative strength as candidate-ranking inputs, while keeping the daily trigger separate.
 5. Measure coverage explicitly: universe members, members with enough daily history, evaluated rows, BUY, WATCH, and AVOID.
-
+6. Keep selection, setup, trigger, and risk as separate measured stages so a strong company is not mistaken for a timely trade.
+7. Version any threshold change and compare it against the current strategy with walk-forward paper results before promotion.
