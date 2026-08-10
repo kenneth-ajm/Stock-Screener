@@ -308,6 +308,10 @@ type Payload = {
     pct_above_sma50?: number | null;
     pct_above_sma200?: number | null;
     market_data_status?: {
+      provider_id?: string | null;
+      provider_label?: string | null;
+      provider_configured?: boolean | null;
+      quote_mode?: "consolidated_realtime" | "indicative" | "cached_eod_only" | null;
       is_stale?: boolean;
       reasons?: string[] | null;
       expected_latest_trading_day?: string | null;
@@ -467,6 +471,20 @@ type QuoteMap = Record<
     source: "snapshot" | "eod_close";
   } | null
 >;
+type MarketDataHealthPayload = {
+  ok: boolean;
+  provider?: {
+    id?: string;
+    label?: string;
+    configured?: boolean;
+  } | null;
+  cache?: {
+    expected_completed_session?: string | null;
+    latest_spy_date?: string | null;
+    sessions_behind?: number | null;
+    state?: "current" | "stale" | "unavailable";
+  } | null;
+};
 type EarningsRiskMap = Record<string, EarningsRisk>;
 type NewsItem = {
   id: string | null;
@@ -897,7 +915,7 @@ function buildStructureSummary(bars: Array<{ close?: number | null; high?: numbe
 }
 
 export default function IdeasWorkspaceClient({
-  initialStrategy = "v1",
+  initialStrategy = "tactical_momentum",
   initialUniverse = "auto",
   initialSymbol = null,
   strategyParamRaw = null,
@@ -947,6 +965,7 @@ export default function IdeasWorkspaceClient({
   const [lastQualityApiUrl, setLastQualityApiUrl] = useState<string>("");
   const [lastLoadOk, setLastLoadOk] = useState<boolean | null>(null);
   const [quoteBySymbol, setQuoteBySymbol] = useState<QuoteMap>({});
+  const [marketDataHealth, setMarketDataHealth] = useState<MarketDataHealthPayload | null>(null);
   const [earningsBySymbol, setEarningsBySymbol] = useState<EarningsRiskMap>({});
   const [profileBySymbol, setProfileBySymbol] = useState<Record<string, TickerProfile | null>>({});
   const [newsBySymbol, setNewsBySymbol] = useState<Record<string, NewsItem[]>>({});
@@ -966,6 +985,9 @@ export default function IdeasWorkspaceClient({
   const [tacticalFilter, setTacticalFilter] = useState<TacticalMomentumFilter>("all");
   const [tacticalSort, setTacticalSort] = useState<TacticalMomentumSort>("signal");
   const [showAdvancedInsights, setShowAdvancedInsights] = useState(false);
+  const [showResearchModels, setShowResearchModels] = useState(
+    initialStrategy === "v1" || initialStrategy === "v1_sector_momentum" || initialStrategy === "v1_trend_hold"
+  );
   const [scanDateHintByStrategy, setScanDateHintByStrategy] = useState<Partial<Record<StrategyVersion, string>>>({});
   const [runScanState, setRunScanState] = useState<ManualScanState>({
     status: "idle",
@@ -1035,6 +1057,19 @@ export default function IdeasWorkspaceClient({
   useEffect(() => {
     setUniverseMode(initialUniverse);
   }, [initialUniverse]);
+
+  useEffect(() => {
+    let mounted = true;
+    fetch(`/api/market-data/status${refreshNonce > 0 ? `?_bust=${refreshNonce}` : ""}`, { cache: "no-store" })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => null)) as MarketDataHealthPayload | null;
+        if (mounted && response.ok && payload?.ok) setMarketDataHealth(payload);
+      })
+      .catch(() => null);
+    return () => {
+      mounted = false;
+    };
+  }, [refreshNonce]);
 
   useEffect(() => {
     let mounted = true;
@@ -1741,6 +1776,7 @@ export default function IdeasWorkspaceClient({
     readContextMatchesLatestManualScan &&
     Number(data?.meta?.rows_display_count ?? 0) > 0;
   const marketDataStatus = data?.meta?.market_data_status ?? null;
+  const marketDataProviderLabel = String(marketDataStatus?.provider_label ?? "Market data");
   const marketDataIsStale = isScannerStrategy && Boolean(marketDataStatus?.is_stale);
   const marketDataReasonSummary =
     Array.isArray(marketDataStatus?.reasons) && marketDataStatus.reasons.length > 0
@@ -2835,16 +2871,16 @@ function changePill(status: string | null | undefined) {
 const strategyGuide =
   strategy === "tactical_momentum"
     ? {
-        title: "Today",
-        horizon: "Same-day or very short-term momentum trades",
+        title: "Fast Momentum",
+        horizon: "Two-to-seven trading-day momentum trades",
         pool: "Scans active market universes from cached daily bars, then ranks liquid names showing breakout, episodic pivot, or near-trigger behavior.",
         buyList:
           "Names reach the buy list when price action, relative volume, breakout proximity, trend alignment, and SPY context are strong enough for immediate review.",
       }
     : strategy === "quality_dip"
       ? {
-          title: "Dip Buys",
-          horizon: "Quick dip-bounce trades from a fixed quality watchlist",
+          title: "Quality Pullback",
+          horizon: "Three-to-fifteen trading-day pullback trades",
           pool: "Only your fixed quality/dip list is checked here. This is intentionally not a market-wide scanner.",
           buyList:
             "Names reach the buy list when the pullback is in the preferred zone, the stock trend is still intact, and SPY is supportive.",
@@ -2880,37 +2916,19 @@ const strategyGuide =
           {toast}
         </div>
       ) : null}
-      <div className="surface-panel flex flex-wrap items-center justify-between gap-4 p-4">
-        <div className="flex items-center gap-2 rounded-xl border border-[#e3d5bf] bg-[#fcf8f1] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
+      <div className="surface-panel flex flex-wrap items-end justify-between gap-4 p-4">
+        <div>
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Trade desks</div>
+          <div className="flex items-center gap-2 rounded-xl border border-[#e3d5bf] bg-[#fcf8f1] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
           <button
-            onClick={() => setStrategy("v1")}
+            onClick={() => setStrategy("tactical_momentum")}
             className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
-              strategy === "v1"
+              strategy === "tactical_momentum"
                 ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Swing 2-7D
-          </button>
-          <button
-            onClick={() => setStrategy("v1_sector_momentum")}
-            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
-              strategy === "v1_sector_momentum"
-                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
-                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
-            }`}
-          >
-            Sector Context
-          </button>
-          <button
-            onClick={() => setStrategy("v1_trend_hold")}
-            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
-              strategy === "v1_trend_hold"
-                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
-                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
-            }`}
-          >
-            Hold Lab
+            Fast Momentum
           </button>
           <button
             onClick={() => setStrategy("quality_dip")}
@@ -2920,19 +2938,80 @@ const strategyGuide =
                 : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Dip Buys
+            Quality Pullback
           </button>
+          </div>
+        </div>
+        <div className="ml-auto flex flex-col items-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-1.5 text-[11px] text-slate-600">
+            <span className="surface-chip px-2 py-0.5">
+              {marketDataHealth?.provider?.label ?? "Data provider"}
+              {marketDataHealth?.provider?.configured === false ? " (cached only)" : ""}
+            </span>
+            <span className="surface-chip px-2 py-0.5">
+              Completed bars: {marketDataHealth?.cache?.latest_spy_date ?? "checking..."}
+            </span>
+            {marketDataHealth?.cache?.state ? (
+              <span
+                className={`rounded-full border px-2 py-0.5 font-semibold ${
+                  marketDataHealth.cache.state === "current"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-rose-200 bg-rose-50 text-rose-700"
+                }`}
+              >
+                {marketDataHealth.cache.state === "current"
+                  ? "Current"
+                  : marketDataHealth.cache.state === "stale"
+                    ? `${marketDataHealth.cache.sessions_behind ?? "?"} sessions behind`
+                    : "Unavailable"}
+              </span>
+            ) : null}
+          </div>
           <button
-            onClick={() => setStrategy("tactical_momentum")}
-            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
-              strategy === "tactical_momentum"
-                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
-                : "border-transparent bg-transparent text-slate-700 hover:bg-[#f3eadc]"
-            }`}
+            type="button"
+            onClick={() => setShowResearchModels((current) => !current)}
+            className="rounded-xl border border-[#d8c8aa] bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-[#f8f1e4]"
           >
-            Today
+            {showResearchModels ? "Hide Research Models" : "Research Models"}
           </button>
         </div>
+        {showResearchModels ? (
+        <div className="w-full border-t border-[#eadfce] pt-3">
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Supporting research</div>
+          <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setStrategy("v1")}
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
+              strategy === "v1"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : "border-[#e3d5bf] bg-[#fcf8f1] text-slate-700 hover:bg-[#f3eadc]"
+            }`}
+          >
+            Swing Model
+          </button>
+          <button
+            onClick={() => setStrategy("v1_sector_momentum")}
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
+              strategy === "v1_sector_momentum"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : "border-[#e3d5bf] bg-[#fcf8f1] text-slate-700 hover:bg-[#f3eadc]"
+            }`}
+          >
+            Sector Context
+          </button>
+          <button
+            onClick={() => setStrategy("v1_trend_hold")}
+            className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
+              strategy === "v1_trend_hold"
+                ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+                : "border-[#e3d5bf] bg-[#fcf8f1] text-slate-700 hover:bg-[#f3eadc]"
+            }`}
+          >
+            Hold Research
+          </button>
+          </div>
+        </div>
+        ) : null}
         {isScannerStrategy ? (
         <div className="flex items-center gap-2 rounded-xl border border-[#e3d5bf] bg-[#fcf8f1] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
           <button
@@ -3082,11 +3161,11 @@ const strategyGuide =
               <span className="surface-chip px-2.5 py-1">Regime: {data?.meta?.regime_state ?? "—"}</span>
           {marketDataIsStale ? (
             <span className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 font-semibold text-rose-700">
-              Market data stale
+              {marketDataProviderLabel} bars stale
             </span>
           ) : (
             <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700">
-              Market data current
+              {marketDataProviderLabel} bars current
             </span>
           )}
           <span className="surface-chip px-2.5 py-1">
@@ -3149,7 +3228,7 @@ const strategyGuide =
         <div className="mt-[-8px] rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
           <div className="font-medium">Market data is stale</div>
           <div className="mt-0.5">
-            Ideas is rescanning cached bars, so running a manual scan will not make dates newer until Polygon daily bars are refreshed.
+            Ideas is rescanning cached bars, so running a manual scan will not make dates newer until the configured daily-bar provider refreshes them.
           </div>
           <div className="mt-1">{marketDataReasonSummary}</div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] opacity-90">

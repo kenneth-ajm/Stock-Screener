@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { getMarketDataProvider } from "@/lib/market-data";
 
 export const dynamic = "force-dynamic";
 
@@ -16,59 +17,13 @@ type QuoteValue = {
 function uniqUpper(symbols: string[]) {
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const s of symbols) {
-    const sym = (s ?? "").trim().toUpperCase();
-    if (!sym || seen.has(sym)) continue;
-    seen.add(sym);
-    out.push(sym);
+  for (const symbol of symbols) {
+    const normalized = String(symbol ?? "").trim().toUpperCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
   }
   return out;
-}
-
-async function fetchSnapshot(symbol: string, apiKey: string): Promise<QuoteValue | null> {
-  const url = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${encodeURIComponent(
-    symbol
-  )}?apiKey=${apiKey}`;
-
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) return null;
-  const json = await res.json().catch(() => null);
-
-  const candidates = [
-    json?.ticker?.lastTrade?.p,
-    json?.ticker?.last_trade?.p,
-    json?.ticker?.lastTrade?.price,
-    json?.ticker?.last_trade?.price,
-    json?.ticker?.day?.c, // fallback to today's close if trade not present
-  ];
-
-  for (const v of candidates) {
-    if (typeof v === "number" && Number.isFinite(v) && v > 0) {
-      return {
-        price: v,
-        asOf: new Date().toISOString(),
-        source: "snapshot",
-      };
-    }
-  }
-  return null;
-}
-
-async function fetchLastTrade(symbol: string, apiKey: string): Promise<QuoteValue | null> {
-  const url = `https://api.polygon.io/v2/last/trade/${encodeURIComponent(symbol)}?apiKey=${apiKey}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) return null;
-  const json = await res.json().catch(() => null);
-
-  const v = json?.results?.p;
-  if (typeof v === "number" && Number.isFinite(v) && v > 0) {
-    return {
-      price: v,
-      asOf: new Date().toISOString(),
-      source: "snapshot",
-    };
-  }
-  return null;
 }
 
 function admin() {
@@ -78,62 +33,63 @@ function admin() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
+async function cachedClose(symbol: string): Promise<QuoteValue | null> {
+  const supabase = admin();
+  const { data, error } = await supabase
+    .from("price_bars")
+    .select("date,close")
+    .eq("symbol", symbol)
+    .order("date", { ascending: false })
+    .limit(1);
+  if (error || !Array.isArray(data) || data.length === 0) return null;
+  const close = Number(data[0]?.close);
+  const date = String(data[0]?.date ?? "");
+  if (!Number.isFinite(close) || close <= 0 || !date) return null;
+  return { price: close, asOf: date, source: "eod_close" };
+}
+
 export async function POST(req: Request) {
-  const apiKey = process.env.POLYGON_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ ok: false, error: "Missing POLYGON_API_KEY" }, { status: 500 });
-  }
-
   const body = (await req.json().catch(() => ({}))) as Body;
-  const symbols = uniqUpper(Array.isArray(body.symbols) ? body.symbols : []);
-
+  const symbols = uniqUpper(Array.isArray(body.symbols) ? body.symbols : []).slice(0, 50);
   if (symbols.length === 0) {
-    return NextResponse.json({ ok: true, quotes: {} });
+    return NextResponse.json({ ok: true, quotes: {}, provider: null, quote_mode: "none" });
   }
 
-  // soft limit to keep requests reasonable
-  const limited = symbols.slice(0, 50);
-
+  const provider = getMarketDataProvider();
   const entries = await Promise.all(
-    limited.map(async (sym) => {
-      let quote = await fetchSnapshot(sym, apiKey);
-      if (quote === null) quote = await fetchLastTrade(sym, apiKey);
-      return [sym, quote] as const;
+    symbols.map(async (symbol) => {
+      if (provider.configured) {
+        try {
+          const quote = await provider.fetchLatestQuote(symbol);
+          if (quote) {
+            return [
+              symbol,
+              { price: quote.price, asOf: quote.as_of, source: "snapshot" as const },
+            ] as const;
+          }
+        } catch (error) {
+          console.warn("[quotes] provider quote unavailable; using cached close", {
+            provider: provider.id,
+            symbol,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      return [symbol, await cachedClose(symbol)] as const;
     })
   );
 
   const quotes: Record<string, QuoteValue | null> = {};
-  for (const [sym, quote] of entries) quotes[sym] = quote ?? null;
+  for (const [symbol, quote] of entries) quotes[symbol] = quote;
+  const liveCount = entries.filter(([, quote]) => quote?.source === "snapshot").length;
 
-  const missing = Object.entries(quotes)
-    .filter(([, v]) => v == null)
-    .map(([sym]) => sym);
-
-  if (missing.length > 0) {
-    const supabase = admin() as any;
-    // Query each missing symbol individually to avoid accidental truncation/order artifacts.
-    const resolved = await Promise.all(
-      missing.map(async (sym) => {
-        const { data, error } = await supabase
-          .from("price_bars")
-          .select("symbol,date,close")
-          .eq("symbol", sym)
-          .order("date", { ascending: false })
-          .limit(1);
-        if (error || !Array.isArray(data) || data.length === 0) return [sym, null] as const;
-        const row = data[0];
-        const close = Number(row?.close);
-        const date = String(row?.date ?? "");
-        if (!Number.isFinite(close) || close <= 0 || !date) return [sym, null] as const;
-        return [sym, { price: close, asOf: date, source: "eod_close" as const }] as const;
-      })
-    );
-
-    for (const [sym, quote] of resolved) {
-      if (!quote) continue;
-      quotes[sym] = quote;
-    }
-  }
-
-  return NextResponse.json({ ok: true, quotes });
+  return NextResponse.json({
+    ok: true,
+    quotes,
+    provider: provider.id,
+    provider_configured: provider.configured,
+    quote_mode: liveCount > 0 ? "provider_snapshot_with_cached_fallback" : "cached_eod_only",
+    live_quotes: liveCount,
+    cached_quotes: entries.filter(([, quote]) => quote?.source === "eod_close").length,
+  });
 }

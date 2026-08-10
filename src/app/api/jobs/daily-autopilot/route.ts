@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import {
-  CORE_MOMENTUM_DEFAULT_UNIVERSE,
   CORE_MOMENTUM_DEFAULT_VERSION,
 } from "@/lib/strategy/coreMomentumSwing";
 import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
@@ -13,9 +12,11 @@ import { getLCTD } from "@/lib/scan_date";
 import { runDiagnosticsWithClient } from "@/lib/diagnostics";
 import { finalizeSignals } from "@/lib/finalize_signals";
 import { refreshSpyRegimeForLctd } from "@/lib/spy_regime";
+import { getMarketDataProvider } from "@/lib/market-data";
+import { isUsMarketTradingDay, latestCompletedUsTradingDay, shiftIsoDate } from "@/lib/market-calendar";
 
 // Production daily market-data refresh path.
-// This route ingests Polygon grouped bars into price_bars, then runs scans/finalization.
+// Acquisition is provider-neutral; scans continue to read normalized cached price_bars.
 const UNIVERSE_SLUG = "core_800";
 const STATUS_KEY = "daily_autopilot_core_800";
 
@@ -23,38 +24,16 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function usTodayDate() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
-
-function shiftDate(date: string, days: number) {
-  const d = new Date(`${date}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-function isWeekday(date: string) {
-  const d = new Date(`${date}T00:00:00Z`);
-  const day = d.getUTCDay();
-  return day >= 1 && day <= 5;
-}
-
 function candidateIngestDates(lctdDate: string, lookbackDays = 7) {
-  const today = usTodayDate();
+  const latestCompletedSession = latestCompletedUsTradingDay();
   const out: string[] = [];
   const push = (d: string) => {
     if (!d) return;
     if (!out.includes(d)) out.push(d);
   };
-  push(today);
-  for (let i = 1; i <= lookbackDays; i += 1) {
-    const d = shiftDate(today, -i);
-    if (isWeekday(d)) push(d);
+  for (let daysBack = 0; daysBack <= lookbackDays; daysBack += 1) {
+    const candidate = shiftIsoDate(latestCompletedSession, -daysBack);
+    if (isUsMarketTradingDay(candidate)) push(candidate);
   }
   push(lctdDate);
   return out;
@@ -66,27 +45,10 @@ async function ingestGroupedForDate(opts: {
   symbols: string[];
 }) {
   const supa = opts.supabase as any;
-  const apiKey = process.env.POLYGON_API_KEY;
-  if (!apiKey) throw new Error("Missing POLYGON_API_KEY");
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
-  const groupedUrl = `https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/${encodeURIComponent(
-    opts.date
-  )}?adjusted=false&apiKey=${encodeURIComponent(apiKey)}`;
-
-  const res = await fetch(groupedUrl, { cache: "no-store", signal: controller.signal }).finally(() =>
-    clearTimeout(timeout)
-  );
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Polygon grouped fetch failed (${res.status}): ${detail.slice(0, 200)}`);
-  }
-
-  const json = (await res.json().catch(() => null)) as
-    | { results?: Array<Record<string, unknown>> }
-    | null;
-  const groupedRows = Array.isArray(json?.results) ? json.results : [];
+  const provider = getMarketDataProvider();
+  if (!provider.configured) throw new Error(`${provider.label} market data is not configured`);
+  const grouped = await provider.fetchGroupedDailyBars(opts.date);
+  const groupedRows = grouped.bars;
 
   const symbolSet = new Set(opts.symbols);
   const { data: existingRows, error: existingErr } = await supa
@@ -94,7 +56,7 @@ async function ingestGroupedForDate(opts: {
     .select("symbol")
     .eq("date", opts.date)
     .in("symbol", Array.from(symbolSet))
-    .eq("source", "polygon");
+    .eq("source", provider.id);
   if (existingErr) throw existingErr;
   const alreadyPresent = new Set(
     (existingRows ?? [])
@@ -114,14 +76,14 @@ async function ingestGroupedForDate(opts: {
   }> = [];
 
   for (const row of groupedRows) {
-    const symbol = String(row.T ?? "").toUpperCase();
+    const symbol = String(row.symbol ?? "").toUpperCase();
     if (!symbolSet.has(symbol)) continue;
     if (alreadyPresent.has(symbol)) continue;
-    const open = Number(row.o);
-    const high = Number(row.h);
-    const low = Number(row.l);
-    const close = Number(row.c);
-    const volume = Number(row.v);
+    const open = Number(row.open);
+    const high = Number(row.high);
+    const low = Number(row.low);
+    const close = Number(row.close);
+    const volume = Number(row.volume);
     if (
       !Number.isFinite(open) ||
       !Number.isFinite(high) ||
@@ -139,17 +101,18 @@ async function ingestGroupedForDate(opts: {
       low,
       close,
       volume: Math.round(volume),
-      source: "polygon",
+      source: provider.id,
     });
   }
 
   if (upserts.length === 0) {
     return {
       date: opts.date,
-      polygon_path: `/v2/aggs/grouped/locale/us/market/stocks/${opts.date}`,
-      polygon_adjusted: false,
-      polygon_http_status: res.status,
-      polygon_response_status: (json as any)?.status ?? null,
+      provider: provider.id,
+      provider_path: `/v2/aggs/grouped/locale/us/market/stocks/${opts.date}`,
+      provider_adjusted: grouped.adjusted,
+      provider_http_status: grouped.http_status,
+      provider_response_status: grouped.response_status,
       grouped_rows_total: groupedRows.length,
       eligible_symbols: symbolSet.size,
       already_present_rows: alreadyPresent.size,
@@ -168,10 +131,11 @@ async function ingestGroupedForDate(opts: {
   }
   return {
     date: opts.date,
-    polygon_path: `/v2/aggs/grouped/locale/us/market/stocks/${opts.date}`,
-    polygon_adjusted: false,
-    polygon_http_status: res.status,
-    polygon_response_status: (json as any)?.status ?? null,
+    provider: provider.id,
+    provider_path: `/v2/aggs/grouped/locale/us/market/stocks/${opts.date}`,
+    provider_adjusted: grouped.adjusted,
+    provider_http_status: grouped.http_status,
+    provider_response_status: grouped.response_status,
     grouped_rows_total: groupedRows.length,
     eligible_symbols: symbolSet.size,
     already_present_rows: alreadyPresent.size,
@@ -242,6 +206,7 @@ async function writeStatus(payload: Record<string, unknown>) {
 export async function runAutopilot() {
   const startedAt = Date.now();
   const startedAtIso = nowIso();
+  const marketDataProvider = getMarketDataProvider();
   console.info("[daily-autopilot] run:start", {
     started_at: startedAtIso,
     universe_slug: UNIVERSE_SLUG,
@@ -305,7 +270,7 @@ export async function runAutopilot() {
       .from("price_bars")
       .select("date")
       .eq("symbol", "SPY")
-      .eq("source", "polygon")
+      .eq("source", marketDataProvider.id)
       .eq("date", candidate)
       .limit(1)
       .maybeSingle();
@@ -393,6 +358,7 @@ export async function runAutopilot() {
     lctd_before_ingest: lctdDate,
     ingest_candidate_dates: candidateDates,
     lctd_source: lctd.lctd_source,
+    market_data_provider: marketDataProvider.id,
     bars_upserted: barsUpsertedTotal,
     ingest_attempts,
     ingest_selected_attempt: selectedAttempt,
@@ -433,6 +399,7 @@ export async function GET() {
       scan_date: result.scan_date,
       date_used: result.scan_date_used,
       bars_upserted: result.bars_upserted,
+      market_data_provider: result.market_data_provider,
       ingest_attempts: result.ingest_attempts ?? [],
       ingest_candidate_dates: result.ingest_candidate_dates ?? [],
       ingest_selected_attempt: result.ingest_selected_attempt ?? null,

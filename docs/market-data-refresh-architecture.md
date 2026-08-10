@@ -4,7 +4,9 @@
 This document defines the approved `price_bars` ingestion/refresh architecture and classifies all existing code paths.
 
 Core rules:
-- Polygon is the production source of truth for market data.
+- `price_bars` is the scanner's normalized, cache-first source of truth.
+- The active acquisition provider is selected server-side with `MARKET_DATA_PROVIDER`.
+- Polygon remains the active provider during the first provider-abstraction phase.
 - Daily timeframe only.
 - Scanner/manual Ideas scans should use cached DB bars and must not run heavyweight refresh by default.
 
@@ -17,7 +19,7 @@ Core rules:
   - sector populate
   - midcap scans
   - breadth + diagnostics snapshots
-- `runAutopilot()` performs Polygon grouped daily ingest into `price_bars` for `core_800 + SPY` before scans.
+- `runAutopilot()` obtains grouped daily bars through `src/lib/market-data`, normalizes them, and writes `price_bars` for `core_800 + SPY` before scans.
 - This is the canonical production refresh orchestration.
 - Vercel cron config: `vercel.json` schedules `GET /api/jobs/daily-scheduled-scan` at `0 23 * * 1-5` (UTC).
 - Route protection:
@@ -26,7 +28,7 @@ Core rules:
   - manual/admin calls can also use `x-admin-key` (`ADMIN_RUN_SCAN_KEY`) if configured.
 - Daily-autopilot ingest date selection:
   - tries US-today first
-  - if Polygon returns delayed/empty grouped data, falls back through recent weekday dates
+  - if the active provider returns delayed/empty grouped data, falls back through recent market-session dates
   - avoids getting stuck on a stale existing LCTD when newer finalized market bars are already available.
 
 ### 2) Manual/Admin Path
@@ -103,4 +105,23 @@ Core rules:
    - `system_status.key = daily_scheduled_scan_last_run`
    - `system_status.key = daily_autopilot_core_800`
 5. Confirm market-data freshness:
-   - `max(price_bars.date)` advances when Polygon has a newer completed daily bar.
+   - `max(price_bars.date)` advances when the active provider has a newer completed daily bar.
+
+## Provider Boundary
+
+- Provider interface: `src/lib/market-data/types.ts`
+- Provider selector: `src/lib/market-data/index.ts`
+- Current adapter: `src/lib/market-data/polygon.ts`
+- Authenticated health route: `GET /api/market-data/status`
+- Add `?probe=1` to test daily-bar and quote access without exposing credentials.
+
+The production daily ingest, Quality Pullback refresh, and quote endpoint now use this boundary. Scanner and signal code continue to read only normalized cached rows. If provider quote access fails, `/api/quotes` returns the latest cached close with `quote_mode=cached_eod_only` rather than failing the complete trade workflow.
+
+Current configuration:
+
+```bash
+MARKET_DATA_PROVIDER=polygon
+POLYGON_API_KEY=...
+```
+
+An Alpaca adapter can be added later without changing scanner or UI signal calculations.

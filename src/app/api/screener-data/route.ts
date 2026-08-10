@@ -25,6 +25,8 @@ import {
 } from "@/lib/sector_momentum";
 import { allowedUniversesForStrategy, defaultUniverseForStrategy } from "@/lib/strategy_universe";
 import { OBS_KEYS } from "@/lib/observability";
+import { getMarketDataProviderInfo } from "@/lib/market-data";
+import { latestCompletedUsTradingDay, shiftIsoDate } from "@/lib/market-calendar";
 
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY = "v1";
@@ -230,39 +232,6 @@ function classifyBreadth(regimeState: string | null, pct50: number, pct200: numb
   if (favorable && pct50 >= 60 && pct200 >= 50) return { breadthState: "STRONG" as const, breadthLabel: "Breadth strong" };
   if (!favorable || pct50 < 40 || pct200 < 35) return { breadthState: "WEAK" as const, breadthLabel: "Breadth weak" };
   return { breadthState: "MIXED" as const, breadthLabel: "Breadth mixed" };
-}
-
-function shiftDate(date: string, days: number) {
-  const d = new Date(`${date}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-function previousWeekday(date: string) {
-  let current = date;
-  while (true) {
-    current = shiftDate(current, -1);
-    const day = new Date(`${current}T00:00:00Z`).getUTCDay();
-    if (day >= 1 && day <= 5) return current;
-  }
-}
-
-function latestCompletedUsTradingDay() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date());
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  const today = `${get("year")}-${get("month")}-${get("day")}`;
-  const hour = Number(get("hour") || "0");
-  const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
-  if (weekday === 0) return previousWeekday(today);
-  if (weekday === 6) return previousWeekday(today);
-  return hour >= 18 ? today : previousWeekday(today);
 }
 
 function computeSectorBreadth(rows: ScanRow[], regimeState: string | null) {
@@ -592,7 +561,7 @@ const loadScreenerDataCached = unstable_cache(
     );
     const priceHistoryBySymbol = new Map<string, Array<{ date: string; close: number }>>();
     if (resolvedDateUsed && overlapSymbols.length > 0) {
-      const startDate = shiftDate(resolvedDateUsed, -45);
+      const startDate = shiftIsoDate(resolvedDateUsed, -45);
       const { data: overlapBars } = await (supabase as any)
         .from("price_bars")
         .select("symbol,date,close")
@@ -1101,7 +1070,11 @@ const loadScreenerDataCached = unstable_cache(
     const schedulerUpdatedAt = schedulerStatus?.updated_at ? String(schedulerStatus.updated_at) : null;
     const schedulerScanDate = schedulerValue?.scan_date_used ? String(schedulerValue.scan_date_used) : null;
     const expectedLatestTradingDay = latestCompletedUsTradingDay();
+    const marketDataProvider = getMarketDataProviderInfo();
     const marketDataReasons: string[] = [];
+    if (!marketDataProvider.configured) {
+      marketDataReasons.push(`${marketDataProvider.label} provider is not configured; cached bars cannot refresh`);
+    }
     if (!lctd.lctd) {
       marketDataReasons.push("No price_bars LCTD available");
     } else if (lctd.lctd < expectedLatestTradingDay) {
@@ -1184,6 +1157,14 @@ const loadScreenerDataCached = unstable_cache(
         pct_above_sma200: breadth.pctAboveSma200,
         breadth_sample_size: breadth.sampleSize,
         market_data_status: {
+          provider_id: marketDataProvider.id,
+          provider_label: marketDataProvider.label,
+          provider_configured: marketDataProvider.configured,
+          quote_mode: marketDataProvider.capabilities.consolidated_realtime_quotes
+            ? "consolidated_realtime"
+            : marketDataProvider.capabilities.indicative_quotes
+              ? "indicative"
+              : "cached_eod_only",
           is_stale: marketDataReasons.length > 0,
           reasons: marketDataReasons,
           expected_latest_trading_day: expectedLatestTradingDay,

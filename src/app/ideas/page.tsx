@@ -12,9 +12,9 @@ function normalizeIdeasStrategy(input: string | null | undefined) {
   if (raw === "tactical_momentum" || raw === "tactical" || raw === "q" || raw === "qstyle") return "tactical_momentum";
   if (raw === "v1_trend_hold" || raw === "trend") return "v1_trend_hold";
   if (raw === "v1_sector_momentum" || raw === "sector") return "v1_sector_momentum";
-  if (raw === "v1" || raw === "v2_core_momentum" || raw === "momentum" || raw === "core" || raw === "swing" || raw === "")
-    return "v1";
-  return "v1";
+  if (raw === "v1" || raw === "v2_core_momentum" || raw === "momentum" || raw === "core" || raw === "swing") return "v1";
+  if (raw === "" || raw === "today" || raw === "fast") return "tactical_momentum";
+  return "tactical_momentum";
 }
 
 export default async function IdeasPage({
@@ -39,7 +39,7 @@ export default async function IdeasPage({
 }) {
   const { user, portfolios } = await getWorkspaceContext("/ideas");
   const params = (await searchParams) ?? {};
-  const initialStrategy = normalizeIdeasStrategy(params.strategy ?? "v1");
+  const initialStrategy = normalizeIdeasStrategy(params.strategy ?? "tactical_momentum");
   const strategyParamRaw = String(params.strategy ?? "").trim() || null;
   const initialSymbol = String(params.symbol ?? "").trim().toUpperCase() || null;
   const initialUniverse = (() => {
@@ -83,8 +83,8 @@ export default async function IdeasPage({
   return (
     <AppShell currentPath="/ideas" userEmail={user.email ?? ""} portfolios={portfolios}>
       <div className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-[2.1rem]">Strategy Lab</h1>
-        <p className="text-sm leading-6 text-slate-600">Strategy-specific views kept separate from the main time-horizon desks.</p>
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-[2.1rem]">Trade Ideas</h1>
+        <p className="text-sm leading-6 text-slate-600">A focused short-to-medium-term desk. Start with what is actionable, then inspect the research.</p>
       </div>
       <div className="mt-4">
         <IdeasWorkspaceClient
