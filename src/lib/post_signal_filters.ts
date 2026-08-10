@@ -33,6 +33,7 @@ export type PostFilterOutput = {
 };
 
 function toNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : null;
 }
@@ -206,12 +207,9 @@ export function applyPostStrategyFilters(input: PostFilterInputRow, marketRegime
     filterBlockers.push("relative_volume_block");
   }
 
-  const existingBlockers = Array.isArray(reasonJson.filter_blockers)
-    ? reasonJson.filter_blockers.filter((value): value is PostFilterBlocker =>
-        value === "market_regime_block" || value === "earnings_proximity_block" || value === "relative_volume_block"
-      )
-    : [];
-  const mergedBlockers = [...new Set([...existingBlockers, ...filterBlockers])];
+  // These blockers are owned by this stage and must be recomputed. Carrying
+  // prior values forward made corrected or newly available data stay blocked.
+  const mergedBlockers = [...new Set(filterBlockers)];
 
   const nextReasonJson: Record<string, unknown> = {
     ...reasonJson,

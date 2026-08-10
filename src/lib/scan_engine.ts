@@ -159,46 +159,79 @@ async function loadBarsForSymbols(opts: {
   scanDate: string;
 }) {
   const supa = opts.supabase as any;
+  type BarRow = { date: string; open: number; high: number; low: number; close: number; volume: number };
   if (!opts.symbols.length) {
     return {
       ok: true,
-      barsBySymbol: new Map<string, Array<{ date: string; open: number; high: number; low: number; close: number; volume: number }>>(),
+      barsBySymbol: new Map<string, BarRow[]>(),
       error: null,
     };
   }
 
-  const { data, error } = await supa
-    .from("price_bars")
-    .select("symbol,date,open,high,low,close,volume")
-    .in("symbol", opts.symbols)
-    .eq("source", "polygon")
-    .lte("date", opts.scanDate)
-    .order("symbol", { ascending: true })
-    .order("date", { ascending: false });
+  // PostgREST projects commonly cap responses at 1,000 rows. A single query for
+  // 200 symbols silently truncated the history and left most symbols unscored.
+  // Three symbols over 460 calendar days stays below that cap while retaining
+  // enough daily bars for the 260-session strategies.
+  const uniqueSymbols = [...new Set(opts.symbols.map((symbol) => String(symbol).toUpperCase()).filter(Boolean))];
+  const symbolChunks: string[][] = [];
+  for (let index = 0; index < uniqueSymbols.length; index += 3) {
+    symbolChunks.push(uniqueSymbols.slice(index, index + 3));
+  }
+  const start = new Date(`${opts.scanDate}T00:00:00.000Z`);
+  start.setUTCDate(start.getUTCDate() - 460);
+  const startDate = start.toISOString().slice(0, 10);
+  const grouped = new Map<string, BarRow[]>();
+  let nextChunk = 0;
+  let firstError: string | null = null;
 
-  if (error) {
-    return {
-      ok: false,
-      barsBySymbol: new Map<string, Array<{ date: string; open: number; high: number; low: number; close: number; volume: number }>>(),
-      error: error.message,
-    };
+  async function worker() {
+    while (nextChunk < symbolChunks.length && !firstError) {
+      const chunk = symbolChunks[nextChunk++];
+      const { data, error } = await supa
+        .from("price_bars")
+        .select("symbol,date,open,high,low,close,volume")
+        .in("symbol", chunk)
+        .eq("source", "polygon")
+        .gte("date", startDate)
+        .lte("date", opts.scanDate)
+        .order("symbol", { ascending: true })
+        .order("date", { ascending: false })
+        .limit(1000);
+
+      if (error) {
+        firstError = error.message;
+        return;
+      }
+      if ((data?.length ?? 0) >= 1000) {
+        firstError = `Bar history response reached the 1,000-row safety limit for ${chunk.join(", ")}`;
+        return;
+      }
+
+      for (const row of Array.isArray(data) ? data : []) {
+        const symbol = String((row as any)?.symbol ?? "").toUpperCase();
+        if (!symbol) continue;
+        const existing = grouped.get(symbol) ?? [];
+        if (existing.length >= 300) continue;
+        existing.push({
+          date: String((row as any).date),
+          open: Number((row as any).open),
+          high: Number((row as any).high),
+          low: Number((row as any).low),
+          close: Number((row as any).close),
+          volume: Number((row as any).volume),
+        });
+        grouped.set(symbol, existing);
+      }
+    }
   }
 
-  const grouped = new Map<string, Array<{ date: string; open: number; high: number; low: number; close: number; volume: number }>>();
-  for (const row of Array.isArray(data) ? data : []) {
-    const symbol = String((row as any)?.symbol ?? "").toUpperCase();
-    if (!symbol) continue;
-    const existing = grouped.get(symbol) ?? [];
-    if (existing.length >= 300) continue;
-    existing.push({
-      date: String((row as any).date),
-      open: Number((row as any).open),
-      high: Number((row as any).high),
-      low: Number((row as any).low),
-      close: Number((row as any).close),
-      volume: Number((row as any).volume),
-    });
-    grouped.set(symbol, existing);
+  await Promise.all(Array.from({ length: Math.min(8, symbolChunks.length) }, () => worker()));
+  if (firstError) {
+    return {
+      ok: false,
+      barsBySymbol: new Map<string, BarRow[]>(),
+      error: firstError,
+    };
   }
 
   return { ok: true, barsBySymbol: grouped, error: null };

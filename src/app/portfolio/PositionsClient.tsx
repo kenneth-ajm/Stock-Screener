@@ -956,7 +956,7 @@ export default function PositionsClient({
         unrealPct = (last - avgEntry) / avgEntry;
       }
 
-      const defaultMaxHold = (lots[0]?.strategy_version ?? "v2_core_momentum") === "v1_trend_hold" ? 45 : 7;
+      const defaultMaxHold = (lots[0]?.strategy_version ?? "v2_core_momentum") === "v1_trend_hold" ? 30 : 7;
       const planSet = new Set(lots.map((l) => tpPlanSummaryFor(l)));
       const tpPlanSummary = planSet.size === 1 ? (Array.from(planSet)[0] ?? null) : "Mixed";
 
@@ -1516,7 +1516,7 @@ export default function PositionsClient({
                       const strategyVer = p.strategy_version ?? "v2_core_momentum";
                       const key = `${strategyVer}::${String(p.symbol ?? "").trim().toUpperCase()}`;
                       const idea = scanContextByKey?.[key] ?? null;
-                      const maxHold = p.max_hold_days ?? (strategyVer === "v1_trend_hold" ? 45 : 7);
+                      const maxHold = p.max_hold_days ?? (strategyVer === "v1_trend_hold" ? 30 : 7);
                       const heldFrom = p.entry_date ?? p.created_at ?? null;
                       const timeStop = buildTimeStopView(heldFrom, maxHold);
 

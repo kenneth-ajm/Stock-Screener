@@ -42,7 +42,7 @@ export default async function StrategyPage() {
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-2">
         <div className="text-lg font-semibold">0) Universe</div>
         <div className="text-sm text-slate-700">
-          The default universe is <b>Core 800</b> (or Core 600 for tighter selection): US equities, daily timeframe, long-only.
+          Momentum Swing scans <b>Liquid 2000 + Midcap 1000</b>. Trend Continuation scans <b>Core 800 + Liquid 2000</b>. All models remain US equities, daily timeframe, and long-only.
         </div>
         <div className="text-sm text-slate-700">
           Liquidity is enforced in the signal engine: average dollar volume must be at least <b>$50M/day</b>.
@@ -67,7 +67,7 @@ export default async function StrategyPage() {
         </div>
         <ul className="list-disc pl-5 text-sm text-slate-700 space-y-1">
           <li><b>BUY</b> requires all: Close &gt; SMA50 and SMA200, SMA20 &gt; SMA50, SMA50 rising, RSI 50–65, volume spike ≥ 1.2x, and distance from SMA20 ≤ 1.5 ATR.</li>
-          <li><b>WATCH</b> requires: Close &gt; SMA50, trend aligned (above/reclaimed SMA200), RSI 45–70, volume spike ≥ 1.1x, and distance from SMA20 ≤ 2.0 ATR.</li>
+          <li><b>WATCH</b> requires a rising, aligned trend, RSI 45–70, controlled extension, and sufficient liquidity. Relative volume is shown as the missing entry trigger, not used to hide an otherwise valid candidate.</li>
           <li><b>Regime gate</b>: if SPY regime is DEFENSIVE, BUY is downgraded to WATCH.</li>
           <li><b>Global caps</b> per day/universe: BUY ≤ 5 and WATCH ≤ 10 (overflow downgrades deterministically).</li>
         </ul>
@@ -76,11 +76,13 @@ export default async function StrategyPage() {
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-2">
         <div className="text-lg font-semibold">3) Trade plan</div>
         <div className="text-sm text-slate-700">
-          <b>Entry</b> is latest close. <b>Stop</b> is standardized to <b>8% below entry</b>.
+          <b>Entry</b> starts from the latest close. <b>Stop and targets</b> are derived from chart structure and the strategy risk policy.
         </div>
         <div className="text-sm text-slate-700">
-          Targets are fixed at <b>TP1 = +5%</b> and <b>TP2 = +10%</b> with max holding period <b>7 trading days</b>.
-          Suggested management is 50% off at TP1 and remainder at TP2.
+          Momentum Swing is normally held for <b>3–7 trading sessions</b>, with a hard review at day 7. Suggested management is partial profit at TP1, then manage the remainder toward TP2 while respecting the stop.
+        </div>
+        <div className="text-sm text-slate-700">
+          Trend Continuation is normally held for <b>10–20 trading sessions</b>. It is reviewed continuously and has a maximum <b>30-calendar-day</b> holding plan; it is not intended to become a multi-month investment.
         </div>
       </section>
 

@@ -720,7 +720,7 @@ const loadScreenerDataCached = unstable_cache(
         stop: Number(row.stop ?? 0),
         tp1: Number(row.tp1 ?? 0),
         tp2: Number(row.tp2 ?? 0),
-        max_holding_days: strategyVersion === "v1_trend_hold" ? 45 : 7,
+        max_holding_days: strategyVersion === "v1_trend_hold" ? 30 : 7,
       });
       const action = computePortfolioAwareAction(
         {

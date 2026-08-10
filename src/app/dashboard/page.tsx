@@ -600,11 +600,11 @@ export default async function DashboardPage({
             </div>
             <div className="space-y-2">
               <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
-                <span className="font-medium text-slate-900">Swing 2-7D</span>
+                <span className="font-medium text-slate-900">Momentum Swing · 3–7 sessions</span>
                 <span className="text-slate-700">BUY {momentum.buy} / WATCH {momentum.watch}</span>
               </div>
               <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">
-                <span className="font-medium text-slate-900">Hold Lab</span>
+                <span className="font-medium text-slate-900">Trend Continuation · 10–20 sessions</span>
                 <span className="text-slate-700">BUY {trend.buy} / WATCH {trend.watch}</span>
               </div>
               <div className="surface-card flex items-center justify-between px-3 py-2 text-sm">

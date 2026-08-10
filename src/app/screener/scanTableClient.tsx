@@ -219,7 +219,7 @@ function categoryLabel(c: CheckCategory) {
 }
 
 function maxHoldDaysForStrategy(strategyVersion: string) {
-  return strategyVersion === "v1_trend_hold" ? 45 : 7;
+  return strategyVersion === "v1_trend_hold" ? 30 : 7;
 }
 
 function tpModelForStrategy(strategyVersion: string) {

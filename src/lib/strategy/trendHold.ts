@@ -13,7 +13,7 @@ import { buildTechnicalTargets } from "@/lib/target_engine";
 export const TREND_HOLD_DEFAULT_VERSION = "v1_trend_hold";
 export const TREND_HOLD_BUY_CAP = 5;
 export const TREND_HOLD_WATCH_CAP = 10;
-export const TREND_HOLD_MAX_HOLDING_DAYS = 45;
+export const TREND_HOLD_MAX_HOLDING_DAYS = 30;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -111,7 +111,7 @@ export function evaluateTrendHold(opts: {
   const rawStopPct = entry > 0 ? (entry - rawStop) / entry : 0;
   let stop = rawStop;
   let stopAdjusted = false;
-  const stopTooWide = rawStopPct > stopPolicy.max_stop_pct;
+  const stopTooWide = rawStopPct - stopPolicy.max_stop_pct > 1e-9;
   if (rawStopPct < stopPolicy.min_stop_pct) {
     stop = entry * (1 - stopPolicy.min_stop_pct);
     stopAdjusted = true;

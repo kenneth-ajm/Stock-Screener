@@ -1030,6 +1030,9 @@ export default function IdeasWorkspaceClient({
     error: null,
   });
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const strategyDataCacheRef = useRef(
+    new Map<string, Payload | QualityDipPayload | TacticalMomentumPayload>()
+  );
   const tradeTicketRef = useRef<HTMLDivElement | null>(null);
   const entryInputRef = useRef<HTMLInputElement | null>(null);
   const breadth = {
@@ -1073,13 +1076,25 @@ export default function IdeasWorkspaceClient({
 
   useEffect(() => {
     let mounted = true;
-    setLoading(true);
+    const strategyDateHint = scanDateHintByStrategy[strategy];
+    const cacheKey = `${strategy}:${universeMode}:${strategyDateHint ?? "latest"}:${refreshNonce}`;
+    const cached = strategyDataCacheRef.current.get(cacheKey) ?? null;
+    setLoading(!cached);
     if (strategy === "quality_dip" || strategy === "tactical_momentum") {
       const apiBase = strategy === "quality_dip" ? "/api/quality-dip" : "/api/tactical-momentum";
       const apiUrl = refreshNonce > 0 ? `${apiBase}?_bust=${refreshNonce}` : apiBase;
       setLastQualityApiUrl(apiUrl);
       setLastApiUrl(apiUrl);
-      setLastLoadOk(null);
+      setLastLoadOk(cached ? Boolean((cached as QualityDipPayload | TacticalMomentumPayload).ok) : null);
+      if (cached) {
+        if (strategy === "quality_dip") {
+          setQualityDipData(cached as QualityDipPayload);
+          setTacticalData(null);
+        } else {
+          setTacticalData(cached as TacticalMomentumPayload);
+          setQualityDipData(null);
+        }
+      }
       fetch(apiUrl, { cache: "no-store" })
         .then(async (r) => {
           const json = await r.json().catch(() => null);
@@ -1096,6 +1111,7 @@ export default function IdeasWorkspaceClient({
             }
             return;
           }
+          strategyDataCacheRef.current.set(cacheKey, json as QualityDipPayload | TacticalMomentumPayload);
           setLastLoadOk(Boolean(json?.ok));
           if (strategy === "quality_dip") {
             setQualityDipData(json as QualityDipPayload);
@@ -1108,6 +1124,7 @@ export default function IdeasWorkspaceClient({
         .catch((e) => {
           if (!mounted) return;
           setLastLoadOk(false);
+          if (cached) return;
           if (strategy === "quality_dip") {
             setQualityDipData({ ok: false, error: e instanceof Error ? e.message : "Load failed" });
             setTacticalData(null);
@@ -1123,13 +1140,17 @@ export default function IdeasWorkspaceClient({
     }
 
     const qs = new URLSearchParams({ strategy_version: strategy });
-    const strategyDateHint = scanDateHintByStrategy[strategy];
     if (strategyDateHint) qs.set("date", strategyDateHint);
     if (universeMode !== "auto") qs.set("universe_slug", universeMode);
     if (refreshNonce > 0) qs.set("_bust", String(refreshNonce));
     const apiUrl = `/api/screener-data?${qs.toString()}`;
     setLastApiUrl(apiUrl);
-    setLastLoadOk(null);
+    setLastLoadOk(cached ? Boolean((cached as Payload).ok) : null);
+    if (cached) {
+      setData(cached as Payload);
+      setQualityDipData(null);
+      setTacticalData(null);
+    }
     fetch(apiUrl, {
       cache: "no-store",
     })
@@ -1146,6 +1167,7 @@ export default function IdeasWorkspaceClient({
           setQualityDipData(null);
           return;
         }
+        strategyDataCacheRef.current.set(cacheKey, json as Payload);
         setLastLoadOk(Boolean(json?.ok));
         setData(json);
         setQualityDipData(null);
@@ -1153,6 +1175,7 @@ export default function IdeasWorkspaceClient({
       .catch((e) => {
         if (!mounted) return;
         setLastLoadOk(false);
+        if (cached) return;
         setData({ ok: false, error: e instanceof Error ? e.message : "Load failed" });
         setQualityDipData(null);
       })
@@ -2034,7 +2057,7 @@ export default function IdeasWorkspaceClient({
           stop,
           shares: qty,
           strategy_version: strategy,
-          max_hold_days: strategy === "v1_trend_hold" ? 45 : 7,
+          max_hold_days: strategy === "v1_trend_hold" ? 30 : 7,
           tp_model: selectedTpModel,
           entry_fee: entryFeeValue,
           exit_fee: exitFeeValue,
@@ -2876,6 +2899,8 @@ const strategyGuide =
         pool: "Scans active market universes from cached daily bars, then ranks liquid names showing breakout, episodic pivot, or near-trigger behavior.",
         buyList:
           "Names reach the buy list when price action, relative volume, breakout proximity, trend alignment, and SPY context are strong enough for immediate review.",
+        entryRule: "Enter only when price clears the stated trigger with confirming volume; do not anticipate the breakout.",
+        exitRule: "Typical hold is 2–7 sessions. Reduce risk into strength and exit quickly if the breakout fails.",
       }
     : strategy === "quality_dip"
       ? {
@@ -2884,29 +2909,37 @@ const strategyGuide =
           pool: "Only your fixed quality/dip list is checked here. This is intentionally not a market-wide scanner.",
           buyList:
             "Names reach the buy list when the pullback is in the preferred zone, the stock trend is still intact, and SPY is supportive.",
+          entryRule: "Prepare near the current daily price only while the 200-day trend and broad market remain healthy.",
+          exitRule: "Typical hold is 3–15 sessions. Use the 6% stop and chart-derived targets shown in the ticket.",
         }
       : strategy === "v1"
         ? {
-            title: "Swing 2-7D",
-            horizon: "Two-to-seven day breakout and continuation trades",
+            title: "Momentum Swing",
+            horizon: "Usually 3–7 trading sessions · hard review by day 7",
             pool: "Uses the cached swing scan across the selected universe, with Auto choosing the freshest populated universe.",
             buyList:
-              "Names reach the buy list when trend, setup quality, entry zone, risk/reward, volume, and market regime pass the swing filters.",
+              "BUY means trend, price location, volume trigger, liquidity, risk/reward, and market regime all pass. WATCH means the trend is valid but the entry trigger is not complete yet.",
+            entryRule: "Enter only after daily momentum is confirmed, including at least 1.2× relative volume.",
+            exitRule: "Honor the chart stop, take partial profits into technical resistance, and close if momentum has not worked by day 7.",
           }
         : strategy === "v1_sector_momentum"
           ? {
-              title: "Sector Context",
-              horizon: "Leadership discovery and sector/industry confirmation",
-              pool: "Looks for strong industry groups and representative leaders from cached sector momentum scans.",
-              buyList:
-                "Names are listed because their group or theme is showing leadership; use this as context before making an actual trade.",
-            }
-          : {
-              title: "Hold Lab",
-              horizon: "Longer hold / trend-continuation candidates",
+            title: "Sector Context",
+            horizon: "Leadership discovery and sector/industry confirmation",
+            pool: "Looks for strong industry groups and representative leaders from cached sector momentum scans.",
+            buyList:
+              "Names are listed because their group or theme is showing leadership; use this as context before making an actual trade.",
+            entryRule: "Use sector strength as confirmation, not as a standalone entry signal.",
+            exitRule: "Follow the holding window and risk plan of the linked stock setup.",
+          }
+        : {
+              title: "Trend Continuation",
+              horizon: "Usually 10–20 trading sessions · maximum 30 calendar days",
               pool: "Uses cached trend-hold scans for stocks already showing stronger multi-week trend structure.",
               buyList:
-                "Names reach the list when the trend remains constructive, pullbacks are controlled, and the setup still has room versus risk.",
+                "BUY means the long-term moving-average structure, relative strength, liquidity, volatility, market regime, and trade risk all pass. WATCH means the leadership template is intact but one confirmation is incomplete.",
+              entryRule: "Enter a controlled continuation or pullback in an established uptrend; do not chase a stretched price.",
+              exitRule: "Trail the position while leadership persists, respect the chart stop, and force a full review no later than day 30.",
             };
 
   return (
@@ -2987,7 +3020,7 @@ const strategyGuide =
                 : "border-[#e3d5bf] bg-[#fcf8f1] text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Swing Model
+            Momentum Swing
           </button>
           <button
             onClick={() => setStrategy("v1_sector_momentum")}
@@ -3007,7 +3040,7 @@ const strategyGuide =
                 : "border-[#e3d5bf] bg-[#fcf8f1] text-slate-700 hover:bg-[#f3eadc]"
             }`}
           >
-            Hold Research
+            Trend Continuation
           </button>
           </div>
         </div>
@@ -3211,15 +3244,25 @@ const strategyGuide =
       </div>
 
       <section className="surface-panel p-4">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="max-w-3xl">
+        <div className="space-y-3">
+          <div>
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{strategyGuide.horizon}</div>
             <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-900">{strategyGuide.title}</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">{strategyGuide.pool}</p>
           </div>
-          <div className="max-w-md rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm leading-6 text-emerald-900">
-            <span className="font-semibold">Why names appear here: </span>
-            {strategyGuide.buyList}
+          <div className="grid gap-3 border-t border-[#eadfce] pt-3 text-sm leading-5 text-slate-600 md:grid-cols-3">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Signal meaning</div>
+              <p className="mt-1">{strategyGuide.buyList}</p>
+            </div>
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Entry discipline</div>
+              <p className="mt-1">{strategyGuide.entryRule}</p>
+            </div>
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Exit / holding rule</div>
+              <p className="mt-1">{strategyGuide.exitRule}</p>
+            </div>
           </div>
         </div>
       </section>
@@ -4651,14 +4694,14 @@ const strategyGuide =
                 <div className="text-lg font-semibold">{selected.symbol}</div>
                 <div className="text-xs text-slate-500">
                   {strategy === "v1_trend_hold"
-                    ? "Hold Lab"
+                    ? "Trend Continuation · 10–20 sessions"
                     : strategy === "v1_sector_momentum"
                     ? "Sector Context"
                     : isQualityDip
                     ? "Dip Buys"
                     : isTacticalMomentum
                     ? "Today"
-                    : "Swing 2-7D"}
+                    : "Momentum Swing · 3–7 sessions"}
                 </div>
               </div>
               <button onClick={() => setSelected(null)} className="rounded-lg border border-[#dcc9aa] bg-[#f3e7d3] px-2.5 py-1 text-xs font-medium">

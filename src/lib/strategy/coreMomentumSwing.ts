@@ -282,8 +282,9 @@ export function evaluateCoreMomentumSwing(opts: {
   const watchEligible =
     above50 &&
     watchTrendAligned &&
+    sma20Above50 &&
+    sma50Rising &&
     watchRsiOk &&
-    watchVolumeOk &&
     watchNotExtended &&
     liquidityOk &&
     marketCapOk;
@@ -301,7 +302,7 @@ export function evaluateCoreMomentumSwing(opts: {
   const rawStopPct = entry > 0 ? (entry - rawStop) / entry : 0;
   let stop = rawStop;
   let stopAdjusted = false;
-  const stopTooWide = rawStopPct > stopPolicy.max_stop_pct;
+  const stopTooWide = rawStopPct - stopPolicy.max_stop_pct > 1e-9;
   if (rawStopPct < stopPolicy.min_stop_pct) {
     stop = entry * (1 - stopPolicy.min_stop_pct);
     stopAdjusted = true;
@@ -364,9 +365,9 @@ export function evaluateCoreMomentumSwing(opts: {
     },
     {
       key: "volume_watch",
-      label: "Volume spike >= 1.1x (WATCH)",
+      label: "Volume trigger forming >= 1.1x",
       ok: watchVolumeOk,
-      detail: `${volumeSpike.toFixed(2)}x`,
+      detail: `${volumeSpike.toFixed(2)}x; candidate visibility does not require today's trigger`,
     },
     {
       key: "extension_buy",
@@ -436,6 +437,11 @@ export function evaluateCoreMomentumSwing(opts: {
     `liq ${Math.round(avgDollarVolume20 / 1_000_000)}M`,
     downgradedBuyToWatch ? "defensive regime downgrade" : "regime ok",
     stopTooWide ? "STOP_TOO_WIDE" : stopAdjusted ? "stop adjusted to min policy" : "stop policy ok",
+    buyVolumeOk
+      ? "volume trigger present"
+      : rawSignal === "WATCH"
+        ? "waiting for >=1.2x volume trigger"
+        : "volume trigger absent",
     `${passCount}/${checks.length} checks`,
   ].join(" • ");
 

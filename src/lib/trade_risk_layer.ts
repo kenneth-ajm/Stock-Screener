@@ -57,7 +57,7 @@ function toNum(v: unknown): number | null {
 }
 
 function defaultMaxHoldingDays(strategyVersion: string) {
-  return strategyVersion === "v1_trend_hold" ? 45 : 7;
+  return strategyVersion === "v1_trend_hold" ? 30 : 7;
 }
 
 export function buildTradeRiskLayer(input: TradeRiskLayerInput): TradeRiskLayerResult {
