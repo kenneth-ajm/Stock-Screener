@@ -27,6 +27,7 @@ import { allowedUniversesForStrategy, defaultUniverseForStrategy } from "@/lib/s
 import { OBS_KEYS } from "@/lib/observability";
 import { getMarketDataProviderInfo, getMarketQuoteProviderInfo } from "@/lib/market-data";
 import { latestCompletedUsTradingDay, shiftIsoDate } from "@/lib/market-calendar";
+import { computeDecisionStrength } from "@/lib/decision_strength";
 
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY = "v1";
@@ -40,8 +41,8 @@ function normalizeStrategyVersion(input: string | null | undefined) {
   if (!raw) return DEFAULT_STRATEGY;
   if (raw === "trend" || raw === "v1_trend_hold") return "v1_trend_hold";
   if (raw === "sector" || raw === "v1_sector_momentum") return "v1_sector_momentum";
-  if (raw === "momentum" || raw === "swing" || raw === "core" || raw === "v2_core_momentum" || raw === "v1")
-    return "v1";
+  if (raw === "v2_core_momentum") return "v2_core_momentum";
+  if (raw === "momentum" || raw === "swing" || raw === "core" || raw === "v1") return "v1";
   return raw;
 }
 
@@ -51,6 +52,8 @@ type ScanRow = {
   source_scan_date?: string | null;
   signal: "BUY" | "WATCH" | "AVOID";
   confidence: number;
+  technical_score?: number | null;
+  decision_strength?: number | null;
   rank_score?: number | null;
   rank?: number | null;
   quality_score?: number | null;
@@ -215,6 +218,42 @@ function applyDisplayCaps(rows: ScanRow[]) {
   const watchRanked = rankRows(rows.filter((r) => r.signal === "WATCH")).slice(0, WATCH_CAP);
   const avoidRanked = rankRows(rows.filter((r) => r.signal !== "BUY" && r.signal !== "WATCH"));
   return rankRows([...buyRanked, ...watchRanked, ...avoidRanked]).slice(0, MAX_ROWS);
+}
+
+const SIGNAL_PRIORITY: Record<ScanRow["signal"], number> = { AVOID: 0, WATCH: 1, BUY: 2 };
+
+function restoreLegacyPresentationCappedSignal(row: ScanRow): ScanRow {
+  const reason = row.reason_json && typeof row.reason_json === "object" ? row.reason_json : null;
+  const quality = reason?.signal_quality;
+  const qualitySignal =
+    quality && typeof quality === "object"
+      ? String((quality as Record<string, unknown>).quality_signal ?? "").toUpperCase()
+      : "";
+  if (qualitySignal !== "BUY" && qualitySignal !== "WATCH" && qualitySignal !== "AVOID") return row;
+
+  const directBlockers = Array.isArray(reason?.filter_blockers) ? reason.filter_blockers : [];
+  const postFilters = reason?.post_strategy_filters;
+  const postBlockers =
+    postFilters && typeof postFilters === "object" && Array.isArray((postFilters as Record<string, unknown>).blockers)
+      ? ((postFilters as Record<string, unknown>).blockers as unknown[])
+      : [];
+  const strategyDowngrade = reason?.downgraded_buy_to_watch === true;
+  const summaryMatchesOriginal = String(row.reason_summary ?? "").toUpperCase().startsWith(`${qualitySignal} (`);
+  const wasWeakened = SIGNAL_PRIORITY[qualitySignal] > SIGNAL_PRIORITY[row.signal];
+
+  if (!wasWeakened || !summaryMatchesOriginal || strategyDowngrade || directBlockers.length || postBlockers.length) {
+    return row;
+  }
+
+  return {
+    ...row,
+    signal: qualitySignal,
+    reason_json: {
+      ...reason,
+      legacy_presentation_cap_recovered: true,
+      stored_signal_before_recovery: row.signal,
+    },
+  };
 }
 
 function getCheckOk(reasonJson: any, key: string): boolean | null {
@@ -527,6 +566,10 @@ const loadScreenerDataCached = unstable_cache(
         source: dataSource,
       });
     }
+    // Older finalizers rewrote signals to enforce UI caps. Recover only rows whose
+    // persisted explanation proves there was no strategy or post-filter downgrade.
+    rawRows = rawRows.map(restoreLegacyPresentationCappedSignal);
+
     let entryValidatedRows = rawRows;
     if (resolvedDateUsed && rawRows.length > 0 && !isSectorMomentum) {
       const symbols = Array.from(new Set(rawRows.map((r) => String(r.symbol ?? "").trim().toUpperCase()).filter(Boolean)));
@@ -761,22 +804,30 @@ const loadScreenerDataCached = unstable_cache(
         reason_summary: row.reason_summary ?? null,
         reason_json: row.reason_json ?? null,
       });
+      const technicalScore = Number(row.confidence ?? 0);
+      const qualityScore =
+        typeof persistedSignalQuality?.quality_score === "number" && Number.isFinite(persistedSignalQuality.quality_score)
+          ? Number(persistedSignalQuality.quality_score)
+          : Number((quality as any).quality_score ?? 0);
       return {
         symbol: row.symbol,
         universe_slug: String((row as any).universe_slug ?? mappedUniverse ?? "").trim() || null,
         source_scan_date: String((row as any).date ?? resolvedDateUsed ?? "").trim() || null,
         signal: row.signal,
-        confidence: Number(row.confidence ?? 0),
+        confidence: technicalScore,
+        technical_score: technicalScore,
+        decision_strength: computeDecisionStrength({
+          signal: row.signal,
+          technical_score: technicalScore,
+          quality_score: qualityScore,
+        }),
         entry: Number(row.entry ?? 0),
         stop: Number(row.stop ?? 0),
         tp1: Number(row.tp1 ?? 0),
         tp2: Number(row.tp2 ?? 0),
         rank: row.rank ?? null,
         rank_score: row.rank_score ?? null,
-        quality_score:
-          typeof persistedSignalQuality?.quality_score === "number" && Number.isFinite(persistedSignalQuality.quality_score)
-            ? Number(persistedSignalQuality.quality_score)
-            : Number((quality as any).quality_score ?? 0),
+        quality_score: qualityScore,
         risk_grade:
           persistedSignalQuality?.risk_grade === "A" ||
           persistedSignalQuality?.risk_grade === "B" ||

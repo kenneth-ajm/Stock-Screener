@@ -24,9 +24,6 @@ type ScanRow = {
   earnings_date: string | null;
 };
 
-const BUY_CAP = 5;
-const WATCH_CAP = 10;
-
 function toNumber(v: unknown): number | null {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;
@@ -149,16 +146,6 @@ export async function finalizeSignals(opts: FinalizeArgs) {
   const sorted = sortByRankScore(rows);
   sorted.forEach((row, idx) => {
     row.rank = idx + 1;
-  });
-
-  const buyRows = sorted.filter((row) => row.signal === "BUY");
-  buyRows.forEach((row, idx) => {
-    if (idx >= BUY_CAP) row.signal = "WATCH";
-  });
-
-  const watchRows = sorted.filter((row) => row.signal === "WATCH");
-  watchRows.forEach((row, idx) => {
-    if (idx >= WATCH_CAP) row.signal = "AVOID";
   });
 
   const nowIso = new Date().toISOString();

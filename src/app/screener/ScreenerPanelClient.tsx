@@ -8,6 +8,10 @@ type Row = {
   symbol: string;
   signal: "BUY" | "WATCH" | "AVOID";
   confidence: number;
+  technical_score?: number | null;
+  decision_strength?: number | null;
+  universe_slug?: string | null;
+  source_scan_date?: string | null;
   rank?: number | null;
   rank_score?: number | null;
   quality_score?: number | null;
@@ -44,6 +48,15 @@ type ScreenerPayload = {
     regime_state: string | null;
     regime_date: string | null;
     regime_stale: boolean;
+    rows_raw_count?: number;
+    rows_display_count?: number;
+    selected_universe_mode?: "auto_union" | "explicit";
+    allowed_universes?: string[];
+    auto_universe_dates?: Array<{ universe_slug: string; date_used: string | null; rows: number }>;
+    universe_availability?: Record<
+      string,
+      { universe_slug: string; latest_date: string | null; rows: number; has_scans: boolean }
+    >;
   };
   capacity?: {
     slots_left: number;
@@ -60,37 +73,38 @@ type ScreenerPayload = {
 
 export default function ScreenerPanelClient({
   strategyVersion,
-  universeSlug = "core_800",
+  universeSlug = "",
 }: {
   strategyVersion: string;
   universeSlug?: string;
 }) {
-  const [data, setData] = useState<ScreenerPayload | null>(null);
-  const [loading, setLoading] = useState(true);
+  const requestKey = `${strategyVersion}:${universeSlug}`;
+  const [result, setResult] = useState<{ key: string; data: ScreenerPayload | null }>({
+    key: "",
+    data: null,
+  });
+  const data = result.key === requestKey ? result.data : null;
+  const loading = result.key !== requestKey;
 
   useEffect(() => {
     let mounted = true;
-    setLoading(true);
     fetch(
       `/api/screener-data?strategy_version=${encodeURIComponent(strategyVersion)}&universe_slug=${encodeURIComponent(universeSlug)}`,
       { cache: "no-store" }
     )
       .then((res) => res.json())
       .then((json) => {
-        if (mounted) setData(json as ScreenerPayload);
+        if (mounted) setResult({ key: requestKey, data: json as ScreenerPayload });
       })
       .catch((e: unknown) => {
         if (!mounted) return;
         const msg = e instanceof Error ? e.message : "Failed to load screener data";
-        setData({ ok: false, error: msg });
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
+        setResult({ key: requestKey, data: { ok: false, error: msg } });
       });
     return () => {
       mounted = false;
     };
-  }, [strategyVersion, universeSlug]);
+  }, [requestKey, strategyVersion, universeSlug]);
 
   if (loading) {
     return <div className="text-sm muted">Loading screener data...</div>;
@@ -106,6 +120,20 @@ export default function ScreenerPanelClient({
   const regimeState = data.meta?.regime_state ?? null;
   const regimeStale = Boolean(data.meta?.regime_stale);
   const actionable = rows.filter((r) => r.action === "BUY_NOW").length;
+  const allowedUniverses = data.meta?.allowed_universes ?? [];
+  const availability = data.meta?.universe_availability ?? {};
+  const coveredRows = allowedUniverses.reduce(
+    (sum, universe) =>
+      availability[universe]?.latest_date === scanDate ? sum + Number(availability[universe]?.rows ?? 0) : sum,
+    0
+  );
+  const coverageLabel = allowedUniverses
+    .map((universe) => {
+      const stats = availability[universe];
+      const context = stats?.latest_date === scanDate ? "current" : "not merged into current date";
+      return `${universe}: ${Number(stats?.rows ?? 0).toLocaleString()} rows${stats?.latest_date ? ` (${stats.latest_date}, ${context})` : ""}`;
+    })
+    .join(" • ");
 
   const regimeBadge =
     regimeState === "FAVORABLE" ? (
@@ -134,6 +162,19 @@ export default function ScreenerPanelClient({
       <div className="text-xs text-slate-500">
         Market regime (SPY) — as of LCTD • LCTD: <span className="font-mono">{lctd || "—"}</span>
         {" • "}Regime date: <span className="font-mono">{regimeDate || "—"}</span>
+      </div>
+
+      <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 px-3 py-2 text-xs text-slate-600">
+        <div className="font-semibold text-emerald-800">
+          {data.meta?.selected_universe_mode === "auto_union" ? "Broad market coverage" : "Explicit universe"}
+          {coveredRows > 0 ? ` • ${coveredRows.toLocaleString()} stored scan rows` : ""}
+        </div>
+        <div className="mt-1">
+          {coverageLabel || "No populated scan coverage is available for this strategy yet."}
+        </div>
+        <div className="mt-1 text-slate-500">
+          The table is a ranked daily subset; coverage is not limited to the names currently displayed.
+        </div>
       </div>
 
       {data.capacity ? (

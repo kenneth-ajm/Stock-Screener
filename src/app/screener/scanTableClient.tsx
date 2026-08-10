@@ -9,6 +9,10 @@ type Row = {
   symbol: string;
   signal: "BUY" | "WATCH" | "AVOID";
   confidence: number;
+  technical_score?: number | null;
+  decision_strength?: number | null;
+  universe_slug?: string | null;
+  source_scan_date?: string | null;
   quality_score?: number | null;
   risk_grade?: "A" | "B" | "C" | "D" | null;
   quality_signal?: "BUY" | "WATCH" | "AVOID" | null;
@@ -642,8 +646,8 @@ export default function ScanTableClient({
     try {
       const res = await fetch(
         `/api/scan-row-detail?symbol=${encodeURIComponent(row.symbol)}&date=${encodeURIComponent(
-          scanDate
-        )}&universe_slug=core_800&strategy_version=${encodeURIComponent(strategyVersion)}`,
+          row.source_scan_date ?? scanDate
+        )}&universe_slug=${encodeURIComponent(row.universe_slug ?? "")}&strategy_version=${encodeURIComponent(strategyVersion)}`,
         { cache: "no-store" }
       );
       const json = await res.json().catch(() => null);
@@ -1392,7 +1396,7 @@ export default function ScanTableClient({
       </div>
 
       <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 px-3 py-2.5 text-sm text-slate-600">
-        Confidence is a 0–100 score from strict momentum continuation checks: trend alignment, RSI band, volume confirmation, extension control, and regime gating.
+        Decision strength is aligned with BUY, WATCH, or AVOID and helps prioritize the list. Technical score shows checklist fit. Neither is a probability of profit.
       </div>
 
       <div className="grid gap-3 sm:grid-cols-4">
@@ -1567,7 +1571,13 @@ export default function ScanTableClient({
 
                       <div className="text-xs text-slate-600">
                         <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 lg:hidden">Score / hold</div>
-                        <div className="mt-0.5">Confidence <span className="font-semibold text-slate-900">{r.confidence}</span></div>
+                        <div className="mt-0.5">
+                          Decision{" "}
+                          <span className={`font-semibold ${Number(r.decision_strength ?? 0) >= 70 ? "text-emerald-700" : "text-slate-900"}`}>
+                            {fmtInt(Number(r.decision_strength ?? r.quality_score ?? 0))}
+                          </span>
+                        </div>
+                        <div>Technical <span className="font-semibold text-slate-900">{fmtInt(Number(r.technical_score ?? r.confidence ?? 0))}</span></div>
                         <div>
                           Quality{" "}
                           <span className={`font-semibold ${Number(r.quality_score ?? r.confidence ?? 0) >= 80 ? "text-emerald-700" : "text-slate-900"}`}>

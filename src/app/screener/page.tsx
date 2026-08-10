@@ -11,12 +11,18 @@ import { getOrRepairDefaultPortfolio } from "@/lib/get_or_repair_default_portfol
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_UNIVERSE = "core_800";
-const DEFAULT_STRATEGY_VERSION = "v2_core_momentum";
+const DEFAULT_UNIVERSE = "";
+const DEFAULT_STRATEGY_VERSION = "v1";
 const TREND_STRATEGY_VERSION = "v1_trend_hold";
 
 function strategyLabel(version: string) {
   return version === TREND_STRATEGY_VERSION ? "Trend Hold" : "Momentum Swing";
+}
+
+function strategyCoverage(version: string) {
+  return version === TREND_STRATEGY_VERSION
+    ? "Core 800 + Liquid 2000"
+    : "Liquid 2000 + Midcap 1000";
 }
 
 type AutopilotStatus = {
@@ -132,11 +138,11 @@ export default async function ScreenerPage({
         <Card>
           <CardHeader
             title="Latest scan"
-            subtitle={`Universe: Core 800 (${strategyLabel(activeStrategy)})`}
+            subtitle={`${strategyLabel(activeStrategy)} • ${strategyCoverage(activeStrategy)} • latest populated daily scans`}
           />
           <CardContent>
             <div className="mb-3 flex items-center gap-2">
-              <a href="/screener?strategy=v2_core_momentum">
+              <a href="/screener?strategy=v1">
                 <button
                   className={`rounded-xl border px-3 py-1.5 text-sm font-medium ${
                     activeStrategy === DEFAULT_STRATEGY_VERSION
@@ -232,17 +238,17 @@ export default async function ScreenerPage({
         </Card>
       </div>
 
-      <Card>
-        <CardHeader title="Utilities" subtitle="Autopilot-first workflow with optional manual controls" />
-        <CardContent>
+      <details className="rounded-2xl border border-slate-200 bg-white/70 p-4">
+        <summary className="cursor-pointer text-sm font-semibold text-slate-700">Advanced maintenance tools</summary>
+        <div className="mt-4">
           <UtilitiesClient
-            universeSlug={DEFAULT_UNIVERSE}
+            universeSlug={activeStrategy === TREND_STRATEGY_VERSION ? "core_800" : "liquid_2000"}
             strategyVersion={activeStrategy}
             strategyLabel={strategyLabel(activeStrategy)}
             autopilotStatus={autopilotStatus}
           />
-        </CardContent>
-      </Card>
+        </div>
+      </details>
     </div>
   );
 }
