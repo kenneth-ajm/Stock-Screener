@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { buildTechnicalTargets } from "@/lib/target_engine";
+import { supabaseServer } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -93,6 +94,7 @@ async function fetchBarsForSymbol(supabase: any, symbol: string, limit = 260) {
     .from("price_bars")
     .select("date,open,high,low,close,volume")
     .eq("symbol", symbol)
+    .eq("source", "polygon")
     .order("date", { ascending: false })
     .limit(limit);
   if (error) throw error;
@@ -377,7 +379,7 @@ function evaluateRow(item: TacticalMomentumScanItem, barsDesc: PriceBar[], spyHe
   };
 }
 
-export async function GET(req: Request) {
+async function buildTacticalMomentumResponse(req: Request) {
   try {
     const reqUrl = new URL(req.url);
     const maxSymbolsParam = Number(reqUrl.searchParams.get("limit") ?? reqUrl.searchParams.get("max_symbols") ?? "");
@@ -520,4 +522,19 @@ export async function GET(req: Request) {
   } catch (error: any) {
     return NextResponse.json({ ok: false, error: String(error?.message ?? "Failed to load tactical momentum") }, { status: 500 });
   }
+}
+
+// Internal callers must authenticate before using this cached, user-agnostic market dataset.
+export async function loadTacticalMomentumPayloadForServer(req: Request) {
+  const response = await buildTacticalMomentumResponse(req);
+  return (await response.json()) as Record<string, unknown>;
+}
+
+export async function GET(req: Request) {
+  const authClient = await supabaseServer();
+  const {
+    data: { user },
+  } = await authClient.auth.getUser();
+  if (!user) return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
+  return buildTacticalMomentumResponse(req);
 }

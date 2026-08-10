@@ -43,7 +43,9 @@ export async function getActivePortfolioCapacity(opts: CapacityArgs): Promise<Po
     portfolio_id: String(portfolio.id),
   });
   if (!math) return null;
-  const openCount = math.open_count;
+  // Position capacity is diversification capacity: additional lots in an
+  // existing symbol do not consume another symbol slot.
+  const openCount = math.open_symbols_count;
   const deployed = math.deployed_cost_basis;
   const cashAvailable = Number.isFinite(math.cash_available) ? Number(math.cash_available) : 0;
   const cashSource = math.cash_source;

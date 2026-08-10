@@ -5,7 +5,7 @@ export type DailyRecommendationInput = {
   action?: "BUY_NOW" | "WAIT" | "SKIP" | null;
   candidate_state?: string | null;
   quality_score?: number | null;
-  risk_grade?: "A" | "B" | "C" | "D" | null;
+  setup_grade?: "A" | "B" | "C" | "D" | null;
   trade_prep_state?: "READY" | "REVIEW" | "BLOCKED" | null;
   setup_type?: string | null;
   blockers?: string[] | null;
@@ -29,7 +29,7 @@ function first(items: string[] | null | undefined) {
 
 function hardFailure(blockers: string[]) {
   return blockers.some((blocker) =>
-    /invalid stop|invalid entry|below sma200|liquidity|broken trend|risk grade d|defensive state/i.test(blocker)
+    /invalid stop|invalid entry|below sma200|liquidity|broken trend|defensive state/i.test(blocker)
   );
 }
 
@@ -43,14 +43,15 @@ export function buildDailyRecommendation(input: DailyRecommendationInput): Daily
   const trigger = first(input.triggers_to_buy);
   const candidateState = String(input.candidate_state ?? "").toUpperCase();
   const leadership = String(input.leadership_state ?? "UNKNOWN").toUpperCase();
+  const setupGrade = String(input.setup_grade ?? "").toUpperCase();
   const selectionLabel =
-    quality >= 70 && leadership !== "WEAK"
+    quality >= 70 && leadership !== "WEAK" && setupGrade !== "D"
       ? "Strong candidate"
       : quality >= 50 || leadership === "LEADING" || leadership === "IMPROVING"
         ? "Developing candidate"
         : "Weak candidate";
   const riskLabel =
-    input.trade_prep_state === "BLOCKED" || hardFailure(blockers) || input.risk_grade === "D"
+    input.trade_prep_state === "BLOCKED" || hardFailure(blockers)
       ? "Risk blocked"
       : input.trade_prep_state === "READY" && blockers.length === 0
         ? "Risk clear"

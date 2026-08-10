@@ -99,7 +99,10 @@ export async function lookupEarningsRiskForSymbols(symbols: string[]) {
   const apiKey = process.env.POLYGON_API_KEY ?? "";
   const uniq = Array.from(new Set((symbols ?? []).map((s) => String(s ?? "").trim().toUpperCase()).filter(Boolean)));
   const out: Record<string, EarningsRisk> = {};
-  if (!apiKey || uniq.length === 0) return out;
+  // Polygon ticker reference responses do not consistently expose a forward
+  // earnings calendar. Keep the framework inactive unless explicitly enabled
+  // instead of making dozens of requests that usually return no usable date.
+  if (process.env.ENABLE_POLYGON_EARNINGS_LOOKUP !== "1" || !apiKey || uniq.length === 0) return out;
   const results = await Promise.all(
     uniq.map(async (symbol) => {
       const date = await fetchNextEarningsDatePolygon(symbol, apiKey);
@@ -123,4 +126,3 @@ export function applyEarningsRiskToAction(
     reasonLabel: "Earnings upcoming",
   };
 }
-

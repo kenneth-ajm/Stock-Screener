@@ -2,6 +2,7 @@ import AppShell from "@/components/app-shell";
 import IdeasWorkspaceClient from "./IdeasWorkspaceClient";
 import { getWorkspaceContext } from "@/lib/workspace_context";
 import { getBuildMarker } from "@/lib/build_marker";
+import { getActivePortfolioCapacity } from "@/lib/portfolio_capacity";
 
 export const dynamic = "force-dynamic";
 const IDEAS_PAGE_MARKER = "ideas-canonical-20260308-a";
@@ -37,7 +38,11 @@ export default async function IdeasPage({
     manual_universe_slug?: string;
   }>;
 }) {
-  const { user, portfolios } = await getWorkspaceContext("/ideas");
+  const { supabase, user, portfolios } = await getWorkspaceContext("/ideas");
+  const initialCapacity = await getActivePortfolioCapacity({
+    supabase,
+    userId: user.id,
+  });
   const params = (await searchParams) ?? {};
   const initialStrategy = normalizeIdeasStrategy(params.strategy ?? "tactical_momentum");
   const strategyParamRaw = String(params.strategy ?? "").trim() || null;
@@ -97,6 +102,7 @@ export default async function IdeasPage({
           pageMarker={IDEAS_PAGE_MARKER}
           openTicketOnLoad={openTicketOnLoad}
           initialManualContext={manualContext}
+          initialCapacity={initialCapacity}
         />
       </div>
     </AppShell>

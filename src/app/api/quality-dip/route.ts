@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { QUALITY_DIP_WATCHLIST, type QualityDipWatchItem } from "@/lib/quality_dip_watchlist";
 import { buildTechnicalTargets } from "@/lib/target_engine";
+import { supabaseServer } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +60,7 @@ async function fetchBars(supa: SupabaseClient, symbol: string, limit = 260) {
     .from("price_bars")
     .select("date,high,low,close")
     .eq("symbol", symbol)
+    .eq("source", "polygon")
     .order("date", { ascending: false })
     .limit(limit);
   if (error) throw error;
@@ -174,7 +176,7 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
   };
 }
 
-export async function GET() {
+async function buildQualityDipResponse() {
   try {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -286,4 +288,19 @@ export async function GET() {
       { status: 500 }
     );
   }
+}
+
+// Internal callers must authenticate before using this cached, user-agnostic market dataset.
+export async function loadQualityDipPayloadForServer() {
+  const response = await buildQualityDipResponse();
+  return (await response.json()) as Record<string, unknown>;
+}
+
+export async function GET() {
+  const authClient = await supabaseServer();
+  const {
+    data: { user },
+  } = await authClient.auth.getUser();
+  if (!user) return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
+  return buildQualityDipResponse();
 }

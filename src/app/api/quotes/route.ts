@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getMarketDataProvider } from "@/lib/market-data";
+import { supabaseServer } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -33,12 +34,12 @@ function admin() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-async function cachedClose(symbol: string): Promise<QuoteValue | null> {
-  const supabase = admin();
+async function cachedClose(supabase: ReturnType<typeof admin>, symbol: string): Promise<QuoteValue | null> {
   const { data, error } = await supabase
     .from("price_bars")
     .select("date,close")
     .eq("symbol", symbol)
+    .eq("source", "polygon")
     .order("date", { ascending: false })
     .limit(1);
   if (error || !Array.isArray(data) || data.length === 0) return null;
@@ -49,6 +50,12 @@ async function cachedClose(symbol: string): Promise<QuoteValue | null> {
 }
 
 export async function POST(req: Request) {
+  const authClient = await supabaseServer();
+  const {
+    data: { user },
+  } = await authClient.auth.getUser();
+  if (!user) return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
+
   const body = (await req.json().catch(() => ({}))) as Body;
   const symbols = uniqUpper(Array.isArray(body.symbols) ? body.symbols : []).slice(0, 50);
   if (symbols.length === 0) {
@@ -56,6 +63,7 @@ export async function POST(req: Request) {
   }
 
   const provider = getMarketDataProvider();
+  const database = admin();
   const entries = await Promise.all(
     symbols.map(async (symbol) => {
       if (provider.configured) {
@@ -75,7 +83,7 @@ export async function POST(req: Request) {
           });
         }
       }
-      return [symbol, await cachedClose(symbol)] as const;
+      return [symbol, await cachedClose(database, symbol)] as const;
     })
   );
 

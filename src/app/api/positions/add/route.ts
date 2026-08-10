@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { getActivePortfolioCapacity } from "@/lib/portfolio_capacity";
 
 function round2(n: number) {
   return Math.round(n * 100) / 100;
@@ -312,6 +313,9 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
+  if (finalTp1Price !== null && finalTp1Price <= entry_price) {
+    return NextResponse.json({ ok: false, error: "TP1 must be above the actual entry" }, { status: 400 });
+  }
   if (normalizedTpPlan === "tp1_tp2" && finalTp2Pct === null) {
     return NextResponse.json(
       {
@@ -325,32 +329,53 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-
-  // default portfolio
-  const { data: portfolio, error: pErr } = await supabase
-    .from("portfolios")
-    .select("id, max_positions")
-    .eq("user_id", user.id)
-    .eq("is_default", true)
-    .maybeSingle();
-
-  if (pErr || !portfolio) {
-    return NextResponse.json({ ok: false, error: pErr?.message || "No default portfolio" }, { status: 500 });
+  if (
+    normalizedTpPlan === "tp1_tp2" &&
+    finalTp2Price !== null &&
+    (finalTp2Price <= entry_price || (finalTp1Price !== null && finalTp2Price <= finalTp1Price))
+  ) {
+    return NextResponse.json(
+      { ok: false, error: "TP2 must be above the actual entry and TP1" },
+      { status: 400 }
+    );
   }
 
-  // max open positions enforcement
-  const { count, error: cErr } = await supabase
+  const capacity = await getActivePortfolioCapacity({
+    supabase,
+    userId: user.id,
+  });
+  if (!capacity) {
+    return NextResponse.json({ ok: false, error: "Portfolio capacity unavailable" }, { status: 400 });
+  }
+  const { count: existingSymbolLots, error: existingSymbolError } = await supabase
     .from("portfolio_positions")
     .select("id", { count: "exact", head: true })
     .eq("user_id", user.id)
-    .eq("portfolio_id", portfolio.id)
+    .eq("portfolio_id", capacity.portfolio_id)
+    .eq("symbol", symbol)
     .eq("status", "OPEN");
-
-  if (cErr) return NextResponse.json({ ok: false, error: cErr.message }, { status: 500 });
-
-  if ((count ?? 0) >= Number(portfolio.max_positions)) {
+  if (existingSymbolError) {
+    return NextResponse.json({ ok: false, error: existingSymbolError.message }, { status: 500 });
+  }
+  if (capacity.slots_left <= 0 && (existingSymbolLots ?? 0) === 0) {
     return NextResponse.json(
-      { ok: false, error: `Max open positions reached (${portfolio.max_positions}). Close one before adding.` },
+      { ok: false, error: `Max open positions reached (${capacity.max_positions}). Close one before adding.` },
+      { status: 400 }
+    );
+  }
+  const estimatedCost = entry_price * shares + Math.max(0, entry_fee ?? 0);
+  if (estimatedCost > capacity.cash_available) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Insufficient cash for position (cash-only rule)",
+        detail: {
+          cash_available: capacity.cash_available,
+          estimated_cost: estimatedCost,
+          shares,
+          entry_price,
+        },
+      },
       { status: 400 }
     );
   }
@@ -361,7 +386,7 @@ export async function POST(req: Request) {
     .from("portfolio_positions")
     .insert({
       user_id: user.id,
-      portfolio_id: portfolio.id,
+      portfolio_id: capacity.portfolio_id,
       symbol,
       entry_date,
       entry_price,

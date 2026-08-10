@@ -51,9 +51,13 @@ export async function POST(req: Request) {
   if (!Number.isFinite(shares) || shares <= 0) return NextResponse.json({ ok: false, error: "shares must be > 0" }, { status: 400 });
   if (tp1 !== null && (!Number.isFinite(tp1) || tp1 <= 0)) return NextResponse.json({ ok: false, error: "tp1 invalid" }, { status: 400 });
   if (tp2 !== null && (!Number.isFinite(tp2) || tp2 <= 0)) return NextResponse.json({ ok: false, error: "tp2 invalid" }, { status: 400 });
+  if (tp1 !== null && tp1 <= entryPrice) return NextResponse.json({ ok: false, error: "tp1 must be above entry_price" }, { status: 400 });
+  if (tp2 !== null && (tp2 <= entryPrice || (tp1 !== null && tp2 <= tp1))) {
+    return NextResponse.json({ ok: false, error: "tp2 must be above entry_price and tp1" }, { status: 400 });
+  }
 
   const defaultPortfolio = await getOrRepairDefaultPortfolio({
-    supabase: supabase as any,
+    supabase,
     user_id: user.id,
   });
 

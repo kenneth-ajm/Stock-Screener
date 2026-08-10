@@ -3,8 +3,8 @@ import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { unstable_cache } from "next/cache";
-import { GET as getTacticalMomentum } from "@/app/api/tactical-momentum/route";
-import { GET as getQualityDip } from "@/app/api/quality-dip/route";
+import { loadTacticalMomentumPayloadForServer } from "@/app/api/tactical-momentum/route";
+import { loadQualityDipPayloadForServer } from "@/app/api/quality-dip/route";
 import { getMarketDataProvider, getMarketDataProviderInfo } from "@/lib/market-data";
 import { latestCompletedUsTradingDay, marketSessionsBehind } from "@/lib/market-calendar";
 import { getOrRepairDefaultPortfolio } from "@/lib/get_or_repair_default_portfolio";
@@ -54,20 +54,24 @@ function strategyLabel(version: string | null) {
 
 function candidateExecution(args: {
   state: "ACT_NOW" | "NEAR_TRIGGER";
-  quote: number | null;
+  currentPrice: number | null;
   entry: number | null;
+  usesProviderSnapshot: boolean;
 }): { state: CockpitExecutionState; label: string } {
-  if (args.quote == null || args.entry == null || args.entry <= 0) {
-    return { state: "CACHED_CLOSE_ONLY", label: "Plan from completed close" };
+  if (args.currentPrice == null || args.entry == null || args.entry <= 0) {
+    return { state: "CACHED_CLOSE_ONLY", label: "Price alignment unavailable" };
   }
-  const delta = ((args.quote - args.entry) / args.entry) * 100;
+  const delta = ((args.currentPrice - args.entry) / args.entry) * 100;
   if (delta > 2.5) return { state: "DO_NOT_CHASE", label: "Above plan — do not chase" };
   if (args.state === "NEAR_TRIGGER") {
     if (delta >= -0.25) return { state: "AT_TRIGGER_WAIT_CONFIRMATION", label: "At trigger — confirm on daily setup" };
     return { state: "WAIT_FOR_TRIGGER", label: "Wait for trigger" };
   }
   if (delta < -1.5) return { state: "WAIT_FOR_TRIGGER", label: "Below entry reference — reassess" };
-  return { state: "ENTRY_ALIGNED", label: "Price aligned with plan" };
+  return {
+    state: "ENTRY_ALIGNED",
+    label: args.usesProviderSnapshot ? "Current price aligned with plan" : "Completed close aligned with plan",
+  };
 }
 
 function ticketHref(args: {
@@ -100,10 +104,9 @@ function ticketHref(args: {
 
 const loadTacticalCached = unstable_cache(
   async (sourceDate: string | null) => {
-    const response = await getTacticalMomentum(
+    return loadTacticalMomentumPayloadForServer(
       new Request(`http://daily-cockpit.local/api/tactical-momentum?limit=225&source_date=${sourceDate ?? "none"}`)
     );
-    return (await response.json()) as JsonRecord;
   },
   ["daily-cockpit-tactical-v2"],
   { revalidate: 900 }
@@ -112,8 +115,7 @@ const loadTacticalCached = unstable_cache(
 const loadQualityCached = unstable_cache(
   async (sourceDate: string | null) => {
     void sourceDate;
-    const response = await getQualityDip();
-    return (await response.json()) as JsonRecord;
+    return loadQualityDipPayloadForServer();
   },
   ["daily-cockpit-quality-v2"],
   { revalidate: 900 }
@@ -359,6 +361,7 @@ export async function GET() {
       .from("price_bars")
       .select("date,close,source")
       .eq("symbol", "SPY")
+      .eq("source", "polygon")
       .order("date", { ascending: false })
       .limit(1);
     const sourceDate = spyRows?.[0]?.date ? String(spyRows[0].date) : null;
@@ -383,6 +386,7 @@ export async function GET() {
         .from("price_bars")
         .select("symbol,date,close")
         .in("symbol", positionSymbols)
+        .eq("source", "polygon")
         .order("symbol", { ascending: true })
         .order("date", { ascending: false });
       for (const row of priceRows ?? []) {
@@ -422,9 +426,23 @@ export async function GET() {
 
     candidates = candidates.map((candidate) => {
       const quote = quoteBySymbol.get(candidate.symbol) ?? null;
-      const execution = candidateExecution({ state: candidate.state, quote: quote?.price ?? null, entry: candidate.entry_price });
+      const execution = candidateExecution({
+        state: candidate.state,
+        currentPrice: quote?.price ?? candidate.reference_price,
+        entry: candidate.entry_price,
+        usesProviderSnapshot: Boolean(quote),
+      });
+      const sourceIsCurrent = candidate.source_date === expectedDate;
+      const mustWait = candidate.state === "ACT_NOW" && (!sourceIsCurrent || execution.state !== "ENTRY_ALIGNED");
       return {
         ...candidate,
+        state: mustWait ? "NEAR_TRIGGER" : candidate.state,
+        state_label: mustWait ? (sourceIsCurrent ? "Wait" : "Refresh needed") : candidate.state_label,
+        next_trigger: mustWait
+          ? sourceIsCurrent
+            ? execution.label
+            : `Refresh completed daily bars; this setup is from ${candidate.source_date ?? "an unknown date"}.`
+          : candidate.next_trigger,
         quote_price: quote?.price ?? null,
         quote_as_of: quote?.as_of ?? null,
         quote_source: quote ? "provider_snapshot" : "cached_daily_close",

@@ -1,9 +1,3 @@
-type SnapshotArgs = {
-  supabase: any;
-  portfolio_id: string;
-  include_market_value?: boolean;
-};
-
 export type PortfolioSnapshot = {
   portfolio_id: string;
   account_size: number;
@@ -117,6 +111,7 @@ export async function getPortfolioSnapshot(
       .from("price_bars")
       .select("symbol,date,close")
       .in("symbol", symbols)
+      .eq("source", "polygon")
       .order("symbol", { ascending: true })
       .order("date", { ascending: false });
     if (barsErr) throw barsErr;

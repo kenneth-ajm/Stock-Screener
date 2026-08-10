@@ -1,20 +1,20 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { getBuyZone, getEntryStatus } from "@/lib/buy_zone";
-import { mapExecutionState } from "@/lib/execution_state";
-import { applyEarningsRiskToAction, type EarningsRisk } from "@/lib/earnings_risk";
+import { getBuyZone } from "@/lib/buy_zone";
+import type { EarningsRisk } from "@/lib/earnings_risk";
 import { buildIdeaCatalystContext, type TickerProfile } from "@/lib/idea_catalyst";
-import { applyBreadthToAction } from "@/lib/market_breadth";
 import { defaultUniverseForStrategy } from "@/lib/strategy_universe";
 import { buildDailyRecommendation, type DailyRecommendationState } from "@/lib/daily_recommendation";
+import { computePortfolioAwareAction } from "@/lib/execution_action";
+import { evaluateIdeaRuntimeExecution, type RuntimeIdeaExecution } from "@/lib/idea_runtime_execution";
+import type { PortfolioCapacity } from "@/lib/portfolio_capacity";
 
 type StrategyVersion = "v1" | "v1_sector_momentum" | "v1_trend_hold" | "quality_dip" | "tactical_momentum";
 type IdeasFilter = "all" | "buy" | "watch" | "actionable";
 type PortfolioFitState = "GOOD_FIT" | "ALREADY_HELD" | "CAPACITY_LIMITED" | "CROWDED" | "REVIEW";
 type LeadershipState = "LEADING" | "IMPROVING" | "WEAK" | "UNKNOWN";
 type CorrelationState = "LOW" | "MODERATE" | "HIGH" | "VERY_HIGH" | "UNKNOWN";
-type BuyReadinessState = "READY" | "NEAR" | "WAIT" | "BLOCKED";
 
 type IdeaRow = {
   symbol: string;
@@ -164,8 +164,14 @@ function recommendationForIdea(
     action: actionOverride ?? row.action ?? null,
     candidate_state: row.candidate_state ?? null,
     quality_score: row.quality_score ?? row.confidence ?? null,
-    risk_grade: row.risk_grade ?? null,
-    trade_prep_state: row.trade_risk_layer?.prep_state ?? null,
+    setup_grade: row.risk_grade ?? null,
+    trade_prep_state:
+      row.trade_risk_layer?.prep_state ??
+      (row.entry > row.stop && row.stop > 0 && row.tp1 > row.entry
+        ? row.action === "BUY_NOW"
+          ? "READY"
+          : "REVIEW"
+        : "BLOCKED"),
     setup_type: row.setup_type ?? null,
     blockers: row.blockers ?? null,
     triggers_to_buy: row.transition_plan?.triggers_to_buy ?? null,
@@ -344,11 +350,7 @@ type Payload = {
       slots_left?: number;
     } | null;
   };
-  capacity?: {
-    cash_available: number;
-    cash_source: "manual" | "estimated";
-    slots_left: number;
-  } | null;
+  capacity?: PortfolioCapacity | null;
   rows?: IdeaRow[];
   error?: string;
 };
@@ -516,6 +518,7 @@ type NewsItem = {
 };
 type NewsRelevanceState = "SUPPORTIVE" | "NEUTRAL" | "RISK" | "MIXED";
 const PRICE_MISMATCH_THRESHOLD_PCT = 0.6;
+const TACTICAL_ROW_RENDER_LIMIT = 100;
 
 type ManualScanStatus = "idle" | "starting" | "running" | "completed" | "completed_zero" | "failed";
 
@@ -626,126 +629,12 @@ function correlationPill(state: CorrelationState | null | undefined) {
   }
 }
 
-function buyReadinessPill(state: BuyReadinessState | null | undefined) {
-  switch (state) {
-    case "READY":
-      return "border-emerald-200 bg-emerald-50 text-emerald-700";
-    case "NEAR":
-      return "border-sky-200 bg-sky-50 text-sky-700";
-    case "WAIT":
-      return "border-amber-200 bg-amber-50 text-amber-700";
-    default:
-      return "border-rose-200 bg-rose-50 text-rose-700";
-  }
-}
-
 function uniqueStrings(items: Array<string | null | undefined>) {
   return [...new Set(items.filter((item): item is string => Boolean(item && String(item).trim())).map((item) => String(item).trim()))];
 }
 
-function buildBuyReadinessSummary(row: IdeaRow | null) {
-  if (!row) return null;
-  const blockers = Array.isArray(row.blockers) ? row.blockers : [];
-  const fitBlockers = Array.isArray(row.portfolio_fit?.blockers) ? row.portfolio_fit?.blockers : [];
-  const triggers = Array.isArray(row.transition_plan?.triggers_to_buy) ? row.transition_plan?.triggers_to_buy : [];
-  const strengths = Array.isArray(row.transition_plan?.strengths_now) ? row.transition_plan?.strengths_now : [];
-  const reasons = uniqueStrings([...blockers, ...fitBlockers]).slice(0, 4);
-  const supportive = uniqueStrings([
-    row.dossier_summary ? null : null,
-    ...strengths,
-    row.leadership_context?.summary ?? null,
-    row.portfolio_fit?.fit_state === "GOOD_FIT" ? row.portfolio_fit.summary : null,
-  ]).slice(0, 4);
-
-  const hasMarketBlock = reasons.some((item) => /market regime/i.test(item));
-  const hasEarningsBlock = reasons.some((item) => /earnings/i.test(item));
-  const hasExtensionBlock = reasons.some((item) => /extended|pullback into the buy zone/i.test(item));
-  const hasCapacityBlock = reasons.some((item) => /cash|slot|capacity/i.test(item));
-  const hasCrowdingBlock = reasons.some((item) => /crowded|stacked|overlap|holding this symbol/i.test(item));
-  const isBuyNow = row.action === "BUY_NOW";
-  const candidateState = String(row.candidate_state ?? "");
-  const signal = String(row.signal ?? "WATCH").toUpperCase();
-
-  if (isBuyNow && reasons.length === 0 && row.portfolio_fit?.fit_state !== "ALREADY_HELD") {
-    return {
-      state: "READY" as BuyReadinessState,
-      label: "Buy-ready",
-      headline: "This setup is buy-ready under the current rules.",
-      reasons: supportive.length > 0 ? supportive : ["No major timing or portfolio blocker is active right now."],
-      supportive,
-    };
-  }
-
-  if (hasMarketBlock) {
-    return {
-      state: "BLOCKED" as BuyReadinessState,
-      label: "Market blocked",
-      headline: "Not BUY now because market regime is not supportive.",
-      reasons: uniqueStrings([reasons.find((item) => /market regime/i.test(item)) ?? null, triggers[0] ?? null, row.transition_plan?.summary ?? null]).slice(0, 3),
-      supportive,
-    };
-  }
-  if (hasEarningsBlock) {
-    return {
-      state: "BLOCKED" as BuyReadinessState,
-      label: "Earnings blocked",
-      headline: "Not BUY now because earnings risk is too close.",
-      reasons: uniqueStrings([reasons.find((item) => /earnings/i.test(item)) ?? null, triggers[0] ?? null, row.transition_plan?.summary ?? null]).slice(0, 3),
-      supportive,
-    };
-  }
-  if (hasCapacityBlock) {
-    return {
-      state: "WAIT" as BuyReadinessState,
-      label: "Capacity limited",
-      headline: "Not BUY now because portfolio capacity is tight.",
-      reasons: uniqueStrings([reasons.find((item) => /cash|slot|capacity/i.test(item)) ?? null, row.portfolio_fit?.summary ?? null, triggers[0] ?? null]).slice(0, 3),
-      supportive,
-    };
-  }
-  if (hasCrowdingBlock) {
-    return {
-      state: "WAIT" as BuyReadinessState,
-      label: "Exposure crowded",
-      headline: "Not BUY now because the portfolio is already crowded in this area.",
-      reasons: uniqueStrings([reasons.find((item) => /crowded|stacked|overlap|holding this symbol/i.test(item)) ?? null, row.portfolio_fit?.summary ?? null, triggers[0] ?? null]).slice(0, 3),
-      supportive,
-    };
-  }
-  if (hasExtensionBlock) {
-    return {
-      state: "NEAR" as BuyReadinessState,
-      label: "Needs pullback",
-      headline: "Not BUY now because timing still needs a better pullback.",
-      reasons: uniqueStrings([reasons.find((item) => /extended|pullback into the buy zone/i.test(item)) ?? null, triggers[0] ?? null, row.transition_plan?.summary ?? null]).slice(0, 3),
-      supportive,
-    };
-  }
-  if (candidateState == "NEAR_ENTRY" || signal === "BUY") {
-    return {
-      state: "NEAR" as BuyReadinessState,
-      label: "Close to ready",
-      headline: "Close, but not fully BUY-ready yet.",
-      reasons: uniqueStrings([triggers[0] ?? null, row.transition_plan?.summary ?? null, reasons[0] ?? null]).slice(0, 3),
-      supportive,
-    };
-  }
-  if (candidateState == "QUALITY_WATCH" || signal === "WATCH") {
-    return {
-      state: "WAIT" as BuyReadinessState,
-      label: "Watch setup",
-      headline: "Not BUY now because the setup still needs another improvement.",
-      reasons: uniqueStrings([triggers[0] ?? null, row.transition_plan?.summary ?? null, reasons[0] ?? null]).slice(0, 3),
-      supportive,
-    };
-  }
-  return {
-    state: "BLOCKED" as BuyReadinessState,
-    label: "Defensive",
-    headline: "Not BUY now because the setup is currently defensive.",
-    reasons: uniqueStrings([reasons[0] ?? null, row.dossier_summary ?? null, row.transition_plan?.summary ?? null]).slice(0, 3),
-    supportive,
-  };
+function ideaContextKey(row: IdeaRow) {
+  return [row.symbol, row.universe_slug ?? "", row.source_scan_date ?? ""].join("|");
 }
 
 function parseNullableNumber(v: string) {
@@ -943,6 +832,7 @@ export default function IdeasWorkspaceClient({
   pageMarker = "ideas-page-marker-missing",
   openTicketOnLoad = false,
   initialManualContext = null,
+  initialCapacity = null,
 }: {
   initialStrategy?: StrategyVersion;
   initialUniverse?: string;
@@ -952,6 +842,7 @@ export default function IdeasWorkspaceClient({
   buildMarker?: string;
   pageMarker?: string;
   openTicketOnLoad?: boolean;
+  initialCapacity?: PortfolioCapacity | null;
   initialManualContext?: {
     symbol: string;
     signal: "BUY" | "WATCH" | "AVOID" | null;
@@ -989,7 +880,6 @@ export default function IdeasWorkspaceClient({
   const [profileBySymbol, setProfileBySymbol] = useState<Record<string, TickerProfile | null>>({});
   const [companyNames, setCompanyNames] = useState<Record<string, string>>({});
   const [newsBySymbol, setNewsBySymbol] = useState<Record<string, NewsItem[]>>({});
-  const [livePrice, setLivePrice] = useState<number | null>(null);
   const [entryFee, setEntryFee] = useState("");
   const [exitFee, setExitFee] = useState("");
   const [tpPlan, setTpPlan] = useState<"tp1_only" | "tp1_tp2" | "none">("tp1_tp2");
@@ -1055,10 +945,18 @@ export default function IdeasWorkspaceClient({
   );
   const tradeTicketRef = useRef<HTMLDivElement | null>(null);
   const entryInputRef = useRef<HTMLInputElement | null>(null);
-  const breadth = {
-    breadthState: data?.meta?.breadth_state ?? "STRONG",
-    breadthLabel: data?.meta?.breadth_label ?? "Breadth strong",
-  } as const;
+  const breadth = useMemo(
+    () => ({
+      breadthState: data?.meta?.breadth_state ?? "STRONG",
+      breadthLabel: data?.meta?.breadth_label ?? "Breadth strong",
+    } as const),
+    [data?.meta?.breadth_label, data?.meta?.breadth_state]
+  );
+  const activeCapacity = data?.capacity ?? initialCapacity;
+  const isQualityDip = strategy === "quality_dip";
+  const isTacticalMomentum = strategy === "tactical_momentum";
+  const isWatchlistStrategy = isQualityDip || isTacticalMomentum;
+  const isScannerStrategy = !isWatchlistStrategy;
   const runScanBusy = runScanState.status === "starting" || runScanState.status === "running";
   const qualityRefreshBusy = qualityRefreshState.status === "running";
   const marketRefreshBusy = marketRefreshState.status === "running";
@@ -1123,6 +1021,10 @@ export default function IdeasWorkspaceClient({
           setTacticalData(cached as TacticalMomentumPayload);
           setQualityDipData(null);
         }
+        setLoading(false);
+        return () => {
+          mounted = false;
+        };
       }
       fetch(apiUrl, { cache: "no-store" })
         .then(async (r) => {
@@ -1179,6 +1081,10 @@ export default function IdeasWorkspaceClient({
       setData(cached as Payload);
       setQualityDipData(null);
       setTacticalData(null);
+      setLoading(false);
+      return () => {
+        mounted = false;
+      };
     }
     fetch(apiUrl, {
       cache: "no-store",
@@ -1412,15 +1318,15 @@ export default function IdeasWorkspaceClient({
     setTp2Price(modelTp2 > 0 ? modelTp2.toFixed(2) : "");
     setTp1SizePct("50");
     setTp2SizePct("50");
-    const q = quoteBySymbol[selected.symbol];
-    setLivePrice(typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null);
-  }, [selected, quoteBySymbol]);
+  }, [selected]);
 
   useEffect(() => {
     if (!selected || isWatchlistStrategy) return;
     if (detailsLoading || details) return;
     void openDetails();
-  }, [selected?.symbol, selected?.source_scan_date, strategy]);
+  // openDetails is render-local; state guards prevent duplicate dossier requests.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, isWatchlistStrategy, detailsLoading, details, strategy]);
 
   useEffect(() => {
     const symbol = String(selected?.symbol ?? "").trim().toUpperCase();
@@ -1511,7 +1417,7 @@ export default function IdeasWorkspaceClient({
       return;
     }
     setSelected(null);
-  }, [initialSymbol, initialManualContext, openTicketOnLoad, data?.rows]);
+  }, [initialSymbol, initialManualContext, openTicketOnLoad, data?.rows, data?.meta?.date_used, data?.meta?.universe_slug]);
 
   const allRows = useMemo(() => data?.rows ?? [], [data]);
   const qualityRows = useMemo(() => qualityDipData?.rows ?? [], [qualityDipData]);
@@ -1651,8 +1557,18 @@ export default function IdeasWorkspaceClient({
       const breakoutDiff = Number(a.distance_to_breakout_pct ?? 999) - Number(b.distance_to_breakout_pct ?? 999);
       if (breakoutDiff !== 0) return breakoutDiff;
       return a.symbol.localeCompare(b.symbol);
-    });
+    }).slice(0, TACTICAL_ROW_RENDER_LIMIT);
   }, [tacticalRows, tacticalFilter, tacticalSort]);
+  const tacticalRowsMatchedCount = useMemo(
+    () =>
+      tacticalRows.filter((row) => {
+        if (tacticalFilter === "all") return true;
+        if (tacticalFilter === "buy") return row.signal === "BUY";
+        if (tacticalFilter === "watch") return row.signal === "WATCH";
+        return row.signal === "AVOID";
+      }).length,
+    [tacticalFilter, tacticalRows]
+  );
   const tacticalGroupedRows = useMemo(() => {
     const order = [
       "Semis & AI",
@@ -1676,14 +1592,9 @@ export default function IdeasWorkspaceClient({
     [tacticalData]
   );
   const tacticalShortlist = useMemo(() => tacticalData?.meta?.shortlist ?? [], [tacticalData]);
-  const isQualityDip = strategy === "quality_dip";
-  const isTacticalMomentum = strategy === "tactical_momentum";
-  const isWatchlistStrategy = isQualityDip || isTacticalMomentum;
-  const isScannerStrategy = !isWatchlistStrategy;
   const rows = useMemo(() => allRows.slice(0, 10), [allRows]);
   const candidateStateCounts = data?.meta?.candidate_state_counts ?? null;
-  const closestToActionable = data?.meta?.closest_to_actionable ?? [];
-  const improvingRows = data?.meta?.improving_rows ?? [];
+  const closestToActionable = useMemo(() => data?.meta?.closest_to_actionable ?? [], [data?.meta?.closest_to_actionable]);
   const blockerSummary = data?.meta?.blocker_summary ?? [];
   const changeSummary = data?.meta?.change_summary ?? null;
   const evolutionSummary = data?.meta?.evolution_summary ?? null;
@@ -1692,7 +1603,7 @@ export default function IdeasWorkspaceClient({
   const topAtRisk = evolutionSummary?.top_at_risk ?? [];
   const portfolioFitSummary = data?.meta?.portfolio_fit_summary ?? null;
   const portfolioFitCounts = portfolioFitSummary?.counts ?? null;
-  const bestPortfolioFits = portfolioFitSummary?.best_fits ?? [];
+  const bestPortfolioFits = useMemo(() => portfolioFitSummary?.best_fits ?? [], [portfolioFitSummary?.best_fits]);
   const overlapSummary = portfolioFitSummary?.overlap_summary ?? [];
   const portfolioContext = data?.meta?.portfolio_context ?? null;
   const transitionSummary = data?.meta?.transition_summary ?? null;
@@ -1701,14 +1612,16 @@ export default function IdeasWorkspaceClient({
   const correlationCounts = correlationSummary?.counts ?? null;
   const topOverlapIdeas = correlationSummary?.top_overlap ?? [];
   const stalkingSummary = data?.meta?.stalking_summary ?? null;
-  const stalkingQueue = data?.meta?.stalking_queue ?? [];
+  const stalkingQueue = useMemo(() => data?.meta?.stalking_queue ?? [], [data?.meta?.stalking_queue]);
   const builtInCompanyNames = useMemo(() => {
     const names: Record<string, string> = {};
     for (const row of qualityRows) {
       if (row.symbol && row.name) names[row.symbol.toUpperCase()] = row.name;
     }
     for (const row of tacticalRows) {
-      if (row.symbol && row.name) names[row.symbol.toUpperCase()] = row.name;
+      const symbol = String(row.symbol ?? "").trim().toUpperCase();
+      const name = String(row.name ?? "").trim();
+      if (symbol && name && name.toUpperCase() !== symbol) names[symbol] = name;
     }
     return names;
   }, [qualityRows, tacticalRows]);
@@ -1716,6 +1629,7 @@ export default function IdeasWorkspaceClient({
     () =>
       uniqueStrings([
         ...rows.map((row) => row.symbol),
+        ...tacticalRows.slice(0, 40).map((row) => row.symbol),
         ...closestToActionable.slice(0, 6).map((row) => row.symbol),
         ...stalkingQueue.slice(0, 6).map((row) => row.symbol),
         ...bestPortfolioFits.slice(0, 6).map((row) => row.symbol),
@@ -1724,12 +1638,12 @@ export default function IdeasWorkspaceClient({
         .map((symbol) => symbol.toUpperCase())
         .filter((symbol) => !companyNames[symbol] && !builtInCompanyNames[symbol])
         .slice(0, 40),
-    [rows, closestToActionable, stalkingQueue, bestPortfolioFits, selected?.symbol, companyNames, builtInCompanyNames]
+    [rows, tacticalRows, closestToActionable, stalkingQueue, bestPortfolioFits, selected?.symbol, companyNames, builtInCompanyNames]
   );
   const companyLookupKey = companyLookupSymbols.join(",");
 
   useEffect(() => {
-    if (!isScannerStrategy || !companyLookupKey) return;
+    if (!companyLookupKey) return;
     let mounted = true;
     fetch(`/api/company-names?symbols=${encodeURIComponent(companyLookupKey)}`, { cache: "no-store" })
       .then((response) => response.json().catch(() => null))
@@ -1749,30 +1663,67 @@ export default function IdeasWorkspaceClient({
     return () => {
       mounted = false;
     };
-  }, [isScannerStrategy, companyLookupKey]);
+  }, [companyLookupKey]);
 
   function companyNameForSymbol(symbol: string | null | undefined) {
     const normalized = String(symbol ?? "").trim().toUpperCase();
-    return companyNames[normalized] ?? builtInCompanyNames[normalized] ?? profileBySymbol[normalized]?.name ?? null;
+    const candidate = companyNames[normalized] ?? builtInCompanyNames[normalized] ?? profileBySymbol[normalized]?.name ?? null;
+    return candidate && String(candidate).trim().toUpperCase() !== normalized ? candidate : null;
   }
 
+  const evaluatedIdeas = useMemo(
+    () =>
+      allRows.map((row) => {
+        const symbol = String(row.symbol ?? "").trim().toUpperCase();
+        const execution = evaluateIdeaRuntimeExecution({
+          strategyVersion: strategy,
+          entry: Number(row.entry ?? 0),
+          scanClose: row.symbol_facts?.close ?? null,
+          quote: quoteBySymbol[symbol] ?? null,
+          fallbackAction: row.action ?? null,
+          earnings: earningsBySymbol[symbol] ?? null,
+          breadth,
+          priceMismatchThreshold: PRICE_MISMATCH_THRESHOLD_PCT,
+        });
+        return {
+          key: ideaContextKey(row),
+          row,
+          execution,
+          recommendation: recommendationForIdea(row, execution.action),
+        };
+      }),
+    [
+      allRows,
+      breadth,
+      earningsBySymbol,
+      quoteBySymbol,
+      strategy,
+    ]
+  );
+  const evaluatedIdeaByKey = useMemo(
+    () => new Map(evaluatedIdeas.map((item) => [item.key, item])),
+    [evaluatedIdeas]
+  );
   const dailyRecommendationCounts = useMemo(
     () =>
-      rows.reduce(
-        (counts, row) => {
-          counts[recommendationForIdea(row).state] += 1;
+      evaluatedIdeas.reduce(
+        (counts, item) => {
+          counts[item.recommendation.state] += 1;
           return counts;
         },
         { READY_NOW: 0, WAIT_FOR_TRIGGER: 0, RESEARCH: 0, PASS: 0 } as Record<DailyRecommendationState, number>
       ),
-    [rows]
+    [evaluatedIdeas]
   );
   const filteredRows = useMemo(() => {
-    if (selectedFilter === "all") return rows;
-    if (selectedFilter === "buy") return rows.filter((r) => r.signal === "BUY");
-    if (selectedFilter === "watch") return rows.filter((r) => r.signal === "WATCH");
-    return rows.filter((r) => r.signal === "BUY" && r.action !== "SKIP");
-  }, [rows, selectedFilter]);
+    const matched = evaluatedIdeas.filter((item) => {
+      if (selectedFilter === "all") return true;
+      if (selectedFilter === "buy") return item.row.signal === "BUY";
+      if (selectedFilter === "watch") return item.row.signal === "WATCH";
+      return item.recommendation.state === "READY_NOW";
+    });
+    return matched.slice(0, 10).map((item) => item.row);
+  }, [evaluatedIdeas, selectedFilter]);
   const funnel = useMemo(() => {
     const rowsRaw = Number(data?.meta?.rows_raw_count ?? allRows.length ?? 0);
     const rowsValidated = Number(data?.meta?.rows_after_validation_count ?? allRows.length ?? 0);
@@ -1780,37 +1731,13 @@ export default function IdeasWorkspaceClient({
     const signalCounts = data?.meta?.rows_signal_counts_display ?? data?.meta?.rows_signal_counts_validated ?? data?.meta?.rows_signal_counts_raw ?? {};
     const buyCount = Number(signalCounts.buy ?? 0);
     const watchCount = Number(signalCounts.watch ?? 0);
-    const runtime = allRows.reduce(
-      (acc, row) => {
-        const q = quoteBySymbol[row.symbol];
-        const rawLive = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
-        const entry = Number(row.entry ?? 0);
-        const mismatch =
-          rawLive !== null &&
-          entry > 0 &&
-          Math.abs((rawLive - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
-        const live = mismatch ? null : rawLive;
-        const reason =
-          mismatch
-            ? "Price mismatch"
-            : live !== null
-              ? getEntryStatus({
-                  price: live,
-                  zone_low: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_low,
-                  zone_high: getBuyZone({ strategy_version: strategy, model_entry: Number(row.entry) }).zone_high,
-                })
-              : "No live price";
-        const sym = String(row.symbol ?? "").trim().toUpperCase();
-        const earnings = earningsBySymbol[sym] ?? null;
-        const exec = applyBreadthToAction(
-          applyEarningsRiskToAction(mapExecutionState(reason), earnings),
-          breadth
-        );
-        if (row.signal === "BUY") {
+    const runtime = evaluatedIdeas.reduce(
+      (acc, item) => {
+        if (item.row.signal === "BUY") {
           acc.buyRows += 1;
-          if (reason === "Within zone" || reason === "Extended") acc.buyInZone += 1;
-          if (exec.action !== "SKIP") acc.buyNotSkipped += 1;
-          if (exec.action === "BUY NOW") acc.finalActionable += 1;
+          if (item.execution.entryStatus === "Within zone") acc.buyInZone += 1;
+          if (item.execution.action !== "SKIP") acc.buyNotSkipped += 1;
+          if (item.recommendation.state === "READY_NOW") acc.finalActionable += 1;
         }
         return acc;
       },
@@ -1834,7 +1761,7 @@ export default function IdeasWorkspaceClient({
       scope: String(data?.meta?.rows_count_scope ?? "loaded_rows_limit"),
       queryLimit: Number(data?.meta?.rows_query_limit ?? allRows.length ?? 0),
     };
-  }, [allRows, breadth, data?.meta, earningsBySymbol, quoteBySymbol, strategy]);
+  }, [allRows.length, data?.meta, evaluatedIdeas]);
   const universeAvailability = data?.meta?.universe_availability ?? {};
   const coreAvailability = universeAvailability["core_800"] ?? null;
   const midcapAvailability = universeAvailability["midcap_1000"] ?? null;
@@ -1850,7 +1777,7 @@ export default function IdeasWorkspaceClient({
     const raw = Number(data?.meta?.rows_raw_count ?? 0);
     const validated = Number(data?.meta?.rows_after_validation_count ?? 0);
     const display = Number(data?.meta?.rows_display_count ?? filteredRows.length ?? 0);
-    if (display > 0) return null;
+    if (filteredRows.length > 0) return null;
     const strategyUsed = data?.meta?.strategy_version ?? strategy;
     const universeUsed = data?.meta?.universe_slug ?? defaultUniverseForStrategy(strategy);
     const dateShown = data?.meta?.date_used ?? data?.meta?.requested_date ?? data?.meta?.lctd ?? "latest";
@@ -1869,6 +1796,15 @@ export default function IdeasWorkspaceClient({
         return `No rows available for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
       }
       return null;
+    }
+    if (selectedFilter === "actionable") {
+      return "No loaded row currently has a confirmed entry, clear trade-prep plan, and executable portfolio sizing.";
+    }
+    if (selectedFilter === "buy") {
+      return `No BUY rows are available in the loaded ${strategyUsed} scan for ${universeUsed} on ${dateShown}.`;
+    }
+    if (selectedFilter === "watch") {
+      return `No WATCH rows are available in the loaded ${strategyUsed} scan for ${universeUsed} on ${dateShown}.`;
     }
     if (raw === 0) {
       return `No scans available yet for strategy=${strategyUsed}, universe=${universeUsed}, date=${dateShown}`;
@@ -1905,7 +1841,7 @@ export default function IdeasWorkspaceClient({
   const stopNum = Number(selected?.stop ?? 0);
   const riskPerShare = fillNum > 0 && stopNum > 0 ? fillNum - stopNum : 0;
   const riskBudget = Number(selected?.sizing?.risk_budget ?? 0);
-  const cashAvailableForSizing = Number(data?.capacity?.cash_available ?? 0);
+  const cashAvailableForSizing = Number(activeCapacity?.cash_available ?? 0);
   const sharesByRisk =
     riskPerShare > 0 && Number.isFinite(riskBudget) ? Math.max(0, Math.floor(riskBudget / riskPerShare)) : 0;
   const sharesByCash =
@@ -1930,13 +1866,6 @@ export default function IdeasWorkspaceClient({
   const zone = selected
     ? getBuyZone({ strategy_version: strategy, model_entry: Number(selected.entry) })
     : { zone_low: 0, zone_high: 0 };
-  const statusPrice = livePrice ?? (Number.isFinite(fillNum) ? fillNum : null);
-  const entryStatus = getEntryStatus({
-    price: statusPrice,
-    zone_low: zone.zone_low,
-    zone_high: zone.zone_high,
-  });
-
   function openTradeTicket(row: IdeaRow) {
     setSelected(row);
     requestAnimationFrame(() => {
@@ -1987,7 +1916,26 @@ export default function IdeasWorkspaceClient({
       profile: profileBySymbol[symbol] ?? null,
     });
   }, [selected, earningsBySymbol, profileBySymbol]);
-  const selectedBuyReadiness = useMemo(() => buildBuyReadinessSummary(selected), [selected]);
+  const selectedRuntimeExecution = useMemo<RuntimeIdeaExecution | null>(() => {
+    if (!selected) return null;
+    const cached = evaluatedIdeaByKey.get(ideaContextKey(selected));
+    if (cached) return cached.execution;
+    const symbol = String(selected.symbol ?? "").trim().toUpperCase();
+    return evaluateIdeaRuntimeExecution({
+      strategyVersion: strategy,
+      entry: Number(selected.entry ?? 0),
+      scanClose: selected.symbol_facts?.close ?? null,
+      quote: quoteBySymbol[symbol] ?? null,
+      fallbackAction: selected.action ?? null,
+      earnings: earningsBySymbol[symbol] ?? null,
+      breadth,
+      priceMismatchThreshold: PRICE_MISMATCH_THRESHOLD_PCT,
+    });
+  }, [breadth, earningsBySymbol, evaluatedIdeaByKey, quoteBySymbol, selected, strategy]);
+  const selectedRecommendation = useMemo(
+    () => (selected ? recommendationForIdea(selected, selectedRuntimeExecution?.action ?? null) : null),
+    [selected, selectedRuntimeExecution]
+  );
   const selectedNews = useMemo(() => {
     const symbol = String(selected?.symbol ?? "").trim().toUpperCase();
     return symbol ? newsBySymbol[symbol] ?? [] : [];
@@ -2031,13 +1979,13 @@ export default function IdeasWorkspaceClient({
     const entry = Number(fill);
     const stop = Number(selected.stop);
     const qty = Math.floor(Number(shares));
-    const tpAnchorEntry = Number(selected.entry);
+    const tpAnchorEntry = entry;
     if (!(entry > 0) || !(stop > 0) || !(qty > 0) || !(entry > stop)) {
       setError("Enter valid entry, stop, and shares.");
       return;
     }
     if (!Number.isFinite(tpAnchorEntry) || tpAnchorEntry <= 0) {
-      setError("Model entry is invalid for TP planning.");
+      setError("Actual entry is invalid for TP planning.");
       return;
     }
     setSaving(true);
@@ -2190,6 +2138,14 @@ export default function IdeasWorkspaceClient({
         tp2Out =
           parsedTp2 != null && parsedTp2 > 0 ? round2(parsedTp2) : Number(selected.tp2) > 0 ? round2(Number(selected.tp2)) : null;
       }
+    }
+    if (tp1Out !== null && tp1Out <= entry) {
+      setError("TP1 must be above the actual entry.");
+      return;
+    }
+    if (tp2Out !== null && (tp2Out <= entry || (tp1Out !== null && tp2Out <= tp1Out))) {
+      setError("TP2 must be above the actual entry and TP1.");
+      return;
     }
 
     setPaperSaving(true);
@@ -2772,9 +2728,10 @@ export default function IdeasWorkspaceClient({
     if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0) return null;
     const profile = buildTacticalMomentumProfile(row);
     const riskPerShare = Math.max(0, entry - stop);
-    const cashAvailable = Number(data?.capacity?.cash_available ?? 0);
-    const sharesByCash = entry > 0 ? Math.floor(cashAvailable / entry) : 0;
-    const shares = Math.max(0, sharesByCash);
+    const portfolioExecution = computePortfolioAwareAction(
+      { signal: row.signal, entry, stop, confidence: row.signal === "BUY" ? 74 : 61 },
+      activeCapacity
+    );
     return {
       symbol: row.symbol,
       signal: row.signal,
@@ -2790,7 +2747,7 @@ export default function IdeasWorkspaceClient({
       watch_items: profile.watchItems,
       dossier_summary: profile.dossierSummary,
       transition_plan: profile.transitionPlan,
-      action: profile.action,
+      action: profile.action === "BUY_NOW" ? portfolioExecution.action : profile.action,
       entry,
       stop,
       tp1: Number.isFinite(tp1) && tp1 > 0 ? tp1 : round2(entry + riskPerShare * 1.5),
@@ -2842,17 +2799,7 @@ export default function IdeasWorkspaceClient({
       },
       universe_slug: "tactical_momentum_market",
       source_scan_date: row.source_date,
-      sizing: {
-        shares,
-        est_cost: round2(shares * entry),
-        risk_per_share: round2(riskPerShare),
-        risk_budget: round2(riskPerShare * shares),
-        shares_by_risk: shares,
-        shares_by_cash: sharesByCash,
-        shares_by_portfolio_cap: null,
-        limiting_factor: "cash",
-        sizing_mode: "cash_only",
-      },
+      sizing: portfolioExecution.sizing,
     };
   }
 
@@ -2865,10 +2812,10 @@ export default function IdeasWorkspaceClient({
     const mappedSignal: "BUY" | "WATCH" | "AVOID" =
       row.signal === "CONSIDER_BUY" ? "BUY" : row.signal === "WATCH" ? "WATCH" : "AVOID";
     const profile = buildQualityDipProfile(row);
-    const riskPerShare = Math.max(0, entry - stop);
-    const cashAvailable = Number(data?.capacity?.cash_available ?? 0);
-    const sharesByCash = entry > 0 ? Math.floor(cashAvailable / entry) : 0;
-    const shares = Math.max(0, sharesByCash);
+    const portfolioExecution = computePortfolioAwareAction(
+      { signal: mappedSignal, entry, stop, confidence: mappedSignal === "BUY" ? 72 : 60 },
+      activeCapacity
+    );
     return {
       symbol: row.symbol,
       signal: mappedSignal,
@@ -2884,7 +2831,7 @@ export default function IdeasWorkspaceClient({
       watch_items: profile.watchItems,
       dossier_summary: profile.dossierSummary,
       transition_plan: profile.transitionPlan,
-      action: profile.action,
+      action: profile.action === "BUY_NOW" ? portfolioExecution.action : profile.action,
       entry,
       stop,
       tp1,
@@ -2935,17 +2882,7 @@ export default function IdeasWorkspaceClient({
       },
       universe_slug: "quality_dip_watchlist",
       source_scan_date: row.source_date,
-      sizing: {
-        shares,
-        est_cost: round2(shares * entry),
-        risk_per_share: round2(riskPerShare),
-        risk_budget: round2(riskPerShare * shares),
-        shares_by_risk: shares,
-        shares_by_cash: sharesByCash,
-        shares_by_portfolio_cap: null,
-        limiting_factor: "cash",
-        sizing_mode: "cash_only",
-      },
+      sizing: portfolioExecution.sizing,
     };
   }
 
@@ -3334,10 +3271,10 @@ const strategyGuide =
             </span>
           ) : null}
           <span className="surface-chip px-2.5 py-1">
-            Cash: {Number(data?.capacity?.cash_available ?? 0).toFixed(2)}
+            Cash: {Number(activeCapacity?.cash_available ?? 0).toFixed(2)}
           </span>
           <span className="surface-chip px-2.5 py-1">
-            Slots: {data?.capacity?.slots_left ?? 0}
+            Slots: {activeCapacity?.slots_left ?? 0}
           </span>
             </>
           )}
@@ -3528,6 +3465,9 @@ const strategyGuide =
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Daily Decision Desk</div>
             <div className="mt-1 text-sm text-slate-600">
               Leadership finds the stock. Setup quality earns attention. A price-volume trigger and valid risk plan earn an entry.
+            </div>
+            <div className="mt-1 text-[11px] text-slate-500">
+              Counts cover all {evaluatedIdeas.length} loaded rows. The table shows the top 10 rows matching the selected filter.
             </div>
           </div>
           <button
@@ -4405,7 +4345,7 @@ const strategyGuide =
                       <option value="symbol">Symbol</option>
                     </select>
                     <span className="ml-2 text-[11px] text-slate-500">
-                      Today scans active market universes using cached daily bars only. Dip Buys remains the fixed watchlist.
+                      Showing {tacticalRowsView.length} of {tacticalRowsMatchedCount} matching rows. Cached daily bars only.
                     </span>
                   </div>
                   <div className="mt-3 rounded-lg border border-[#eadfce] bg-white px-3 py-2">
@@ -4486,8 +4426,8 @@ const strategyGuide =
                           <tr key={row.symbol} className="border-b border-[#efe5d6]">
                             <td className="px-3 py-2.5 font-semibold tracking-tight">{row.symbol}</td>
                             <td className="px-3 py-2.5">
-                              <div className="truncate text-slate-800" title={row.name}>
-                                {row.name}
+                              <div className="truncate text-slate-800" title={companyNameForSymbol(row.symbol) ?? undefined}>
+                                {companyNameForSymbol(row.symbol) ?? "Company name unavailable"}
                               </div>
                               <div className="truncate text-[11px] text-slate-500" title={row.reason_summary}>
                                 {row.reason_summary}
@@ -4612,6 +4552,9 @@ const strategyGuide =
                     {f.label}
                   </button>
                 ))}
+                <span className="ml-auto text-[11px] text-slate-500">
+                  Showing {filteredRows.length} of {evaluatedIdeas.length} loaded rows
+                </span>
               </div>
             </div>
             <div className="overflow-x-auto">
@@ -4636,32 +4579,22 @@ const strategyGuide =
                     </tr>
                   ) : null}
                   {filteredRows.map((row) => {
-                    const q = quoteBySymbol[row.symbol];
-                    const sym = String(row.symbol ?? "").trim().toUpperCase();
-                    const earnings = earningsBySymbol[sym] ?? null;
-                    const rawLive = typeof q?.price === "number" && Number.isFinite(q.price) ? q.price : null;
+                    const evaluated = evaluatedIdeaByKey.get(ideaContextKey(row));
                     const entry = Number(row.entry ?? 0);
-                    const mismatch = rawLive !== null && entry > 0 && Math.abs((rawLive - entry) / entry) > PRICE_MISMATCH_THRESHOLD_PCT;
-                    const live = mismatch ? null : rawLive;
-                    const referencePrice = live ?? (Number(row.symbol_facts?.close ?? 0) || null);
-                    const deltaPct = live !== null && entry > 0 ? ((live - entry) / entry) * 100 : null;
-                    const reason = mismatch
-                      ? "Price mismatch"
-                      : live !== null
-                        ? getEntryStatus({
-                            price: live,
-                            zone_low: getBuyZone({ strategy_version: strategy, model_entry: entry }).zone_low,
-                            zone_high: getBuyZone({ strategy_version: strategy, model_entry: entry }).zone_high,
-                          })
-                        : "No live price";
-                    const exec = applyBreadthToAction(applyEarningsRiskToAction(mapExecutionState(reason), earnings), breadth);
-                    const runtimeAction = exec.action === "BUY NOW" ? "BUY_NOW" : exec.action === "WAIT" ? "WAIT" : "SKIP";
-                    const recommendation = recommendationForIdea(row, runtimeAction);
+                    const execution = evaluated?.execution ?? evaluateIdeaRuntimeExecution({
+                      strategyVersion: strategy,
+                      entry,
+                      scanClose: row.symbol_facts?.close ?? null,
+                      fallbackAction: row.action ?? null,
+                      breadth,
+                      priceMismatchThreshold: PRICE_MISMATCH_THRESHOLD_PCT,
+                    });
+                    const recommendation = evaluated?.recommendation ?? recommendationForIdea(row, execution.action);
                     const companyName = companyNameForSymbol(row.symbol);
                     const holdPlan = strategy === "v1_trend_hold" ? "10–20 sessions" : "3–7 sessions";
                     return (
                       <tr
-                        key={row.symbol}
+                        key={ideaContextKey(row)}
                         className="cursor-pointer border-b border-[#efe5d6] align-top transition-colors hover:bg-[#fff9f0]"
                         onClick={() => openTradeTicket(row)}
                       >
@@ -4694,16 +4627,17 @@ const strategyGuide =
                           <div className="mt-1 text-[11px] leading-5 text-slate-500">Next: {recommendation.next_step}</div>
                         </td>
                         <td className="px-4 py-3.5 text-[11px] text-slate-600">
-                          <div className="font-semibold text-slate-900">{referencePrice ? `$${referencePrice.toFixed(2)}` : "Price unavailable"}</div>
+                          <div className="font-semibold text-slate-900">{execution.referencePrice ? `$${execution.referencePrice.toFixed(2)}` : "Price unavailable"}</div>
                           <div className="mt-1">Entry ${entry.toFixed(2)}</div>
-                          <div>{deltaPct === null ? exec.reasonLabel : `${fmtSignedPct(deltaPct)} vs entry`}</div>
-                          {mismatch ? <div className="mt-1 text-rose-600">Quote mismatch</div> : null}
+                          <div>{execution.deltaPct === null ? execution.reasonLabel : `${fmtSignedPct(execution.deltaPct)} vs entry`}</div>
+                          <div className="mt-1 text-[10px] text-slate-500">{execution.priceSourceLabel}{execution.referenceAsOf ? ` · ${execution.referenceAsOf}` : ""}</div>
+                          {execution.mismatch ? <div className="mt-1 text-rose-600">Quote mismatch</div> : null}
                         </td>
                         <td className="px-4 py-3.5 text-[11px] text-slate-600">
                           <div>Stop <span className="font-medium text-slate-800">${Number(row.stop ?? 0).toFixed(2)}</span></div>
                           <div className="mt-1">TP1 ${Number(row.tp1 ?? 0).toFixed(2)}</div>
                           <div>TP2 ${Number(row.tp2 ?? 0).toFixed(2)}</div>
-                          <div className="mt-1 text-[10px] text-slate-500">{recommendation.risk_label}{row.risk_grade ? ` · grade ${row.risk_grade}` : ""}</div>
+                          <div className="mt-1 text-[10px] text-slate-500">{recommendation.risk_label}{row.risk_grade ? ` · setup grade ${row.risk_grade}` : ""}</div>
                         </td>
                         <td className="px-4 py-3.5 text-[11px] text-slate-600">
                           <div className="font-medium text-slate-800">{holdPlan}</div>
@@ -4775,35 +4709,28 @@ const strategyGuide =
                 </div>
               </div>
 
-              {selectedBuyReadiness ? (
+              {selectedRecommendation && selectedRuntimeExecution ? (
                 <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="text-xs text-slate-500">Buy readiness</div>
+                      <div className="text-xs text-slate-500">Daily decision</div>
                       <div className="mt-1 text-sm font-medium text-slate-900">
-                        {selectedBuyReadiness.headline}
+                        {selectedRecommendation.headline}
                       </div>
                     </div>
-                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${buyReadinessPill(selectedBuyReadiness.state)}`}>
-                      {selectedBuyReadiness.label}
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${recommendationPill(selectedRecommendation.state)}`}>
+                      {selectedRecommendation.label}
                     </span>
                   </div>
-                  {selectedBuyReadiness.reasons.length > 0 ? (
-                    <ul className="mt-2 space-y-1 text-[11px] text-slate-600">
-                      {selectedBuyReadiness.reasons.slice(0, 3).map((item) => (
-                        <li key={item}>• {item}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {selectedBuyReadiness.supportive.length > 0 ? (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {selectedBuyReadiness.supportive.slice(0, 3).map((item) => (
-                        <span key={item} className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                          {item}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
+                  <div className="mt-2 text-[11px] leading-5 text-slate-600">Next: {selectedRecommendation.next_step}</div>
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 font-semibold text-slate-600">
+                      {selectedRuntimeExecution.priceSourceLabel}{selectedRuntimeExecution.referenceAsOf ? ` · ${selectedRuntimeExecution.referenceAsOf}` : ""}
+                    </span>
+                    <span className={`rounded-full border px-2 py-0.5 font-semibold ${actionPill(selectedRuntimeExecution.displayAction)}`}>
+                      {selectedRuntimeExecution.displayAction}
+                    </span>
+                  </div>
                 </div>
               ) : null}
 
@@ -5361,39 +5288,33 @@ const strategyGuide =
                   </div>
                 </div>
                 <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
-                  <div className="text-xs text-slate-500">Live price</div>
+                  <div className="text-xs text-slate-500">Decision price</div>
                   <div className="mt-1 font-semibold">
-                    {livePrice != null && selected.entry > 0 && Math.abs((livePrice - selected.entry) / selected.entry) <= PRICE_MISMATCH_THRESHOLD_PCT
-                      ? livePrice.toFixed(2)
+                    {selectedRuntimeExecution?.referencePrice != null && !selectedRuntimeExecution.mismatch
+                      ? selectedRuntimeExecution.referencePrice.toFixed(2)
                       : "—"}
                   </div>
                   <div className="mt-2 space-y-1">
                     {(() => {
                       const sym = String(selected.symbol ?? "").trim().toUpperCase();
                       const earnings = earningsBySymbol[sym] ?? null;
-                      const mismatch =
-                        livePrice != null &&
-                        selected.entry > 0 &&
-                        Math.abs((livePrice - selected.entry) / selected.entry) > PRICE_MISMATCH_THRESHOLD_PCT;
-                      const reason = mismatch ? "Price mismatch" : livePrice != null ? entryStatus : "No live price";
-                      const exec = applyBreadthToAction(
-                        applyEarningsRiskToAction(mapExecutionState(reason), earnings),
-                        breadth
-                      );
                       return (
                         <>
-                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(exec.action)}`}>
-                            {exec.action}
-                          </span>
-                          <div className="text-[11px] text-slate-500">{exec.reasonLabel}</div>
+                          {selectedRuntimeExecution ? (
+                            <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${actionPill(selectedRuntimeExecution.displayAction)}`}>
+                              {selectedRuntimeExecution.displayAction}
+                            </span>
+                          ) : null}
+                          <div className="text-[11px] text-slate-500">{selectedRuntimeExecution?.reasonLabel ?? "Price context unavailable"}</div>
+                          <div className="text-[10px] text-slate-500">{selectedRuntimeExecution?.priceSourceLabel ?? "Price unavailable"}</div>
                           {earnings?.earningsLabel ? (
                             <div className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
                               {earnings.earningsLabel}
                             </div>
                           ) : null}
-                          {exec.breadthLabel ? (
+                          {selectedRuntimeExecution?.breadthLabel ? (
                             <div className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                              {exec.breadthLabel}
+                              {selectedRuntimeExecution.breadthLabel}
                             </div>
                           ) : null}
                         </>
@@ -5425,6 +5346,16 @@ const strategyGuide =
                             : null;
                         const nextCandidates = [nextByRisk, nextByCash, ...(nextCap != null ? [nextCap] : [])];
                         setShares(String(Math.max(0, Math.min(...nextCandidates))));
+                      }
+                    }
+                    if (Number.isFinite(n) && n > 0) {
+                      const currentTp1 = Number(tp1Price);
+                      const currentTp2 = Number(tp2Price);
+                      if (Number.isFinite(currentTp1) && currentTp1 > n) {
+                        setTp1Pct(String(round1(((currentTp1 / n) - 1) * 100)));
+                      }
+                      if (Number.isFinite(currentTp2) && currentTp2 > n) {
+                        setTp2Pct(String(round1(((currentTp2 / n) - 1) * 100)));
                       }
                     }
                   }}
@@ -5485,7 +5416,7 @@ const strategyGuide =
                     value={tpPlan}
                     onChange={(e) => {
                       const nextPlan = e.target.value as "tp1_only" | "tp1_tp2" | "none";
-                      const anchor = Number(selected.entry ?? 0);
+                      const anchor = fillNum > 0 ? fillNum : Number(selected.entry ?? 0);
                       const defaultTp1 = modelTp1Pct > 0 ? modelTp1Pct : strategy === "v1_trend_hold" ? 10 : 5;
                       const defaultTp2 = modelTp2Pct > 0 ? modelTp2Pct : strategy === "v1_trend_hold" ? 20 : 10;
                       setTpPlan(nextPlan);
@@ -5520,7 +5451,7 @@ const strategyGuide =
                   </select>
                 </div>
 
-                <div className="mb-3 text-xs text-slate-500">Based on entry: {selected.entry.toFixed(2)}</div>
+                <div className="mb-3 text-xs text-slate-500">Based on actual entry: {(fillNum > 0 ? fillNum : selected.entry).toFixed(2)}</div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div
@@ -5556,7 +5487,7 @@ const strategyGuide =
                           const v = e.target.value;
                           setTp1Pct(v);
                           const n = Number(v);
-                          const anchor = Number(selected.entry ?? 0);
+                          const anchor = fillNum > 0 ? fillNum : Number(selected.entry ?? 0);
                           if (Number.isFinite(n) && n > 0 && Number.isFinite(anchor) && anchor > 0) {
                             setTp1Price(round2(anchor * (1 + n / 100)).toFixed(2));
                           }
@@ -5573,7 +5504,7 @@ const strategyGuide =
                           const v = e.target.value;
                           setTp1Price(v);
                           const p = Number(v);
-                          const anchor = Number(selected.entry ?? 0);
+                          const anchor = fillNum > 0 ? fillNum : Number(selected.entry ?? 0);
                           if (Number.isFinite(p) && p > 0 && Number.isFinite(anchor) && anchor > 0) {
                             setTp1Pct(String(round1(((p / anchor) - 1) * 100)));
                           }
@@ -5603,7 +5534,7 @@ const strategyGuide =
                           const v = e.target.value;
                           setTp2Pct(v);
                           const n = Number(v);
-                          const anchor = Number(selected.entry ?? 0);
+                          const anchor = fillNum > 0 ? fillNum : Number(selected.entry ?? 0);
                           if (Number.isFinite(n) && n > 0 && Number.isFinite(anchor) && anchor > 0) {
                             setTp2Price(round2(anchor * (1 + n / 100)).toFixed(2));
                           }
@@ -5620,7 +5551,7 @@ const strategyGuide =
                           const v = e.target.value;
                           setTp2Price(v);
                           const p = Number(v);
-                          const anchor = Number(selected.entry ?? 0);
+                          const anchor = fillNum > 0 ? fillNum : Number(selected.entry ?? 0);
                           if (Number.isFinite(p) && p > 0 && Number.isFinite(anchor) && anchor > 0) {
                             setTp2Pct(String(round1(((p / anchor) - 1) * 100)));
                           }

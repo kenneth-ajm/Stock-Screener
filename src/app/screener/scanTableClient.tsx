@@ -369,7 +369,6 @@ export default function ScanTableClient({
   const [modalJson, setModalJson] = useState<any>(null);
   const [modalKind, setModalKind] = useState<"CALC" | "OPEN" | "WHY" | "GENERIC">("GENERIC");
   const [modalBusy, setModalBusy] = useState(false);
-  const [calcBySymbol, setCalcBySymbol] = useState<Record<string, any>>({});
   const [ticketSymbol, setTicketSymbol] = useState<string | null>(null);
   const [ticketShares, setTicketShares] = useState<string>("");
   const [ticketEntry, setTicketEntry] = useState<string>("");
@@ -598,9 +597,6 @@ export default function ScanTableClient({
       );
       setStaleOpenConfirmed(false);
       setTicketError(null);
-      if (json?.ok) {
-        setCalcBySymbol((prev) => ({ ...prev, [row.symbol]: json }));
-      }
       openModal("CALC", `Position sizing: ${row.symbol}`, json ?? { ok: false, error: "No response" }, "Uses your active portfolio risk settings.");
     } catch (e: any) {
       openModal("CALC", `Position sizing: ${row.symbol}`, { ok: false, error: e?.message ?? "Failed" });
@@ -1511,7 +1507,7 @@ export default function ScanTableClient({
                       <td className="p-3 text-slate-800 font-semibold">{r.confidence}</td>
                       <td className="p-3 text-slate-800">
                         <div className="font-semibold">{fmtInt(Number(r.quality_score ?? r.confidence ?? 0))}</div>
-                        <div className="text-[10px] text-slate-500">{r.risk_grade ? `Risk ${r.risk_grade}` : "Risk —"}</div>
+                        <div className="text-[10px] text-slate-500">{r.risk_grade ? `Setup grade ${r.risk_grade}` : "Setup grade —"}</div>
                       </td>
                       <td className="p-3 text-slate-800">{fmt2(Number(r.entry))}</td>
                       <td className="p-3 text-slate-800">

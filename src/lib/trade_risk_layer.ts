@@ -20,13 +20,6 @@ export type TradeRiskLayerResult = {
     rr_tp1: number;
     rr_tp2: number;
   };
-  sizing_hint: {
-    risk_budget_1pct: number;
-    risk_budget_2pct: number;
-    shares_at_1pct: number;
-    shares_at_2pct: number;
-    est_cost_at_2pct: number;
-  };
   flags: string[];
 };
 
@@ -77,11 +70,6 @@ export function buildTradeRiskLayer(input: TradeRiskLayerInput): TradeRiskLayerR
   const rrTp1 = riskPerShare > 0 ? (tp1 - entry) / riskPerShare : 0;
   const rrTp2 = riskPerShare > 0 ? (tp2 - entry) / riskPerShare : 0;
 
-  const riskBudget1 = 1000;
-  const riskBudget2 = 2000;
-  const sharesAt1 = riskPerShare > 0 ? Math.floor(riskBudget1 / riskPerShare) : 0;
-  const sharesAt2 = riskPerShare > 0 ? Math.floor(riskBudget2 / riskPerShare) : 0;
-
   const flags: string[] = [];
   if (!(entry > 0)) flags.push("invalid_entry");
   if (!(stop > 0) || !(stop < entry)) flags.push("invalid_stop");
@@ -126,13 +114,6 @@ export function buildTradeRiskLayer(input: TradeRiskLayerInput): TradeRiskLayerR
       tp2_pct: round2(tp2Pct),
       rr_tp1: round2(rrTp1),
       rr_tp2: round2(rrTp2),
-    },
-    sizing_hint: {
-      risk_budget_1pct: riskBudget1,
-      risk_budget_2pct: riskBudget2,
-      shares_at_1pct: sharesAt1,
-      shares_at_2pct: sharesAt2,
-      est_cost_at_2pct: round2(sharesAt2 * entry),
     },
     flags,
   };
