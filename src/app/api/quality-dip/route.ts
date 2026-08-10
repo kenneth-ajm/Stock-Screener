@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { QUALITY_DIP_WATCHLIST, type QualityDipWatchItem } from "@/lib/quality_dip_watchlist";
 import { buildTechnicalTargets } from "@/lib/target_engine";
 
@@ -21,6 +21,9 @@ type QualityDipRow = {
   stop_price: number | null;
   tp1_price: number | null;
   tp2_price: number | null;
+  target_model: string | null;
+  tp1_reason: string | null;
+  tp2_reason: string | null;
   reason_summary: string;
   source_date: string | null;
   bars_count: number;
@@ -45,7 +48,13 @@ function round2(n: number | null) {
   return Math.round(n * 100) / 100;
 }
 
-async function fetchBars(supa: any, symbol: string, limit = 260) {
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error) return String(error.message);
+  return typeof error === "string" ? error : "Failed to load Quality Dip watchlist";
+}
+
+async function fetchBars(supa: SupabaseClient, symbol: string, limit = 260) {
   const { data, error } = await supa
     .from("price_bars")
     .select("date,high,low,close")
@@ -55,7 +64,7 @@ async function fetchBars(supa: any, symbol: string, limit = 260) {
   if (error) throw error;
   const rows = Array.isArray(data) ? data : [];
   return rows
-    .map((row: any) => ({
+    .map((row: Record<string, unknown>) => ({
       date: typeof row?.date === "string" ? row.date : null,
       high: toNumber(row?.high),
       low: toNumber(row?.low),
@@ -80,6 +89,9 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
       stop_price: null,
       tp1_price: null,
       tp2_price: null,
+      target_model: null,
+      tp1_reason: null,
+      tp2_reason: null,
       reason_summary: "Insufficient price history (need at least 30 daily bars).",
       source_date: barsDesc?.[0]?.date ?? null,
       bars_count: barsDesc.length,
@@ -153,6 +165,9 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
     stop_price: stop,
     tp1_price: targets.tp1,
     tp2_price: targets.tp2,
+    target_model: targets.target_model,
+    tp1_reason: targets.tp1_reason,
+    tp2_reason: targets.tp2_reason,
     reason_summary: `${dipText} • ${dropText} • ${trendText} • ${marketText}`,
     source_date: latest.date,
     bars_count: barsDesc.length,
@@ -167,7 +182,7 @@ export async function GET() {
       return NextResponse.json({ ok: false, error: "Missing Supabase environment" }, { status: 500 });
     }
 
-    const supabase = createClient(url, key, { auth: { persistSession: false } }) as any;
+    const supabase = createClient(url, key, { auth: { persistSession: false } });
     const spyBars = await fetchBars(supabase, "SPY", 260);
     if (spyBars.length < 200) {
       return NextResponse.json(
@@ -189,12 +204,19 @@ export async function GET() {
     const missingSymbols: string[] = [];
     const symbolDates: Array<{ symbol: string; source_date: string | null }> = [];
 
-    for (const item of QUALITY_DIP_WATCHLIST) {
-      const bars = await fetchBars(supabase, item.symbol, 260);
-      if (bars.length < 30) missingSymbols.push(item.symbol);
-      const evaluated = evaluateRow(item, bars, spyAboveSma200);
-      rows.push(evaluated);
-      symbolDates.push({ symbol: item.symbol, source_date: evaluated.source_date });
+    for (let index = 0; index < QUALITY_DIP_WATCHLIST.length; index += 12) {
+      const chunk = QUALITY_DIP_WATCHLIST.slice(index, index + 12);
+      const evaluatedChunk = await Promise.all(
+        chunk.map(async (item) => {
+          const bars = await fetchBars(supabase, item.symbol, 260);
+          return { item, bars, evaluated: evaluateRow(item, bars, spyAboveSma200) };
+        })
+      );
+      for (const result of evaluatedChunk) {
+        if (result.bars.length < 30) missingSymbols.push(result.item.symbol);
+        rows.push(result.evaluated);
+        symbolDates.push({ symbol: result.item.symbol, source_date: result.evaluated.source_date });
+      }
     }
 
     const counts = rows.reduce(
@@ -255,11 +277,11 @@ export async function GET() {
         missing_symbols: missingSymbols,
       },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
       {
         ok: false,
-        error: String(error?.message ?? "Failed to load Quality Dip watchlist"),
+        error: errorMessage(error),
       },
       { status: 500 }
     );
