@@ -300,7 +300,7 @@ function Modal({
 
   return (
     <div
-      className="fixed inset-0 z-[9999]"
+      className="fixed inset-0 z-[9999] overflow-y-auto overscroll-contain"
       onKeyDown={(e) => {
         if (e.key === "Escape") onClose();
       }}
@@ -311,15 +311,15 @@ function Modal({
         aria-hidden="true"
       />
       {/* pin near top so you don't "lose" it */}
-      <div className="pointer-events-none absolute inset-0 flex items-start justify-center p-4 pt-10">
+      <div className="pointer-events-none flex min-h-full items-start justify-center p-3 sm:p-4 sm:pt-6">
         <div
           ref={panelRef}
           role="dialog"
           aria-modal="true"
           tabIndex={-1}
-          className="pointer-events-auto relative z-[10000] flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+          className="pointer-events-auto relative z-[10000] flex max-h-[calc(100dvh-1.5rem)] min-h-0 w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100dvh-3rem)]"
         >
-          <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
+          <div className="shrink-0 flex items-start justify-between gap-3 border-b border-slate-200 p-4">
             <div>
               <div className="text-base font-semibold text-slate-900">{title}</div>
               {subtitle ? <div className="mt-1 text-xs text-slate-500">{subtitle}</div> : null}
@@ -332,7 +332,7 @@ function Modal({
             </button>
           </div>
 
-          <div className="max-h-[80vh] overflow-y-auto overscroll-contain p-4 pr-1">{children}</div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">{children}</div>
         </div>
       </div>
     </div>

@@ -354,11 +354,11 @@ function Modal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50">
+    <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
-      <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
-          <div className="flex items-start justify-between gap-3">
+      <div className="pointer-events-none relative flex min-h-full items-start justify-center p-3 sm:items-center sm:p-4">
+        <div className="pointer-events-auto relative flex max-h-[calc(100dvh-1.5rem)] min-h-0 w-full max-w-md flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100dvh-2rem)]">
+          <div className="shrink-0 flex items-start justify-between gap-3 border-b border-slate-200 p-5">
             <div className="text-base font-semibold text-slate-900">{title}</div>
             <button
               className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 hover:bg-slate-50"
@@ -367,7 +367,7 @@ function Modal({
               Close
             </button>
           </div>
-          <div className="mt-4">{children}</div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5">{children}</div>
         </div>
       </div>
     </div>

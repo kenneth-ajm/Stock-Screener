@@ -4758,13 +4758,13 @@ const strategyGuide =
 
       <div
         ref={tradeTicketRef}
-        className={`fixed right-0 top-0 z-50 h-full w-full max-w-xl transform border-l border-[#decdae] bg-[#fff8ee] shadow-[0_18px_40px_rgba(60,42,20,0.18)] transition ${
+        className={`fixed right-0 top-0 z-50 h-[100dvh] max-h-[100dvh] w-full max-w-xl transform overflow-hidden border-l border-[#decdae] bg-[#fff8ee] shadow-[0_18px_40px_rgba(60,42,20,0.18)] transition ${
           selected ? "translate-x-0" : "translate-x-full"
         }`}
       >
         {selected ? (
-          <div className="flex h-full flex-col">
-            <div className="flex items-center justify-between border-b border-[#e3d2b6] px-4 py-3">
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="shrink-0 flex items-center justify-between border-b border-[#e3d2b6] px-4 py-3">
               <div>
                 <div className="text-lg font-semibold">{selected.symbol}</div>
                 {companyNameForSymbol(selected.symbol) ? (
@@ -4786,7 +4786,7 @@ const strategyGuide =
                 Close
               </button>
             </div>
-            <div className="flex-1 space-y-4 overflow-y-auto p-4 text-sm">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 text-sm">
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                   <div className="text-xs text-slate-500">Model entry</div>
@@ -5836,7 +5836,7 @@ const strategyGuide =
               </div>
               {error ? <div className="text-sm text-rose-600">{error}</div> : null}
             </div>
-            <div className="border-t border-[#e3d2b6] p-4">
+            <div className="shrink-0 border-t border-[#e3d2b6] bg-[#fff8ee] p-4">
               <div className="grid gap-2 sm:grid-cols-2">
                 <button
                   onClick={openPaperPosition}
