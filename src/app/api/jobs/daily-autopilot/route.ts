@@ -16,10 +16,10 @@ import { getMarketDataProvider } from "@/lib/market-data";
 import { isUsMarketTradingDay, latestCompletedUsTradingDay, shiftIsoDate } from "@/lib/market-calendar";
 import {
   CORE_UNIVERSE_SLUG,
-  GROWTH_UNIVERSE_SLUG,
   LEGACY_MOMENTUM_UNIVERSE_SLUG,
   MIDCAP_UNIVERSE_SLUG,
 } from "@/lib/strategy_universe";
+import { fetchActiveUsCommonSymbols } from "@/lib/universe_reference";
 
 // Production daily market-data refresh path.
 // Acquisition is provider-neutral; scans continue to read normalized cached price_bars.
@@ -28,7 +28,6 @@ const INGEST_UNIVERSE_SLUGS = [
   CORE_UNIVERSE_SLUG,
   LEGACY_MOMENTUM_UNIVERSE_SLUG,
   MIDCAP_UNIVERSE_SLUG,
-  GROWTH_UNIVERSE_SLUG,
 ] as const;
 const STATUS_KEY = "daily_autopilot_core_800";
 
@@ -325,7 +324,17 @@ export async function runAutopilot() {
     })
   );
   const allUniverseSymbols = Array.from(new Set([...symbolsByUniverse.values()].flat()));
-  const symbolsWithSpy = Array.from(new Set([...allUniverseSymbols, "SPY"]));
+  const polygonApiKey = process.env.POLYGON_API_KEY;
+  if (!polygonApiKey) throw new Error("Polygon is not configured: missing POLYGON_API_KEY");
+  const activeUsCommonSymbols = Array.from(await fetchActiveUsCommonSymbols(polygonApiKey));
+  if (activeUsCommonSymbols.length < 1_000) {
+    throw new Error(
+      `Polygon reference discovery returned only ${activeUsCommonSymbols.length} active US common stocks`
+    );
+  }
+  // The daily refresh must discover the market independently of current
+  // universe membership; otherwise new eligible stocks can never enter a cohort.
+  const symbolsWithSpy = Array.from(new Set([...activeUsCommonSymbols, "SPY"]));
 
   const candidateDates = candidateIngestDates(lctdDate, 7);
   const ingest_attempts: Array<Record<string, unknown>> = [];
@@ -476,6 +485,7 @@ export async function runAutopilot() {
       INGEST_UNIVERSE_SLUGS.map((slug) => [slug, symbolsByUniverse.get(slug)?.length ?? 0])
     ),
     ingest_unique_symbols: allUniverseSymbols.length,
+    market_discovery_symbols: activeUsCommonSymbols.length,
     bars_upserted: barsUpsertedTotal,
     ingest_attempts,
     ingest_selected_attempt: selectedAttempt,
@@ -527,6 +537,7 @@ export async function GET() {
       date_used: result.scan_date_used,
       bars_upserted: result.bars_upserted,
       market_data_provider: result.market_data_provider,
+      market_discovery_symbols: result.market_discovery_symbols,
       ingest_attempts: result.ingest_attempts ?? [],
       ingest_candidate_dates: result.ingest_candidate_dates ?? [],
       ingest_selected_attempt: result.ingest_selected_attempt ?? null,

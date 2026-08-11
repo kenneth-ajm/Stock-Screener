@@ -1,5 +1,9 @@
 import { getStrategyConfig } from "@/lib/strategy_config";
 import { buildTechnicalTargets } from "@/lib/target_engine";
+import {
+  MOMENTUM_BASELINE_ID,
+  MOMENTUM_BASELINE_PARAMETERS,
+} from "@/lib/strategy/momentum_parameters";
 
 export type RegimeState = "FAVORABLE" | "CAUTION" | "DEFENSIVE";
 
@@ -44,6 +48,7 @@ export type RuleEvaluation = {
   reason_summary: string;
   reason_json: {
     strategy: string;
+    parameter_baseline_id?: string;
     regime: RegimeState;
     downgraded_buy_to_watch: boolean;
     indicators: {
@@ -99,10 +104,10 @@ export const CORE_MOMENTUM_DEFAULT_UNIVERSE = "core_800";
 export const CORE_MOMENTUM_DEFAULT_VERSION = "v2_core_momentum";
 export const CORE_MOMENTUM_BUY_CAP = 5;
 export const CORE_MOMENTUM_WATCH_CAP = 10;
-export const CORE_MOMENTUM_MAX_HOLDING_DAYS = 7;
+export const CORE_MOMENTUM_MAX_HOLDING_DAYS = MOMENTUM_BASELINE_PARAMETERS.maximum_holding_days;
 
-const MIN_AVG_DOLLAR_VOLUME = 50_000_000;
-const MIN_MARKET_CAP = 2_000_000_000;
+const MIN_AVG_DOLLAR_VOLUME = MOMENTUM_BASELINE_PARAMETERS.minimum_average_dollar_volume;
+const MIN_MARKET_CAP = MOMENTUM_BASELINE_PARAMETERS.minimum_market_cap;
 
 export function isoDate(d = new Date()) {
   return d.toISOString().slice(0, 10);
@@ -169,10 +174,6 @@ function recentlyReclaimedSma200(closes: number[], sma200Value: number) {
   return hadBelow && hadAbove && latest >= sma200Value * 0.995;
 }
 
-function pct(value: number) {
-  return `${(value * 100).toFixed(1)}%`;
-}
-
 export function evaluateCoreMomentumSwing(opts: {
   bars: PriceBar[];
   regime: RegimeState;
@@ -181,7 +182,7 @@ export function evaluateCoreMomentumSwing(opts: {
   const { bars, regime } = opts;
   const marketCap = opts.marketCap ?? null;
 
-  if (bars.length < 220) return null;
+  if (bars.length < MOMENTUM_BASELINE_PARAMETERS.minimum_history_bars) return null;
 
   const closes = bars.map((b) => b.close);
   const latest = bars[bars.length - 1];
@@ -216,12 +217,16 @@ export function evaluateCoreMomentumSwing(opts: {
   const sma20Above50 = sma20 > sma50;
   const sma50Rising = sma50 > prevSma50;
 
-  const buyRsiOk = rsi14 >= 50 && rsi14 <= 65;
-  const watchRsiOk = rsi14 >= 45 && rsi14 <= 70;
-  const buyVolumeOk = volumeSpike >= 1.2;
-  const watchVolumeOk = volumeSpike >= 1.1;
-  const buyNotExtended = distFromSma20 <= 1.5 * atr14;
-  const watchNotExtended = distFromSma20 <= 2.0 * atr14;
+  const buyRsiOk =
+    rsi14 >= MOMENTUM_BASELINE_PARAMETERS.buy_rsi_min &&
+    rsi14 <= MOMENTUM_BASELINE_PARAMETERS.buy_rsi_max;
+  const watchRsiOk =
+    rsi14 >= MOMENTUM_BASELINE_PARAMETERS.watch_rsi_min &&
+    rsi14 <= MOMENTUM_BASELINE_PARAMETERS.watch_rsi_max;
+  const buyVolumeOk = volumeSpike >= MOMENTUM_BASELINE_PARAMETERS.buy_relative_volume_min;
+  const watchVolumeOk = volumeSpike >= MOMENTUM_BASELINE_PARAMETERS.watch_relative_volume_min;
+  const buyNotExtended = distFromSma20 <= MOMENTUM_BASELINE_PARAMETERS.buy_max_extension_atr * atr14;
+  const watchNotExtended = distFromSma20 <= MOMENTUM_BASELINE_PARAMETERS.watch_max_extension_atr * atr14;
   const reclaimed = recentlyReclaimedSma200(closes, sma200);
   const watchTrendAligned = above200 || reclaimed;
 
@@ -347,37 +352,37 @@ export function evaluateCoreMomentumSwing(opts: {
     },
     {
       key: "rsi_buy_band",
-      label: "RSI(14) in BUY band 50-65",
+      label: `RSI(14) in BUY band ${MOMENTUM_BASELINE_PARAMETERS.buy_rsi_min}-${MOMENTUM_BASELINE_PARAMETERS.buy_rsi_max}`,
       ok: buyRsiOk,
       detail: `RSI ${rsi14.toFixed(1)}`,
     },
     {
       key: "rsi_watch_band",
-      label: "RSI(14) in WATCH band 45-70",
+      label: `RSI(14) in WATCH band ${MOMENTUM_BASELINE_PARAMETERS.watch_rsi_min}-${MOMENTUM_BASELINE_PARAMETERS.watch_rsi_max}`,
       ok: watchRsiOk,
       detail: `RSI ${rsi14.toFixed(1)}`,
     },
     {
       key: "volume_buy",
-      label: "Volume spike >= 1.2x (BUY)",
+      label: `Volume spike >= ${MOMENTUM_BASELINE_PARAMETERS.buy_relative_volume_min}x (BUY)`,
       ok: buyVolumeOk,
       detail: `${volumeSpike.toFixed(2)}x`,
     },
     {
       key: "volume_watch",
-      label: "Volume trigger forming >= 1.1x",
+      label: `Volume trigger forming >= ${MOMENTUM_BASELINE_PARAMETERS.watch_relative_volume_min}x`,
       ok: watchVolumeOk,
       detail: `${volumeSpike.toFixed(2)}x; candidate visibility does not require today's trigger`,
     },
     {
       key: "extension_buy",
-      label: "Not extended <= 1.5 ATR (BUY)",
+      label: `Not extended <= ${MOMENTUM_BASELINE_PARAMETERS.buy_max_extension_atr} ATR (BUY)`,
       ok: buyNotExtended,
       detail: `${distInAtr.toFixed(2)} ATR`,
     },
     {
       key: "extension_watch",
-      label: "Not severely extended <= 2.0 ATR (WATCH)",
+      label: `Not severely extended <= ${MOMENTUM_BASELINE_PARAMETERS.watch_max_extension_atr.toFixed(1)} ATR (WATCH)`,
       ok: watchNotExtended,
       detail: `${distInAtr.toFixed(2)} ATR`,
     },
@@ -442,7 +447,7 @@ export function evaluateCoreMomentumSwing(opts: {
     buyVolumeOk
       ? "volume trigger present"
       : rawSignal === "WATCH"
-        ? "waiting for >=1.2x volume trigger"
+        ? `waiting for >=${MOMENTUM_BASELINE_PARAMETERS.buy_relative_volume_min}x volume trigger`
         : "volume trigger absent",
     `${passCount}/${checks.length} checks`,
   ].join(" • ");
@@ -459,6 +464,7 @@ export function evaluateCoreMomentumSwing(opts: {
     reason_summary: reasonSummary,
     reason_json: {
       strategy: "core_momentum_swing_v2",
+      parameter_baseline_id: MOMENTUM_BASELINE_ID,
       regime,
       downgraded_buy_to_watch: downgradedBuyToWatch,
       indicators: {

@@ -287,6 +287,12 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       ok: true,
+      validation: {
+        status: "exploratory_only",
+        point_in_time_universe_membership: false,
+        suitable_for_parameter_optimization: false,
+        limitation: "Uses present-day universe membership and may contain survivorship bias.",
+      },
       strategy: "core_momentum_swing_v2",
       universe_slug: universeSlug,
       start_date: startDate,

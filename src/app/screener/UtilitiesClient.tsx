@@ -5,6 +5,14 @@ import { Button } from "@/components/ui/Button";
 
 type JsonValue = unknown;
 
+type CoverageProgress = {
+  phase?: string;
+  latest_completed_date?: string;
+  active_symbols?: number;
+  discovery?: { completed?: number; total?: number; rows_written?: number };
+  history?: { completed?: number; total?: number; rows_written?: number; failures?: number };
+};
+
 const DEFAULT_UNIVERSE = "core_800";
 const DEFAULT_STRATEGY_VERSION = "v2_core_momentum";
 
@@ -42,6 +50,8 @@ export default function UtilitiesClient({
   const [log, setLog] = useState<string>("");
   const [backfillDone, setBackfillDone] = useState(false);
   const [autopilotStatusLive, setAutopilotStatusLive] = useState(autopilotStatus);
+  const [coverageProgress, setCoverageProgress] = useState<CoverageProgress | null>(null);
+  const [coverageMessage, setCoverageMessage] = useState<string>("Not checked");
 
   // ingest controls
   const [ingestBatchSize, setIngestBatchSize] = useState<number>(20);
@@ -123,6 +133,98 @@ export default function UtilitiesClient({
       },
       300000
     );
+  }
+
+  async function coverageRequest(action: string, extra: Record<string, unknown> = {}) {
+    const res = await fetch("/api/admin/market-coverage", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action, ...extra }),
+    });
+    const json = (await res.json().catch(() => null)) as
+      | { ok?: boolean; error?: string; state?: CoverageProgress; [key: string]: unknown }
+      | null;
+    if (!res.ok || !json?.ok) throw new Error(json?.error ?? `${action} failed with status ${res.status}`);
+    if (json.state) setCoverageProgress(json.state);
+    return json;
+  }
+
+  async function runMarketCoverage(resume: boolean) {
+    const title = resume ? "Resume market coverage" : "Bootstrap market coverage";
+    setBusy(title);
+    setCoverageMessage(resume ? "Reading saved progress..." : "Discovering active US common stocks...");
+    try {
+      let state: CoverageProgress | null = null;
+      if (resume) {
+        const status = await coverageRequest("status");
+        state = (status.state as CoverageProgress | null) ?? null;
+      }
+      if (!resume || !state) {
+        const initialized = await coverageRequest("initialize", { discovery_sessions: 30 });
+        state = (initialized.state as CoverageProgress | null) ?? null;
+        append("Market coverage initialized", state);
+      }
+
+      if (["initialized", "discovering"].includes(String(state?.phase ?? ""))) {
+        while ((state?.discovery?.completed ?? 0) < (state?.discovery?.total ?? 0)) {
+          setCoverageMessage(
+            `Daily discovery ${(state?.discovery?.completed ?? 0) + 1}/${state?.discovery?.total ?? 0}`
+          );
+          const batch = await coverageRequest("discovery_batch");
+          state = (batch.state as CoverageProgress | null) ?? state;
+        }
+        append("Market discovery complete", state);
+      }
+
+      if (state?.phase === "discovery_complete") {
+        setCoverageMessage("Rebuilding canonical cohorts from complete market coverage...");
+        const rebuilt = await coverageRequest("rebuild");
+        state = (rebuilt.state as CoverageProgress | null) ?? state;
+        append("Canonical cohorts rebuilt", state);
+      }
+
+      if (["hydrating_history", "history_complete"].includes(String(state?.phase ?? ""))) {
+        while ((state?.history?.completed ?? 0) < (state?.history?.total ?? 0)) {
+          setCoverageMessage(
+            `History ${(state?.history?.completed ?? 0)}/${state?.history?.total ?? 0} symbols`
+          );
+          const batch = await coverageRequest("history_batch", { history_batch_size: 10 });
+          state = (batch.state as CoverageProgress | null) ?? state;
+        }
+        const finalized = await coverageRequest("finalize");
+        state = (finalized.state as CoverageProgress | null) ?? state;
+      }
+
+      setCoverageMessage(state?.phase === "complete" ? "Coverage complete" : `Paused at ${state?.phase ?? "unknown"}`);
+      append("Market coverage run", { ok: true, state });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCoverageMessage(`Paused: ${message}`);
+      append("Market coverage paused", {
+        ok: false,
+        error: message,
+        note: "Progress is saved. Use Resume market coverage after resolving the error.",
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function checkMarketCoverage() {
+    const title = "Check market coverage";
+    setBusy(title);
+    try {
+      const status = await coverageRequest("status");
+      const state = (status.state as CoverageProgress | null) ?? null;
+      setCoverageMessage(state ? `Saved phase: ${state.phase ?? "unknown"}` : "No coverage run initialized");
+      append("Market coverage status", status);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCoverageMessage(`Check failed: ${message}`);
+      append("Market coverage status failed", { ok: false, error: message });
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function ingestCoreUniverse() {
@@ -443,6 +545,43 @@ export default function UtilitiesClient({
         </summary>
 
         <div className="mt-3 space-y-4">
+          <div className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-900">Market coverage foundation</div>
+              <div className="mt-1 text-sm text-slate-600">
+                Discovers active US common stocks from Polygon, loads 30 market sessions, rebuilds the canonical cohorts,
+                then hydrates daily history in resumable batches. It does not alter strategy thresholds.
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              <span className="rounded-full border border-emerald-200 bg-white px-2 py-1">{coverageMessage}</span>
+              {coverageProgress?.active_symbols ? (
+                <span>{coverageProgress.active_symbols.toLocaleString()} active symbols</span>
+              ) : null}
+              {coverageProgress?.discovery?.total ? (
+                <span>
+                  discovery {coverageProgress.discovery.completed ?? 0}/{coverageProgress.discovery.total}
+                </span>
+              ) : null}
+              {coverageProgress?.history?.total ? (
+                <span>
+                  history {coverageProgress.history.completed ?? 0}/{coverageProgress.history.total}
+                </span>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => runMarketCoverage(false)} disabled={!!busy}>
+                {busy === "Bootstrap market coverage" ? "Bootstrapping..." : "Bootstrap market coverage"}
+              </Button>
+              <Button variant="secondary" onClick={() => runMarketCoverage(true)} disabled={!!busy}>
+                {busy === "Resume market coverage" ? "Resuming..." : "Resume market coverage"}
+              </Button>
+              <Button variant="secondary" onClick={checkMarketCoverage} disabled={!!busy}>
+                Check status
+              </Button>
+            </div>
+          </div>
+
           <div className="space-y-3">
             <div className="text-sm font-semibold text-slate-900">Ingest history</div>
             <div className="text-sm text-slate-600">

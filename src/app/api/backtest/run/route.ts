@@ -39,6 +39,12 @@ export async function POST(req: Request) {
     const result = await runMomentumBacktest({ supabase, input: inputs });
     const payload = {
       ok: true,
+      validation: {
+        status: "exploratory_only",
+        point_in_time_universe_membership: false,
+        suitable_for_parameter_optimization: false,
+        limitation: "Uses present-day universe membership and may contain survivorship bias.",
+      },
       inputs,
       summary: result.summary,
       trades: result.trades,

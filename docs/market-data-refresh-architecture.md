@@ -8,6 +8,7 @@ Core rules:
 - The completed daily-bar provider is selected server-side with `MARKET_DATA_PROVIDER`.
 - The current-price overlay provider is selected independently with `MARKET_QUOTE_PROVIDER`.
 - Polygon remains the scanner source of truth; quote overlays never write `price_bars` or alter signals.
+- Daily discovery must start from Polygon's active US common-stock reference set, not current universe membership. Universe-only ingestion creates a closed loop that prevents newly eligible stocks from entering the scanner.
 - Daily timeframe only.
 - Scanner/manual Ideas scans should use cached DB bars and must not run heavyweight refresh by default.
 
@@ -20,11 +21,11 @@ Core rules:
   - sector populate
   - midcap scans
   - breadth + diagnostics snapshots
-- `runAutopilot()` obtains one grouped daily-bars response through `src/lib/market-data`, then normalizes and writes `price_bars` for the union of active `core_800`, `liquid_2000`, `midcap_1000`, `growth_1500`, and `SPY` symbols.
+- `runAutopilot()` obtains one grouped daily-bars response through `src/lib/market-data`, then normalizes and writes `price_bars` for active Polygon US common stocks plus `SPY`. Strategy scans still use their explicit canonical cohorts.
 - The scheduled strategy matrix is:
   - Momentum (`v1`): `liquid_2000`, `midcap_1000`
   - Trend Hold (`v1_trend_hold`): `core_800`, `liquid_2000`
-  - Sector Momentum (`v1_sector_momentum`): `growth_1500`, `midcap_1000`
+  - Sector Momentum (`v1_sector_momentum`): `liquid_2000`, `midcap_1000`
 - The legacy `v2_core_momentum + core_800` run remains in autopilot for compatibility and diagnostics, but it is not the primary Ideas Momentum feed.
 - This is the canonical production refresh orchestration.
 - Vercel cron config: `vercel.json` schedules `GET /api/jobs/daily-scheduled-scan` at `0 23 * * 1-5` (UTC).
