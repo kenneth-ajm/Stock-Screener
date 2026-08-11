@@ -58,6 +58,10 @@ export async function POST(req: Request) {
     body?.tp1_size_pct == null || body?.tp1_size_pct === "" ? null : Math.round(Number(body.tp1_size_pct));
   const tp2SizePct =
     body?.tp2_size_pct == null || body?.tp2_size_pct === "" ? null : Math.round(Number(body.tp2_size_pct));
+  const effectiveTpPlan =
+    tpPlan === "tp1_tp2" && tp1SizePct === 100 && (tp2SizePct === 0 || tp2SizePct === null)
+      ? "tp1_only"
+      : tpPlan;
   const entryFee = body?.entry_fee == null || body?.entry_fee === "" ? null : Number(body.entry_fee);
 
   if (!symbol || !Number.isFinite(entry) || entry <= 0)
@@ -71,31 +75,31 @@ export async function POST(req: Request) {
   if (tp1Price !== null && (!Number.isFinite(tp1Price) || Number(tp1Price) <= 0)) {
     return NextResponse.json({ ok: false, error: "Invalid tp1_price" }, { status: 400 });
   }
-  if (tp2Price !== null && (!Number.isFinite(tp2Price) || Number(tp2Price) <= 0)) {
+  if (effectiveTpPlan === "tp1_tp2" && tp2Price !== null && (!Number.isFinite(tp2Price) || Number(tp2Price) <= 0)) {
     return NextResponse.json({ ok: false, error: "Invalid tp2_price" }, { status: 400 });
   }
-  if (tpPlan !== "none" && (!Number.isFinite(tp1SizePct) || Number(tp1SizePct) < 0 || Number(tp1SizePct) > 100)) {
+  if (effectiveTpPlan !== "none" && (!Number.isFinite(tp1SizePct) || Number(tp1SizePct) < 0 || Number(tp1SizePct) > 100)) {
     return NextResponse.json({ ok: false, error: "Invalid tp1_size_pct" }, { status: 400 });
   }
-  if (tpPlan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || Number(tp2SizePct) < 0 || Number(tp2SizePct) > 100)) {
+  if (effectiveTpPlan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || Number(tp2SizePct) < 0 || Number(tp2SizePct) > 100)) {
     return NextResponse.json({ ok: false, error: "Invalid tp2_size_pct" }, { status: 400 });
   }
   if (entryFee !== null && (!Number.isFinite(entryFee) || entryFee < 0)) {
     return NextResponse.json({ ok: false, error: "Invalid entry_fee" }, { status: 400 });
   }
   const finalTp1SizePct =
-    tpPlan === "none" ? null : tp1SizePct == null ? (tpPlan === "tp1_only" ? 100 : 50) : tp1SizePct;
+    effectiveTpPlan === "none" ? null : tp1SizePct == null ? (effectiveTpPlan === "tp1_only" ? 100 : 50) : tp1SizePct;
   const finalTp2SizePct =
-    tpPlan === "tp1_tp2" ? (tp2SizePct == null ? 50 : tp2SizePct) : 0;
-  const tp1Derived = tpPlan === "none" ? { pct: null as number | null, price: null as number | null } : deriveTp(entry, tp1Pct, tp1Price);
+    effectiveTpPlan === "tp1_tp2" ? (tp2SizePct == null ? 50 : tp2SizePct) : 0;
+  const tp1Derived = effectiveTpPlan === "none" ? { pct: null as number | null, price: null as number | null } : deriveTp(entry, tp1Pct, tp1Price);
   const tp2Derived =
-    tpPlan === "tp1_tp2"
+    effectiveTpPlan === "tp1_tp2"
       ? deriveTp(entry, tp2Pct, tp2Price)
       : { pct: null as number | null, price: null as number | null };
-  if (tpPlan !== "none" && tp1Derived.pct === null) {
+  if (effectiveTpPlan !== "none" && tp1Derived.pct === null) {
     return NextResponse.json({ ok: false, error: "Invalid tp1: provide tp1_pct or tp1_price" }, { status: 400 });
   }
-  if (tpPlan === "tp1_tp2" && tp2Derived.pct === null) {
+  if (effectiveTpPlan === "tp1_tp2" && tp2Derived.pct === null) {
     return NextResponse.json({ ok: false, error: "Invalid tp2: provide tp2_pct or tp2_price" }, { status: 400 });
   }
 
@@ -116,7 +120,7 @@ export async function POST(req: Request) {
     entry_price: entry,
     stop_price: Number.isFinite(stop) ? stop : null,
     quantity: Number.isFinite(qty) ? qty : null,
-    tp_plan: tpPlan,
+    tp_plan: effectiveTpPlan,
     tp1_pct: tp1Derived.pct,
     tp2_pct: tp2Derived.pct,
     tp1_price: tp1Derived.price,

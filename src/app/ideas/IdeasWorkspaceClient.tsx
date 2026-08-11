@@ -2120,7 +2120,17 @@ export default function IdeasWorkspaceClient({
         }),
       });
       const payload = await res.json().catch(() => null);
-      if (!res.ok || !payload?.ok) throw new Error(payload?.error ?? "Add position failed");
+      if (!res.ok || !payload?.ok) {
+        if (String(payload?.error ?? "").includes("Insufficient cash")) {
+          const available = Number(payload?.detail?.cash_available ?? 0);
+          const deployed = Number(payload?.detail?.deployed_value ?? 0);
+          const account = Number(payload?.detail?.portfolio_value ?? 0);
+          throw new Error(
+            `Position not added: this portfolio has $${available.toFixed(2)} available because recorded open holdings ($${deployed.toFixed(2)}) exceed its $${account.toFixed(2)} account size. If these shares were already bought at your broker, reconcile the account size under Portfolios or record them through Positions → Add Existing Holding.`
+          );
+        }
+        throw new Error(payload?.error ?? "Add position failed");
+      }
       setSelected(null);
       setToast(`Position added: ${selected.symbol}`);
       setTimeout(() => setToast(null), 1800);
@@ -5432,7 +5442,27 @@ const strategyGuide =
               </div>
 
               <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
-                <div className="mb-2 text-sm font-semibold tracking-tight text-slate-800">Targets</div>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-semibold tracking-tight text-slate-800">Targets</div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTpPlan("tp1_only");
+                      setTp1SizePct("100");
+                      setTp2Pct("");
+                      setTp2Price("");
+                      setTp2SizePct("0");
+                      setError(null);
+                    }}
+                    className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+                      tpPlan === "tp1_only"
+                        ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                        : "border-[#dcc9aa] bg-[#fffaf2] text-slate-600 hover:bg-[#f5ead8]"
+                    }`}
+                  >
+                    Exit 100% at TP1
+                  </button>
+                </div>
                 <div className="mb-3">
                   <label className="block text-xs text-slate-500">TP Plan</label>
                   <select
@@ -5540,7 +5570,20 @@ const strategyGuide =
                       <label className="block text-xs text-slate-500">TP1 size %</label>
                       <input
                         value={tp1SizePct}
-                        onChange={(e) => setTp1SizePct(e.target.value)}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setTp1SizePct(value);
+                          const size = Math.round(Number(value));
+                          if (!Number.isFinite(size) || size < 0 || size > 100) return;
+                          if (size === 100) {
+                            setTpPlan("tp1_only");
+                            setTp2Pct("");
+                            setTp2Price("");
+                            setTp2SizePct("0");
+                          } else if (tpPlan === "tp1_tp2") {
+                            setTp2SizePct(String(100 - size));
+                          }
+                        }}
                         className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
                         inputMode="numeric"
                       />
@@ -5587,7 +5630,14 @@ const strategyGuide =
                       <label className="block text-xs text-slate-500">TP2 size %</label>
                       <input
                         value={tp2SizePct}
-                        onChange={(e) => setTp2SizePct(e.target.value)}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setTp2SizePct(value);
+                          const size = Math.round(Number(value));
+                          if (Number.isFinite(size) && size >= 0 && size <= 100) {
+                            setTp1SizePct(String(100 - size));
+                          }
+                        }}
                         className="w-full rounded-lg border border-[#e5d8c4] bg-white px-3 py-2"
                         inputMode="numeric"
                       />

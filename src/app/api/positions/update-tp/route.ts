@@ -53,6 +53,10 @@ export async function POST(req: Request) {
     body?.tp1_size_pct == null || body?.tp1_size_pct === "" ? null : Math.round(Number(body.tp1_size_pct));
   const tp2SizePct =
     body?.tp2_size_pct == null || body?.tp2_size_pct === "" ? null : Math.round(Number(body.tp2_size_pct));
+  const effectiveTpPlan =
+    tpPlan === "tp1_tp2" && tp1SizePct === 100 && (tp2SizePct === 0 || tp2SizePct === null)
+      ? "tp1_only"
+      : tpPlan;
 
   if (!positionId) {
     return NextResponse.json({ ok: false, error: "position_id is required" }, { status: 400 });
@@ -60,28 +64,28 @@ export async function POST(req: Request) {
   if (!tpPlan) {
     return NextResponse.json({ ok: false, error: "tp_plan must be none | tp1_only | tp1_tp2" }, { status: 400 });
   }
-  if (tpPlan !== "none" && (!Number.isFinite(tp1Pct) || Number(tp1Pct) <= 0)) {
+  if (effectiveTpPlan !== "none" && (!Number.isFinite(tp1Pct) || Number(tp1Pct) <= 0)) {
     if (tp1Price == null) return NextResponse.json({ ok: false, error: "tp1_pct or tp1_price must be > 0" }, { status: 400 });
   }
-  if (tpPlan === "tp1_tp2" && (!Number.isFinite(tp2Pct) || Number(tp2Pct) <= 0)) {
+  if (effectiveTpPlan === "tp1_tp2" && (!Number.isFinite(tp2Pct) || Number(tp2Pct) <= 0)) {
     if (tp2Price == null) return NextResponse.json({ ok: false, error: "tp2_pct or tp2_price must be > 0" }, { status: 400 });
   }
   if (tp1Price !== null && (!Number.isFinite(tp1Price) || Number(tp1Price) <= 0)) {
     return NextResponse.json({ ok: false, error: "tp1_price must be > 0" }, { status: 400 });
   }
-  if (tp2Price !== null && (!Number.isFinite(tp2Price) || Number(tp2Price) <= 0)) {
+  if (effectiveTpPlan === "tp1_tp2" && tp2Price !== null && (!Number.isFinite(tp2Price) || Number(tp2Price) <= 0)) {
     return NextResponse.json({ ok: false, error: "tp2_price must be > 0" }, { status: 400 });
   }
-  if (tpPlan !== "none" && (!Number.isFinite(tp1SizePct) || Number(tp1SizePct) < 0 || Number(tp1SizePct) > 100)) {
+  if (effectiveTpPlan !== "none" && (!Number.isFinite(tp1SizePct) || Number(tp1SizePct) < 0 || Number(tp1SizePct) > 100)) {
     return NextResponse.json({ ok: false, error: "tp1_size_pct must be between 0 and 100" }, { status: 400 });
   }
-  if (tpPlan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || Number(tp2SizePct) < 0 || Number(tp2SizePct) > 100)) {
+  if (effectiveTpPlan === "tp1_tp2" && (!Number.isFinite(tp2SizePct) || Number(tp2SizePct) < 0 || Number(tp2SizePct) > 100)) {
     return NextResponse.json({ ok: false, error: "tp2_size_pct must be between 0 and 100" }, { status: 400 });
   }
   const finalTp1SizePct =
-    tpPlan === "none" ? null : tp1SizePct == null ? (tpPlan === "tp1_only" ? 100 : 50) : tp1SizePct;
+    effectiveTpPlan === "none" ? null : tp1SizePct == null ? (effectiveTpPlan === "tp1_only" ? 100 : 50) : tp1SizePct;
   const finalTp2SizePct =
-    tpPlan === "tp1_tp2" ? (tp2SizePct == null ? 50 : tp2SizePct) : 0;
+    effectiveTpPlan === "tp1_tp2" ? (tp2SizePct == null ? 50 : tp2SizePct) : 0;
   const { data: existing, error: existingErr } = await supabase
     .from("portfolio_positions")
     .select("id,entry_price")
@@ -95,22 +99,22 @@ export async function POST(req: Request) {
   if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
     return NextResponse.json({ ok: false, error: "Position entry_price missing" }, { status: 400 });
   }
-  const tp1Derived = tpPlan === "none" ? { pct: null as number | null, price: null as number | null } : deriveTp(entryPrice, tp1Pct, tp1Price);
+  const tp1Derived = effectiveTpPlan === "none" ? { pct: null as number | null, price: null as number | null } : deriveTp(entryPrice, tp1Pct, tp1Price);
   const tp2Derived =
-    tpPlan === "tp1_tp2"
+    effectiveTpPlan === "tp1_tp2"
       ? deriveTp(entryPrice, tp2Pct, tp2Price)
       : { pct: null as number | null, price: null as number | null };
-  if (tpPlan !== "none" && tp1Derived.pct === null) {
+  if (effectiveTpPlan !== "none" && tp1Derived.pct === null) {
     return NextResponse.json({ ok: false, error: "tp1_pct or tp1_price required" }, { status: 400 });
   }
-  if (tpPlan === "tp1_tp2" && tp2Derived.pct === null) {
+  if (effectiveTpPlan === "tp1_tp2" && tp2Derived.pct === null) {
     return NextResponse.json({ ok: false, error: "tp2_pct or tp2_price required" }, { status: 400 });
   }
 
   const { data: updated, error } = await supabase
     .from("portfolio_positions")
     .update({
-      tp_plan: tpPlan,
+      tp_plan: effectiveTpPlan,
       tp1_pct: tp1Derived.pct,
       tp2_pct: tp2Derived.pct,
       tp1_price: tp1Derived.price,

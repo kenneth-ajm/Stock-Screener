@@ -80,6 +80,14 @@ export async function POST(req: Request) {
   const tp2_price = tp2_price_raw == null || tp2_price_raw === "" ? null : Number(tp2_price_raw);
   const entry_fee = entry_fee_raw == null || entry_fee_raw === "" ? null : Number(entry_fee_raw);
   const exit_fee = exit_fee_raw == null || exit_fee_raw === "" ? null : Number(exit_fee_raw);
+  const normalizedTpPlan =
+    tp_plan === "tp1_tp2" && tp1_size_pct === 100 && (tp2_size_pct === 0 || tp2_size_pct === null)
+      ? "tp1_only"
+      : tp_plan === "tp1_only"
+        ? "tp1_only"
+        : tp_plan === "tp1_tp2"
+          ? "tp1_tp2"
+          : "none";
 
   if (!symbol) return NextResponse.json({ ok: false, error: "symbol required" }, { status: 400 });
   if (!Number.isFinite(entry_price) || entry_price <= 0) {
@@ -166,7 +174,7 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-  if (tp2_pct !== null && (!Number.isFinite(tp2_pct) || tp2_pct <= 0)) {
+  if (normalizedTpPlan === "tp1_tp2" && tp2_pct !== null && (!Number.isFinite(tp2_pct) || tp2_pct <= 0)) {
     return NextResponse.json(
       {
         ok: false,
@@ -192,7 +200,7 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-  if (tp2_price !== null && (!Number.isFinite(tp2_price) || tp2_price <= 0)) {
+  if (normalizedTpPlan === "tp1_tp2" && tp2_price !== null && (!Number.isFinite(tp2_price) || tp2_price <= 0)) {
     return NextResponse.json(
       {
         ok: false,
@@ -248,6 +256,7 @@ export async function POST(req: Request) {
     );
   }
   if (
+    normalizedTpPlan === "tp1_tp2" &&
     tp2_size_pct !== null &&
     (!Number.isFinite(tp2_size_pct) || tp2_size_pct < 0 || tp2_size_pct > 100)
   ) {
@@ -263,12 +272,6 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-  const normalizedTpPlan =
-    tp_plan === "tp1_only"
-      ? "tp1_only"
-      : tp_plan === "tp1_tp2"
-        ? "tp1_tp2"
-      : "none";
   const tp1Derived =
     normalizedTpPlan === "none" ? { pct: null as number | null, price: null as number | null } : deriveTp(entry_price, tp1_pct, tp1_price);
   const tp2Derived =
@@ -371,6 +374,9 @@ export async function POST(req: Request) {
         error: "Insufficient cash for position (cash-only rule)",
         detail: {
           cash_available: capacity.cash_available,
+          cash_source: capacity.cash_source,
+          portfolio_value: capacity.portfolio_value,
+          deployed_value: capacity.deployed_value,
           estimated_cost: estimatedCost,
           shares,
           entry_price,
