@@ -7,7 +7,8 @@ export type TargetBar = {
 
 export type TechnicalTargetModel =
   | "technical_resistance_r"
-  | "technical_resistance_measured_move"
+  | "technical_resistance_projection"
+  | "volatility_projection"
   | "r_multiple_fallback";
 
 export type TechnicalTargets = {
@@ -34,10 +35,12 @@ type BuildTechnicalTargetsInput = {
 };
 
 type TargetProfile = {
-  min_rr_tp1: number;
-  min_rr_tp2: number;
   fallback_rr_tp1: number;
   fallback_rr_tp2: number;
+  projection_atr_tp1: number;
+  projection_atr_tp2: number;
+  minimum_projection_tp1_pct: number;
+  minimum_projection_tp2_pct: number;
 };
 
 function round2(n: number) {
@@ -106,49 +109,87 @@ function collectResistanceLevels(bars: TargetBar[]) {
 function profileForStrategy(strategyVersion: string): TargetProfile {
   if (strategyVersion === "v1_trend_hold") {
     return {
-      min_rr_tp1: 1.5,
-      min_rr_tp2: 3,
       fallback_rr_tp1: 2,
       fallback_rr_tp2: 4,
+      projection_atr_tp1: 2,
+      projection_atr_tp2: 4,
+      minimum_projection_tp1_pct: 0.04,
+      minimum_projection_tp2_pct: 0.08,
     };
   }
   if (strategyVersion === "quality_dip_v1") {
     return {
-      min_rr_tp1: 1,
-      min_rr_tp2: 2,
       fallback_rr_tp1: 1.25,
       fallback_rr_tp2: 2.5,
+      projection_atr_tp1: 1.5,
+      projection_atr_tp2: 3,
+      minimum_projection_tp1_pct: 0.03,
+      minimum_projection_tp2_pct: 0.06,
     };
   }
   if (strategyVersion === "tactical_momentum_v1") {
     return {
-      min_rr_tp1: 1.5,
-      min_rr_tp2: 3,
       fallback_rr_tp1: 1.5,
       fallback_rr_tp2: 3,
+      projection_atr_tp1: 1.5,
+      projection_atr_tp2: 3,
+      minimum_projection_tp1_pct: 0.03,
+      minimum_projection_tp2_pct: 0.06,
     };
   }
   return {
-    min_rr_tp1: 1.2,
-    min_rr_tp2: 2.4,
     fallback_rr_tp1: 1.5,
     fallback_rr_tp2: 3,
+    projection_atr_tp1: 1.5,
+    projection_atr_tp2: 3,
+    minimum_projection_tp1_pct: 0.03,
+    minimum_projection_tp2_pct: 0.06,
   };
 }
 
-function measuredMoveTarget(bars: TargetBar[], entry: number, riskPerShare: number) {
-  const recent = bars.slice(-20);
-  if (!recent.length) return entry + riskPerShare * 2;
-  const highs = recent.map((bar) => bar.high);
-  const lows = recent.map((bar) => (typeof bar.low === "number" && Number.isFinite(bar.low) ? bar.low : bar.close));
-  const range = Math.max(...highs) - Math.min(...lows);
-  return entry + Math.max(range, riskPerShare * 2);
+function averageTrueRange(bars: TargetBar[], period = 14) {
+  if (bars.length < 2) return null;
+  const trueRanges: number[] = [];
+  const start = Math.max(1, bars.length - period);
+  for (let i = start; i < bars.length; i += 1) {
+    const current = bars[i];
+    const previous = bars[i - 1];
+    const low = typeof current.low === "number" && Number.isFinite(current.low) ? current.low : current.close;
+    const trueRange = Math.max(
+      current.high - low,
+      Math.abs(current.high - previous.close),
+      Math.abs(low - previous.close)
+    );
+    if (Number.isFinite(trueRange) && trueRange > 0) trueRanges.push(trueRange);
+  }
+  if (!trueRanges.length) return null;
+  return trueRanges.reduce((sum, value) => sum + value, 0) / trueRanges.length;
+}
+
+function projectedTarget(
+  entry: number,
+  riskPerShare: number,
+  atr: number,
+  rrMultiple: number,
+  atrMultiple: number,
+  minimumPct: number
+) {
+  const riskProjection = riskPerShare * rrMultiple;
+  const volatilityProjection = Math.max(atr * atrMultiple, entry * minimumPct);
+  return entry + Math.min(riskProjection, volatilityProjection);
 }
 
 export function buildTechnicalTargets(input: BuildTechnicalTargetsInput): TechnicalTargets {
   const entry = Number(input.entry);
   const stop = Number(input.stop);
-  const bars = Array.isArray(input.bars) ? input.bars.filter((bar) => Number.isFinite(bar.high) && Number.isFinite(bar.close)) : [];
+  const bars = Array.isArray(input.bars)
+    ? input.bars.filter(
+        (bar) =>
+          Number.isFinite(bar.high) &&
+          Number.isFinite(bar.close) &&
+          (bar.low == null || Number.isFinite(bar.low))
+      )
+    : [];
   const riskPerShare = entry - stop;
   const profile = profileForStrategy(String(input.strategy_version ?? ""));
 
@@ -159,46 +200,56 @@ export function buildTechnicalTargets(input: BuildTechnicalTargetsInput): Techni
       tp1: round2(tp1Fallback),
       tp2: round2(Math.max(tp2Fallback, tp1Fallback * 1.03)),
       target_model: "r_multiple_fallback",
-      tp1_reason: `${profile.fallback_rr_tp1.toFixed(1)}R fallback target`,
-      tp2_reason: `${profile.fallback_rr_tp2.toFixed(1)}R fallback target`,
+      tp1_reason: `${profile.fallback_rr_tp1.toFixed(1)}R mechanical fallback; insufficient chart history`,
+      tp2_reason: `${profile.fallback_rr_tp2.toFixed(1)}R mechanical fallback; insufficient chart history`,
       rr_tp1: round2((tp1Fallback - entry) / Math.max(riskPerShare, 0.0001)),
       rr_tp2: round2((tp2Fallback - entry) / Math.max(riskPerShare, 0.0001)),
       resistance_levels: [],
     };
   }
 
-  const minimumTp1 = entry + riskPerShare * profile.min_rr_tp1;
-  const minimumTp2 = entry + riskPerShare * profile.min_rr_tp2;
-  const fallbackTp1 = entry + riskPerShare * profile.fallback_rr_tp1;
-  const fallbackTp2 = entry + riskPerShare * profile.fallback_rr_tp2;
+  const atr = averageTrueRange(bars) ?? Math.max(entry * 0.02, riskPerShare / 2);
+  const projectedTp1 = projectedTarget(
+    entry,
+    riskPerShare,
+    atr,
+    profile.fallback_rr_tp1,
+    profile.projection_atr_tp1,
+    profile.minimum_projection_tp1_pct
+  );
+  const projectedTp2 = projectedTarget(
+    entry,
+    riskPerShare,
+    atr,
+    profile.fallback_rr_tp2,
+    profile.projection_atr_tp2,
+    profile.minimum_projection_tp2_pct
+  );
   const resistanceLevels = collectResistanceLevels(bars).filter((level) => level.price > entry * 1.01);
 
-  const tp1Level = resistanceLevels.find((level) => level.price >= minimumTp1);
-  const tp1 = tp1Level ? tp1Level.price : fallbackTp1;
-
-  const tp2Level = resistanceLevels.find(
-    (level) => level.price > tp1 * 1.01 && level.price >= minimumTp2
-  );
-  const measuredMove = measuredMoveTarget(bars, entry, riskPerShare);
-  const tp2Candidate = tp2Level ? tp2Level.price : Math.max(fallbackTp2, measuredMove);
-  const tp2 = Math.max(tp2Candidate, tp1 * 1.03);
+  // Use real overhead structure even when it exposes weak reward/risk. Inventing a farther
+  // target to satisfy a minimum R multiple makes the ticket look safer than the chart is.
+  const tp1Level = resistanceLevels[0];
+  const tp1 = tp1Level ? tp1Level.price : projectedTp1;
+  const tp2Level = resistanceLevels.find((level) => level.price > tp1 * 1.01);
+  const tp2 = tp2Level ? tp2Level.price : Math.max(projectedTp2, tp1 * 1.03);
 
   const targetModel: TechnicalTargetModel = tp1Level
     ? tp2Level
       ? "technical_resistance_r"
-      : "technical_resistance_measured_move"
-    : "r_multiple_fallback";
+      : "technical_resistance_projection"
+    : "volatility_projection";
 
   return {
     tp1: round2(tp1),
     tp2: round2(tp2),
     target_model: targetModel,
-    tp1_reason: tp1Level ? `${tp1Level.label} resistance` : `${profile.fallback_rr_tp1.toFixed(1)}R fallback target`,
+    tp1_reason: tp1Level
+      ? `${tp1Level.label} resistance`
+      : `${profile.projection_atr_tp1.toFixed(1)} ATR projection; no overhead resistance`,
     tp2_reason: tp2Level
       ? `${tp2Level.label} resistance`
-      : targetModel === "technical_resistance_measured_move"
-        ? `measured move / ${profile.fallback_rr_tp2.toFixed(1)}R fallback`
-        : `${profile.fallback_rr_tp2.toFixed(1)}R fallback target`,
+      : `${profile.projection_atr_tp2.toFixed(1)} ATR stretch projection; no confirmed resistance`,
     rr_tp1: round2(clamp((tp1 - entry) / riskPerShare, 0, 99)),
     rr_tp2: round2(clamp((tp2 - entry) / riskPerShare, 0, 99)),
     resistance_levels: resistanceLevels.slice(0, 8).map((level) => round2(level.price)),

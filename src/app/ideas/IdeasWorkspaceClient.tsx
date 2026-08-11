@@ -155,6 +155,56 @@ type IdeaRow = {
   };
 };
 
+type TargetContext = {
+  label: string;
+  detail: string;
+  projected: boolean;
+};
+
+function targetContextForIdea(row: IdeaRow): TargetContext {
+  const reasonJson = row.reason_json && typeof row.reason_json === "object" ? row.reason_json : null;
+  const tradePlan =
+    reasonJson && "trade_plan" in reasonJson && reasonJson.trade_plan && typeof reasonJson.trade_plan === "object"
+      ? (reasonJson.trade_plan as Record<string, unknown>)
+      : null;
+  const model = String(tradePlan?.target_model ?? "").trim();
+  const tp1Reason = String(tradePlan?.tp1_reason ?? "").trim();
+
+  if (model === "technical_resistance_r") {
+    return {
+      label: "Chart resistance",
+      detail: tp1Reason || "Target is anchored to visible overhead resistance.",
+      projected: false,
+    };
+  }
+  if (model === "technical_resistance_projection" || model === "technical_resistance_measured_move") {
+    return {
+      label: "Resistance + projection",
+      detail: tp1Reason || "TP1 uses chart resistance; the later target is projected.",
+      projected: true,
+    };
+  }
+  if (model === "volatility_projection") {
+    return {
+      label: "Projected target",
+      detail: tp1Reason || "No overhead resistance exists; this is a volatility projection, not a historical level.",
+      projected: true,
+    };
+  }
+  if (model === "r_multiple_fallback") {
+    return {
+      label: "Mechanical projection",
+      detail: tp1Reason || "No validated resistance target is available; this is an R-multiple projection.",
+      projected: true,
+    };
+  }
+  return {
+    label: "Target plan",
+    detail: tp1Reason || "Review the target source in the trade ticket before entry.",
+    projected: false,
+  };
+}
+
 function recommendationForIdea(
   row: IdeaRow,
   actionOverride?: "BUY_NOW" | "WAIT" | "SKIP" | null
@@ -1893,6 +1943,7 @@ export default function IdeasWorkspaceClient({
     selected && selected.entry > 0 ? (((selected.tp1 ?? selected.entry) / selected.entry - 1) * 100) : 0;
   const modelTp2Pct =
     selected && selected.entry > 0 ? (((selected.tp2 ?? selected.entry) / selected.entry - 1) * 100) : 0;
+  const selectedTargetContext = selected ? targetContextForIdea(selected) : null;
   const feesTotal =
     (Number.isFinite(Number(entryFee)) ? Number(entryFee) : 0) +
     (Number.isFinite(Number(exitFee)) ? Number(exitFee) : 0);
@@ -4615,6 +4666,7 @@ const strategyGuide =
                     const recommendation = evaluated?.recommendation ?? recommendationForIdea(row, execution.action);
                     const companyName = companyNameForSymbol(row.symbol);
                     const holdPlan = strategy === "v1_trend_hold" ? "10–20 sessions" : "3–7 sessions";
+                    const targetContext = targetContextForIdea(row);
                     return (
                       <tr
                         key={ideaContextKey(row)}
@@ -4666,6 +4718,14 @@ const strategyGuide =
                           <div>Stop <span className="font-medium text-slate-800">${Number(row.stop ?? 0).toFixed(2)}</span></div>
                           <div className="mt-1">TP1 ${Number(row.tp1 ?? 0).toFixed(2)}</div>
                           <div>TP2 ${Number(row.tp2 ?? 0).toFixed(2)}</div>
+                          <div
+                            className={`mt-1 text-[10px] font-medium ${
+                              targetContext.projected ? "text-amber-700" : "text-emerald-700"
+                            }`}
+                            title={targetContext.detail}
+                          >
+                            {targetContext.label}
+                          </div>
                           <div className="mt-1 text-[10px] text-slate-500">{recommendation.risk_label}{row.risk_grade ? ` · setup grade ${row.risk_grade}` : ""}</div>
                         </td>
                         <td className="px-4 py-3.5 text-[11px] text-slate-600">
@@ -5505,6 +5565,22 @@ const strategyGuide =
                 </div>
 
                 <div className="mb-3 text-xs text-slate-500">Based on actual entry: {(fillNum > 0 ? fillNum : selected.entry).toFixed(2)}</div>
+
+                {selectedTargetContext ? (
+                  <div
+                    className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
+                      selectedTargetContext.projected
+                        ? "border-amber-200 bg-amber-50 text-amber-800"
+                        : "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    }`}
+                  >
+                    <div className="font-semibold">{selectedTargetContext.label}</div>
+                    <div className="mt-0.5 leading-5">{selectedTargetContext.detail}</div>
+                    {selectedTargetContext.projected ? (
+                      <div className="mt-1 text-[11px]">This is not a prior market high or a guaranteed forecast.</div>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div className="grid grid-cols-2 gap-3">
                   <div
