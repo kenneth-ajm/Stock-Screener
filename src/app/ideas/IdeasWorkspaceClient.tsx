@@ -188,6 +188,7 @@ type Payload = {
     requested_date?: string | null;
     lctd: string | null;
     date_used?: string | null;
+    date_resolution_source?: string | null;
     data_source?: string | null;
     fallback_decisions?: string[] | null;
     rows_raw_count?: number | null;
@@ -1090,9 +1091,6 @@ export default function IdeasWorkspaceClient({
       setQualityDipData(null);
       setTacticalData(null);
       setLoading(false);
-      return () => {
-        mounted = false;
-      };
     }
     fetch(apiUrl, {
       cache: "no-store",
@@ -1843,6 +1841,15 @@ export default function IdeasWorkspaceClient({
       : "Underlying price bars are stale.";
   const marketDataLastRunLabel = formatCompactDateTime(marketDataStatus?.scheduler_last_run_at ?? null);
   const marketDataRefreshDetail = marketRefreshState.detail ?? "—";
+  const displayedScanDate = String(data?.meta?.date_used ?? "").trim() || null;
+  const expectedCompletedSession =
+    String(marketDataStatus?.expected_latest_trading_day ?? "").trim() || null;
+  const displayedScanIsBehind = Boolean(
+    displayedScanDate && expectedCompletedSession && displayedScanDate < expectedCompletedSession
+  );
+  const displayedScanIsCurrent = Boolean(
+    displayedScanDate && expectedCompletedSession && displayedScanDate >= expectedCompletedSession
+  );
   const fillNum = Number(fill);
   const stopNum = Number(selected?.stop ?? 0);
   const riskPerShare = fillNum > 0 && stopNum > 0 ? fillNum - stopNum : 0;
@@ -3237,14 +3244,23 @@ const strategyGuide =
             </span>
           )}
           <span className="surface-chip px-2.5 py-1">
-            Latest scan: {data?.meta?.date_used ?? "—"}
+            Displayed scan: {displayedScanDate ?? "—"}
             {data?.meta?.read_context_is_fallback ? " (fallback)" : ""}
           </span>
+          {displayedScanIsBehind ? (
+            <span className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 font-semibold text-rose-700">
+              Scan behind · expected {expectedCompletedSession}
+            </span>
+          ) : displayedScanIsCurrent ? (
+            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700">
+              Current through {expectedCompletedSession}
+            </span>
+          ) : null}
           <span className="surface-chip px-2.5 py-1">
             Universe: {data?.meta?.universe_slug ?? "—"}
             {universeMode === "auto" ? " (auto)" : ""}
           </span>
-          <span className="surface-chip px-2.5 py-1">LCTD: {data?.meta?.lctd ?? "—"}</span>
+          <span className="surface-chip px-2.5 py-1">Latest bars: {data?.meta?.lctd ?? "—"}</span>
           <span className="surface-chip px-2.5 py-1">
             %&gt;SMA50: {Number(data?.meta?.pct_above_sma50 ?? 0).toFixed(1)}%
           </span>
@@ -3981,6 +3997,7 @@ const strategyGuide =
           {" • "}rows={rows.length}
           {" • "}rows_filtered={filteredRows.length}
           {" • "}date_used={data?.meta?.date_used ?? "—"}
+          {" • "}date_resolution={data?.meta?.date_resolution_source ?? "—"}
           {" • "}lctd={data?.meta?.lctd ?? "—"}
           {" • "}source={data?.meta?.data_source ?? "—"}
           {" • "}fallbacks={(data?.meta?.fallback_decisions ?? []).join(" > ") || "none"}

@@ -1,0 +1,415 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+import { runAutopilot } from "@/app/api/jobs/daily-autopilot/handler";
+import { runPopulate } from "@/lib/populate_sector_momentum";
+import { TREND_HOLD_DEFAULT_VERSION } from "@/lib/strategy/trendHold";
+import { SECTOR_MOMENTUM_STRATEGY_VERSION, SECTOR_MOMENTUM_UNIVERSE_SLUG } from "@/lib/sector_momentum";
+import { runScanPipeline } from "@/lib/scan_engine";
+import {
+  CORE_UNIVERSE_SLUG,
+  LEGACY_MOMENTUM_UNIVERSE_SLUG,
+  MIDCAP_UNIVERSE_SLUG,
+} from "@/lib/strategy_universe";
+import { computeMarketBreadth } from "@/lib/market_breadth";
+import { runDiagnosticsWithClient } from "@/lib/diagnostics";
+import { OBS_KEYS, writeObservabilityStatus } from "@/lib/observability";
+
+// Canonical production scheduler entrypoint.
+// Orchestrates daily-autopilot first, then downstream derived scans/metrics.
+export const maxDuration = 300;
+const MOMENTUM_STRATEGY_VERSION = "v1";
+type StageResult = {
+  stage: string;
+  ok: boolean;
+  duration_ms: number;
+  detail?: Record<string, unknown>;
+  error?: string;
+};
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function triggerMetaFromReq(req: Request) {
+  const authHeader = req.headers.get("authorization");
+  const hasBearer = Boolean(authHeader && authHeader.toLowerCase().startsWith("bearer "));
+  return {
+    source: req.headers.get("x-vercel-cron") ? "vercel_cron" : "manual_or_internal",
+    has_bearer: hasBearer,
+    user_agent: req.headers.get("user-agent") ?? null,
+  };
+}
+
+function isAuthorized(req: Request) {
+  const cronSecret = process.env.CRON_SECRET;
+  const adminKey = process.env.ADMIN_RUN_SCAN_KEY;
+  if (!cronSecret && !adminKey) return process.env.NODE_ENV !== "production";
+
+  const authHeader = req.headers.get("authorization") ?? "";
+  const token = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+  const xAdmin = req.headers.get("x-admin-key") ?? "";
+  if (cronSecret && (token === cronSecret || xAdmin === cronSecret)) return true;
+  if (adminKey && (xAdmin === adminKey || token === adminKey)) return true;
+  return false;
+}
+
+function makeClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  ) as any;
+}
+
+async function runStage(name: string, fn: () => Promise<Record<string, unknown>>) {
+  const startedAt = Date.now();
+  console.info("[daily-scheduled-scan] stage:start", {
+    stage: name,
+    started_at: nowIso(),
+  });
+  try {
+    const detail = await fn();
+    const out = {
+      stage: name,
+      ok: true,
+      duration_ms: Date.now() - startedAt,
+      detail,
+    } as StageResult;
+    console.info("[daily-scheduled-scan] stage:end", {
+      stage: name,
+      ok: true,
+      duration_ms: out.duration_ms,
+      ended_at: nowIso(),
+      detail,
+    });
+    return out;
+  } catch (e: unknown) {
+    const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+    const out = {
+      stage: name,
+      ok: false,
+      duration_ms: Date.now() - startedAt,
+      error,
+    } as StageResult;
+    console.error("[daily-scheduled-scan] stage:end", {
+      stage: name,
+      ok: false,
+      duration_ms: out.duration_ms,
+      ended_at: nowIso(),
+      error,
+    });
+    return out;
+  }
+}
+
+export async function runWorkflow(opts: { dry_run?: boolean; trigger?: Record<string, unknown> }) {
+  const startedAt = Date.now();
+  const startedAtIso = nowIso();
+  const dry_run = opts.dry_run === true;
+  const supa = makeClient();
+
+  const stages: StageResult[] = [];
+  let scan_date_used: string | null = null;
+  let regime_state: string | null = null;
+  let regime_stale = false;
+  let autopilot: any = null;
+  let sector: any = null;
+
+  if (dry_run) {
+    stages.push({
+      stage: "daily_autopilot",
+      ok: true,
+      duration_ms: 0,
+      detail: {
+        skipped: true,
+        reason: "dry_run=true",
+      },
+    });
+  } else {
+    const stage = await runStage("daily_autopilot", async () => {
+      const result = await runAutopilot();
+      if (!result?.ok) {
+        throw new Error("daily-autopilot failed");
+      }
+      autopilot = result;
+      scan_date_used = String(result.scan_date_used ?? "");
+      regime_state = String(result.regime_state ?? "");
+      regime_stale = Boolean(result.spy_regime_stale ?? false);
+      return {
+        scan_date_used,
+        lctd_source: result.lctd_source ?? null,
+        bars_upserted: result.bars_upserted ?? 0,
+        momentum: result.momentum ?? null,
+        trend: result.trend ?? null,
+      };
+    });
+    stages.push(stage);
+  }
+
+  if (!dry_run && stages.find((s) => s.stage === "daily_autopilot" && !s.ok)) {
+    const payload = {
+      ok: false,
+      dry_run,
+      scan_date_used,
+      stages,
+      duration_ms: Date.now() - startedAt,
+    };
+    await writeObservabilityStatus({
+      supabase: supa,
+      key: OBS_KEYS.scheduler,
+      value: payload,
+    }).catch(() => null);
+    return payload;
+  }
+
+  if (dry_run) {
+    stages.push({
+      stage: "sector_momentum_scan",
+      ok: true,
+      duration_ms: 0,
+      detail: {
+        skipped: true,
+        reason: "dry_run=true",
+      },
+    });
+  } else {
+    const stage = await runStage("sector_momentum_scan", async () => {
+      const res = await runPopulate();
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        throw new Error(String(json?.error ?? "sector populate failed"));
+      }
+      sector = json;
+      return {
+        scan_date_used: json.scan_date_used ?? null,
+        strategy_version: json.strategy_version ?? SECTOR_MOMENTUM_STRATEGY_VERSION,
+        universe_slug: json.universe_slug ?? SECTOR_MOMENTUM_UNIVERSE_SLUG,
+        candidates_count: json.candidates_count ?? 0,
+        persisted_rows: json.persisted_rows ?? 0,
+        pruned_rows: json.pruned_rows ?? 0,
+      };
+    });
+    stages.push(stage);
+  }
+
+  if (dry_run) {
+    stages.push({
+      stage: "secondary_universe_scans",
+      ok: true,
+      duration_ms: 0,
+      detail: {
+        skipped: true,
+        reason: "dry_run=true",
+      },
+    });
+  } else {
+    const stage = await runStage("secondary_universe_scans", async () => {
+      if (!scan_date_used) throw new Error("scan_date_used unavailable for secondary scans");
+      const momentum = await runScanPipeline({
+        supabase: supa,
+        universe_slug: MIDCAP_UNIVERSE_SLUG,
+        strategy_version: MOMENTUM_STRATEGY_VERSION,
+        scan_date: scan_date_used,
+        finalize: true,
+      });
+      if (!momentum?.ok) throw new Error(String(momentum?.error ?? "midcap momentum failed"));
+      const trend = await runScanPipeline({
+        supabase: supa,
+        universe_slug: LEGACY_MOMENTUM_UNIVERSE_SLUG,
+        strategy_version: TREND_HOLD_DEFAULT_VERSION,
+        scan_date: scan_date_used,
+        finalize: true,
+      });
+      if (!trend?.ok) throw new Error(String(trend?.error ?? "liquid trend failed"));
+      return {
+        scan_date_used,
+        momentum_universe_slug: MIDCAP_UNIVERSE_SLUG,
+        momentum_strategy_version: MOMENTUM_STRATEGY_VERSION,
+        momentum_scored: momentum.scored ?? 0,
+        trend_universe_slug: LEGACY_MOMENTUM_UNIVERSE_SLUG,
+        trend_strategy_version: TREND_HOLD_DEFAULT_VERSION,
+        trend_scored: trend.scored ?? 0,
+      };
+    });
+    stages.push(stage);
+  }
+
+  if (!dry_run) {
+    const stage = await runStage("midcap_sector_scan", async () => {
+      const res = await runPopulate({ universe_slug: MIDCAP_UNIVERSE_SLUG });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        throw new Error(String(json?.error ?? "midcap sector populate failed"));
+      }
+      return {
+        scan_date_used: json.scan_date_used ?? scan_date_used ?? null,
+        universe_slug: MIDCAP_UNIVERSE_SLUG,
+        strategy_version: json.strategy_version ?? SECTOR_MOMENTUM_STRATEGY_VERSION,
+        candidates_count: json.candidates_count ?? 0,
+        persisted_rows: json.persisted_rows ?? 0,
+      };
+    });
+    stages.push(stage);
+  }
+
+  if (dry_run) {
+    stages.push({
+      stage: "breadth_snapshot",
+      ok: true,
+      duration_ms: 0,
+      detail: {
+        skipped: true,
+        reason: "dry_run=true",
+      },
+    });
+    stages.push({
+      stage: "diagnostics",
+      ok: true,
+      duration_ms: 0,
+      detail: {
+        skipped: true,
+        reason: "dry_run=true",
+      },
+    });
+  } else {
+    const breadthStage = await runStage("breadth_snapshot", async () => {
+      if (!scan_date_used) {
+        throw new Error("scan_date_used unavailable for breadth snapshot");
+      }
+      const momentumBreadth = await computeMarketBreadth({
+        supabase: supa,
+        date: scan_date_used,
+        universe_slug: LEGACY_MOMENTUM_UNIVERSE_SLUG,
+        strategy_version: MOMENTUM_STRATEGY_VERSION,
+        regime_state,
+      });
+      const trendBreadth = await computeMarketBreadth({
+        supabase: supa,
+        date: scan_date_used,
+        universe_slug: CORE_UNIVERSE_SLUG,
+        strategy_version: TREND_HOLD_DEFAULT_VERSION,
+        regime_state,
+      });
+      return {
+        scan_date_used,
+        momentum: {
+          pct_above_sma50: momentumBreadth.pctAboveSma50,
+          pct_above_sma200: momentumBreadth.pctAboveSma200,
+          sample_size: momentumBreadth.sampleSize,
+        },
+        trend: {
+          pct_above_sma50: trendBreadth.pctAboveSma50,
+          pct_above_sma200: trendBreadth.pctAboveSma200,
+          sample_size: trendBreadth.sampleSize,
+        },
+        sector: sector?.breadth ?? null,
+      };
+    });
+    stages.push(breadthStage);
+
+    const diagnosticsStage = await runStage("diagnostics", async () => {
+      const diagnostics = await runDiagnosticsWithClient(supa);
+      return {
+        ok: diagnostics.ok,
+        lctd_vs_scans_ok: diagnostics.checks.lctd_vs_scans.ok,
+        caps_ok: diagnostics.checks.caps.ok,
+        regime_freshness_ok: diagnostics.checks.regime_freshness.ok,
+      };
+    });
+    stages.push(diagnosticsStage);
+  }
+
+  const failed = stages.filter((s) => !s.ok);
+  const payload = {
+    ok: failed.length === 0,
+    dry_run,
+    started_at: startedAtIso,
+    ended_at: nowIso(),
+    trigger: opts.trigger ?? null,
+    scan_date_used,
+    regime_state,
+    regime_stale,
+    stages,
+    summary: {
+      momentum: autopilot?.momentum ?? null,
+      trend: autopilot?.trend ?? null,
+      sector: sector
+        ? {
+            candidates_count: sector.candidates_count ?? 0,
+            strategy_version: sector.strategy_version ?? SECTOR_MOMENTUM_STRATEGY_VERSION,
+            universe_slug: sector.universe_slug ?? SECTOR_MOMENTUM_UNIVERSE_SLUG,
+          }
+        : null,
+    },
+    duration_ms: Date.now() - startedAt,
+  };
+
+  await writeObservabilityStatus({
+    supabase: supa,
+    key: OBS_KEYS.scheduler,
+    value: payload,
+  }).catch(() => null);
+
+  return payload;
+}
+
+export async function POST(req: Request) {
+  try {
+    if (!isAuthorized(req)) {
+      return NextResponse.json(
+        { ok: false, error: "Unauthorized: invalid cron/admin secret" },
+        { status: 401 }
+      );
+    }
+    const body = (await req.json().catch(() => ({}))) as { dry_run?: boolean };
+    const trigger = triggerMetaFromReq(req);
+    console.info("[daily-scheduled-scan] run:start", {
+      started_at: nowIso(),
+      trigger,
+      dry_run: body?.dry_run === true,
+    });
+    const payload = await runWorkflow({ dry_run: body?.dry_run === true, trigger });
+    console.info("[daily-scheduled-scan] run:end", {
+      ended_at: nowIso(),
+      ok: payload.ok,
+      scan_date_used: payload.scan_date_used ?? null,
+      duration_ms: payload.duration_ms,
+    });
+    return NextResponse.json(payload, { status: payload.ok ? 200 : 500 });
+  } catch (e: unknown) {
+    const error = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+    const detail = e instanceof Error ? e.stack ?? null : null;
+    await writeObservabilityStatus({
+      key: OBS_KEYS.scheduler,
+      value: {
+        ok: false,
+        error,
+      },
+    }).catch(() => null);
+    return NextResponse.json({ ok: false, error, detail }, { status: 500 });
+  }
+}
+
+export async function GET(req: Request) {
+  if (!isAuthorized(req)) {
+    return NextResponse.json(
+      { ok: false, error: "Unauthorized: invalid cron/admin secret" },
+      { status: 401 }
+    );
+  }
+  const url = new URL(req.url);
+  const dry_run = String(url.searchParams.get("dry_run") ?? "").trim() === "1";
+  const trigger = triggerMetaFromReq(req);
+  console.info("[daily-scheduled-scan] run:start", {
+    started_at: nowIso(),
+    trigger,
+    dry_run,
+  });
+  const payload = await runWorkflow({ dry_run, trigger });
+  console.info("[daily-scheduled-scan] run:end", {
+    ended_at: nowIso(),
+    ok: payload.ok,
+    scan_date_used: payload.scan_date_used ?? null,
+    duration_ms: payload.duration_ms,
+  });
+  return NextResponse.json(payload, { status: payload.ok ? 200 : 500 });
+}

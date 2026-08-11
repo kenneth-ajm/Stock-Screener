@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { runAutopilot } from "@/app/api/jobs/daily-autopilot/route";
-import { runPopulate } from "@/app/api/jobs/populate-sector-momentum/route";
+import { runAutopilot } from "@/app/api/jobs/daily-autopilot/handler";
+import { runPopulate } from "@/lib/populate_sector_momentum";
 import { runScanPipeline } from "@/lib/scan_engine";
 import { getLCTD } from "@/lib/scan_date";
 import { finalizeSignals } from "@/lib/finalize_signals";

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
-import { runWorkflow } from "@/app/api/jobs/daily-scheduled-scan/route";
+import { runWorkflow } from "@/app/api/jobs/daily-scheduled-scan/handler";
 
 export const dynamic = "force-dynamic";
 

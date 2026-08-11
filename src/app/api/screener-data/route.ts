@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
-import { unstable_cache } from "next/cache";
 import { getLCTD } from "@/lib/scan_status";
 import { getActivePortfolioCapacity } from "@/lib/portfolio_capacity";
 import { computePortfolioAwareAction } from "@/lib/execution_action";
@@ -35,6 +34,9 @@ const BUY_CAP = 5;
 const WATCH_CAP = 10;
 const MAX_ROWS = 200;
 const ENTRY_MISMATCH_THRESHOLD_PCT = 0.6;
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 function normalizeStrategyVersion(input: string | null | undefined) {
   const raw = String(input ?? "").trim().toLowerCase();
@@ -315,14 +317,13 @@ function computeSectorBreadth(rows: ScanRow[], regimeState: string | null) {
   };
 }
 
-const loadScreenerDataCached = unstable_cache(
-  async (
-    userId: string,
-    universeSlug: string,
-    strategyVersion: string,
-    requestedDate: string | null,
-    cacheBust: string | null
-  ) => {
+async function loadScreenerData(
+  userId: string,
+  universeSlug: string,
+  strategyVersion: string,
+  requestedDate: string | null,
+  cacheBust: string | null
+) {
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -333,7 +334,8 @@ const loadScreenerDataCached = unstable_cache(
     const allowedUniverses = allowedUniversesForStrategy(strategyVersion);
     let mappedUniverse = requestedUniverse || defaultUniverseForStrategy(strategyVersion) || DEFAULT_UNIVERSE;
     const isAutoUniverse = !requestedUniverse;
-    const dateUsed = requestedDate && requestedDate.trim() ? requestedDate.trim() : lctd.lctd;
+    const requestedDateValue = requestedDate && requestedDate.trim() ? requestedDate.trim() : null;
+    const dateUsed = requestedDateValue;
     if (!requestedUniverse) {
       const { data: latestUniverseRow } = await (supabase as any)
         .from("daily_scans")
@@ -387,8 +389,20 @@ const loadScreenerDataCached = unstable_cache(
         .limit(200);
       return (data ?? []) as any[];
     };
+    const latestScanDateFor = async (universe: string) => {
+      const { data } = await (supabase as any)
+        .from("daily_scans")
+        .select("date")
+        .eq("strategy_version", strategyVersion)
+        .eq("universe_slug", universe)
+        .order("date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return data?.date ? String(data.date) : null;
+    };
 
     let resolvedDateUsed = dateUsed;
+    let dateResolutionSource = requestedDateValue ? "requested_date" : "latest_strategy_universe_scan";
     let dataSource = "daily_scans_cache";
     const fallbackDecisions: string[] = [];
     let rawRows: ScanRow[] = [];
@@ -400,18 +414,10 @@ const loadScreenerDataCached = unstable_cache(
       dataSource = "daily_scans_cache_auto_union";
       const unionRows: ScanRow[] = [];
       for (const universe of allowedUniverses) {
-        let universeDate = resolvedDateUsed;
+        let universeDate = requestedDateValue ?? (await latestScanDateFor(universe));
         let rows = await fetchRowsFor(universe, universeDate);
         if (rows.length === 0) {
-          const { data: latestDateSameUniverse } = await (supabase as any)
-            .from("daily_scans")
-            .select("date")
-            .eq("strategy_version", strategyVersion)
-            .eq("universe_slug", universe)
-            .order("date", { ascending: false })
-            .limit(1)
-            .maybeSingle();
-          const fallbackDate = latestDateSameUniverse?.date ? String(latestDateSameUniverse.date) : null;
+          const fallbackDate = await latestScanDateFor(universe);
           if (fallbackDate && fallbackDate !== universeDate) {
             universeDate = fallbackDate;
             rows = await fetchRowsFor(universe, universeDate);
@@ -456,21 +462,17 @@ const loadScreenerDataCached = unstable_cache(
         resolvedDateUsed = populated[0].date_used ?? resolvedDateUsed;
       }
     } else {
+      if (!resolvedDateUsed) {
+        resolvedDateUsed = await latestScanDateFor(mappedUniverse);
+      }
       rawRows = await fetchRowsFor(mappedUniverse, resolvedDateUsed);
       if (rawRows.length === 0) {
-        const { data: latestDateSameUniverse } = await (supabase as any)
-          .from("daily_scans")
-          .select("date")
-          .eq("strategy_version", strategyVersion)
-          .eq("universe_slug", mappedUniverse)
-          .order("date", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        const fallbackDate = latestDateSameUniverse?.date ? String(latestDateSameUniverse.date) : null;
+        const fallbackDate = await latestScanDateFor(mappedUniverse);
         if (fallbackDate && fallbackDate !== resolvedDateUsed) {
           resolvedDateUsed = fallbackDate;
           rawRows = await fetchRowsFor(mappedUniverse, resolvedDateUsed);
           dataSource = "daily_scans_cache_fallback_latest_date";
+          dateResolutionSource = "fallback_latest_strategy_universe_scan";
           fallbackDecisions.push(`date->${resolvedDateUsed} (latest for strategy+universe)`);
         }
       }
@@ -1167,6 +1169,7 @@ const loadScreenerDataCached = unstable_cache(
         requested_universe_slug: requestedUniverse || null,
         requested_date: requestedDate ?? null,
         date_used: resolvedDateUsed ?? null,
+        date_resolution_source: dateResolutionSource,
         lctd: lctd.lctd,
         lctd_source: lctd.source,
         data_source: dataSource,
@@ -1258,10 +1261,7 @@ const loadScreenerDataCached = unstable_cache(
       universe_slug: mappedUniverse,
       rows: rowsFinal,
     };
-  },
-  ["screener-data-v1"],
-  { revalidate: 60 }
-);
+}
 
 export async function GET(req: Request) {
   try {
@@ -1291,10 +1291,12 @@ export async function GET(req: Request) {
     const date = String(url.searchParams.get("date") ?? "").trim() || null;
     const cacheBust = String(url.searchParams.get("_bust") ?? "").trim() || null;
 
-    const data = await loadScreenerDataCached(user.id, universeSlug, strategyVersion, date, cacheBust);
+    const data = await loadScreenerData(user.id, universeSlug, strategyVersion, date, cacheBust);
     return NextResponse.json(data, {
       headers: {
-        "Cache-Control": "s-maxage=60, stale-while-revalidate=60",
+        "Cache-Control": "private, no-store, no-cache, max-age=0, must-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
       },
     });
   } catch (e: unknown) {
