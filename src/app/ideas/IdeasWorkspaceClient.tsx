@@ -1878,7 +1878,7 @@ export default function IdeasWorkspaceClient({
   const riskUsed = Number.isFinite(sharesNum) && Number.isFinite(riskPerShare) ? sharesNum * riskPerShare : 0;
   const zone = selected
     ? getBuyZone({ strategy_version: strategy, model_entry: Number(selected.entry) })
-    : { zone_low: 0, zone_high: 0 };
+    : { zone_low: 0, zone_high: 0, zone_low_pct: 0, zone_high_pct: 0 };
   function openTradeTicket(row: IdeaRow) {
     setSelected(row);
     requestAnimationFrame(() => {
@@ -4593,6 +4593,7 @@ const strategyGuide =
                   {filteredRows.map((row) => {
                     const evaluated = evaluatedIdeaByKey.get(ideaContextKey(row));
                     const entry = Number(row.entry ?? 0);
+                    const rowZone = getBuyZone({ strategy_version: strategy, model_entry: entry });
                     const execution = evaluated?.execution ?? evaluateIdeaRuntimeExecution({
                       strategyVersion: strategy,
                       entry,
@@ -4641,6 +4642,12 @@ const strategyGuide =
                         <td className="px-4 py-3.5 text-[11px] text-slate-600">
                           <div className="font-semibold text-slate-900">{execution.referencePrice ? `$${execution.referencePrice.toFixed(2)}` : "Price unavailable"}</div>
                           <div className="mt-1">Entry ${entry.toFixed(2)}</div>
+                          <div className="mt-1 font-medium text-emerald-700">
+                            Zone ${rowZone.zone_low.toFixed(2)} to ${rowZone.zone_high.toFixed(2)}
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            {Math.abs(rowZone.zone_low_pct).toFixed(1)}% below · {rowZone.zone_high_pct.toFixed(1)}% above
+                          </div>
                           <div>{execution.deltaPct === null ? execution.reasonLabel : `${fmtSignedPct(execution.deltaPct)} vs entry`}</div>
                           <div className="mt-1 text-[10px] text-slate-500">{execution.priceSourceLabel}{execution.referenceAsOf ? ` · ${execution.referenceAsOf}` : ""}</div>
                           {execution.mismatch ? <div className="mt-1 text-rose-600">Quote mismatch</div> : null}
@@ -4713,7 +4720,8 @@ const strategyGuide =
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                   <div className="text-xs text-slate-500">Model entry</div>
-                  <div className="mt-1 font-semibold">{selected.entry.toFixed(2)}</div>
+                  <div className="mt-1 font-semibold">${selected.entry.toFixed(2)}</div>
+                  <div className="mt-1 text-[11px] text-slate-500">Center of the acceptable entry zone</div>
                 </div>
                 <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
                   <div className="text-xs text-slate-500">Stop</div>
@@ -5294,9 +5302,12 @@ const strategyGuide =
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">
-                  <div className="text-xs text-slate-500">Buy zone</div>
-                  <div className="mt-1 font-semibold">
-                    {zone.zone_low.toFixed(2)} - {zone.zone_high.toFixed(2)}
+                  <div className="text-xs text-slate-500">Acceptable entry zone</div>
+                  <div className="mt-1 font-semibold text-emerald-700">
+                    ${zone.zone_low.toFixed(2)} to ${zone.zone_high.toFixed(2)}
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    {Math.abs(zone.zone_low_pct).toFixed(1)}% below entry · {zone.zone_high_pct.toFixed(1)}% above entry
                   </div>
                 </div>
                 <div className="rounded-xl border border-[#e5d8c4] bg-[#fffdf8] p-3">

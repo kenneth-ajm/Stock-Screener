@@ -9,19 +9,23 @@ export function getBuyZone({
 }) {
   const entry = Number(model_entry);
   if (!Number.isFinite(entry) || entry <= 0) {
-    return { zone_low: 0, zone_high: 0 };
+    return { zone_low: 0, zone_high: 0, zone_low_pct: 0, zone_high_pct: 0 };
   }
 
   if (strategy_version === "v1_trend_hold") {
     return {
       zone_low: entry * 0.985,
       zone_high: entry * 1.03,
+      zone_low_pct: -1.5,
+      zone_high_pct: 3,
     };
   }
 
   return {
     zone_low: entry * 0.99,
     zone_high: entry * 1.015,
+    zone_low_pct: -1,
+    zone_high_pct: 1.5,
   };
 }
 

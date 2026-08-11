@@ -76,6 +76,9 @@ export default function TickerCheckClient(props: {
 
   const symbol = useMemo(() => String(score?.symbol ?? "").trim().toUpperCase(), [score?.symbol]);
   const entry = typeof score?.entry === "number" ? score.entry : null;
+  const entryZone = entry != null
+    ? getBuyZone({ strategy_version: "v2_core_momentum", model_entry: entry })
+    : null;
   const live = typeof quote?.price === "number" ? quote.price : null;
   const delta = live != null && entry != null && entry > 0 ? ((live - entry) / entry) * 100 : null;
   const mismatch = live != null && entry != null && entry > 0 ? Math.abs((live - entry) / entry) > PRICE_MISMATCH_PCT : false;
@@ -208,7 +211,15 @@ export default function TickerCheckClient(props: {
           </div>
 
           <div className="mt-3 grid gap-2 text-xs sm:grid-cols-4">
-            <div className="rounded-lg border border-[#e6d8c1] bg-[#fffaf2] px-2.5 py-1.5"><span className="text-slate-500">Entry</span><div className="font-semibold text-slate-900">{fmtPrice(entry)}</div></div>
+            <div className="rounded-lg border border-[#e6d8c1] bg-[#fffaf2] px-2.5 py-1.5">
+              <span className="text-slate-500">Entry / acceptable zone</span>
+              <div className="font-semibold text-slate-900">{fmtPrice(entry)}</div>
+              {entryZone ? (
+                <div className="mt-0.5 text-[10px] text-emerald-700">
+                  {fmtPrice(entryZone.zone_low)} to {fmtPrice(entryZone.zone_high)} · {Math.abs(entryZone.zone_low_pct).toFixed(1)}% below / {entryZone.zone_high_pct.toFixed(1)}% above
+                </div>
+              ) : null}
+            </div>
             <div className="rounded-lg border border-[#e6d8c1] bg-[#fffaf2] px-2.5 py-1.5">
               <span className="text-slate-500">Live / Last</span>
               <div className="font-semibold text-slate-900">{fmtPrice(live)}</div>
