@@ -76,10 +76,10 @@ export default async function DiagnosticsPage() {
         <div className="flex items-center gap-2">
           {result.ok ? <Badge variant="buy">OVERALL OK</Badge> : <Badge variant="avoid">OVERALL FAIL</Badge>}
           <Link
-            href="/screener"
+            href="/ideas?strategy=v1"
             className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50"
           >
-            Back to Screener
+            Back to Research
           </Link>
         </div>
       </div>

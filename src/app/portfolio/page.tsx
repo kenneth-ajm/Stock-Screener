@@ -182,11 +182,11 @@ export default async function PortfolioPage() {
             Go to Portfolios
           </Link>
           <Link
-            href="/screener"
+            href="/ideas?strategy=v1"
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50"
           >
             <span aria-hidden="true">←</span>
-            Back to Screener
+            Back to Research
           </Link>
         </div>
       </div>
@@ -328,11 +328,11 @@ export default async function PortfolioPage() {
             Manage Portfolios
           </Link>
           <Link
-            href="/screener"
+            href="/ideas?strategy=v1"
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm hover:bg-slate-50 whitespace-nowrap"
           >
             <span aria-hidden="true">←</span>
-            Back to Screener
+            Back to Research
           </Link>
         </div>
       </div>
