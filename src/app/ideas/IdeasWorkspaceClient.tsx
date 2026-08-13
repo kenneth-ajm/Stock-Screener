@@ -884,6 +884,8 @@ function buildStructureSummary(bars: Array<{ close?: number | null; high?: numbe
 export default function IdeasWorkspaceClient({
   initialStrategy = "tactical_momentum",
   initialUniverse = "auto",
+  initialFilter = "all",
+  initialSort = "signal",
   initialSymbol = null,
   strategyParamRaw = null,
   showDiagnostics = false,
@@ -895,6 +897,8 @@ export default function IdeasWorkspaceClient({
 }: {
   initialStrategy?: StrategyVersion;
   initialUniverse?: string;
+  initialFilter?: string;
+  initialSort?: string;
   initialSymbol?: string | null;
   strategyParamRaw?: string | null;
   showDiagnostics?: boolean;
@@ -948,11 +952,21 @@ export default function IdeasWorkspaceClient({
   const [tp2Pct, setTp2Pct] = useState("");
   const [tp2Price, setTp2Price] = useState("");
   const [tp2SizePct, setTp2SizePct] = useState("50");
-  const [selectedFilter, setSelectedFilter] = useState<IdeasFilter>("all");
-  const [qualityFilter, setQualityFilter] = useState<QualityDipFilter>("all");
-  const [qualitySort, setQualitySort] = useState<QualityDipSort>("signal");
-  const [tacticalFilter, setTacticalFilter] = useState<TacticalMomentumFilter>("all");
-  const [tacticalSort, setTacticalSort] = useState<TacticalMomentumSort>("signal");
+  const [selectedFilter, setSelectedFilter] = useState<IdeasFilter>(
+    initialFilter === "buy" || initialFilter === "watch" || initialFilter === "actionable" ? initialFilter : "all"
+  );
+  const [qualityFilter, setQualityFilter] = useState<QualityDipFilter>(
+    initialFilter === "consider_buy" || initialFilter === "watch" || initialFilter === "avoid" ? initialFilter : "all"
+  );
+  const [qualitySort, setQualitySort] = useState<QualityDipSort>(
+    initialSort === "drop" || initialSort === "price" || initialSort === "symbol" ? initialSort : "signal"
+  );
+  const [tacticalFilter, setTacticalFilter] = useState<TacticalMomentumFilter>(
+    initialFilter === "buy" || initialFilter === "watch" || initialFilter === "avoid" ? initialFilter : "all"
+  );
+  const [tacticalSort, setTacticalSort] = useState<TacticalMomentumSort>(
+    initialSort === "distance" || initialSort === "rv" || initialSort === "symbol" ? initialSort : "signal"
+  );
   const [showAdvancedInsights, setShowAdvancedInsights] = useState(false);
   const [showResearchModels, setShowResearchModels] = useState(
     initialStrategy === "v1" || initialStrategy === "v1_sector_momentum" || initialStrategy === "v1_trend_hold"
@@ -1020,6 +1034,12 @@ export default function IdeasWorkspaceClient({
   const qualityRefreshBusy = qualityRefreshState.status === "running";
   const marketRefreshBusy = marketRefreshState.status === "running";
 
+  function selectStrategy(nextStrategy: StrategyVersion) {
+    setStrategy(nextStrategy);
+    setUniverseMode("auto");
+    setSelected(null);
+  }
+
   useEffect(() => {
     try {
       const cached = window.sessionStorage.getItem("ideas_company_names_v1");
@@ -1046,6 +1066,39 @@ export default function IdeasWorkspaceClient({
   useEffect(() => {
     setUniverseMode(initialUniverse);
   }, [initialUniverse]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    params.set("strategy", strategy);
+
+    if (isScannerStrategy && universeMode !== "auto") params.set("universe", universeMode);
+    else params.delete("universe");
+
+    const activeFilter = isQualityDip ? qualityFilter : isTacticalMomentum ? tacticalFilter : selectedFilter;
+    const activeSort = isQualityDip ? qualitySort : isTacticalMomentum ? tacticalSort : "signal";
+
+    if (activeFilter === "all") params.delete("filter");
+    else params.set("filter", activeFilter);
+
+    if (activeSort === "signal") params.delete("sort");
+    else params.set("sort", activeSort);
+
+    const query = params.toString();
+    const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (nextUrl !== currentUrl) window.history.replaceState(window.history.state, "", nextUrl);
+  }, [
+    isQualityDip,
+    isScannerStrategy,
+    isTacticalMomentum,
+    qualityFilter,
+    qualitySort,
+    selectedFilter,
+    strategy,
+    tacticalFilter,
+    tacticalSort,
+    universeMode,
+  ]);
 
   useEffect(() => {
     let mounted = true;
@@ -3066,7 +3119,7 @@ const strategyGuide =
           <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Trade desks</div>
           <div className="flex items-center gap-2 rounded-xl border border-[#e3d5bf] bg-[#fcf8f1] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
           <button
-            onClick={() => setStrategy("tactical_momentum")}
+            onClick={() => selectStrategy("tactical_momentum")}
             className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
               strategy === "tactical_momentum"
                 ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
@@ -3076,7 +3129,7 @@ const strategyGuide =
             Fast Momentum
           </button>
           <button
-            onClick={() => setStrategy("quality_dip")}
+            onClick={() => selectStrategy("quality_dip")}
             className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
               strategy === "quality_dip"
                 ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
@@ -3129,7 +3182,7 @@ const strategyGuide =
           <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Supporting research</div>
           <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => setStrategy("v1")}
+            onClick={() => selectStrategy("v1")}
             className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
               strategy === "v1"
                 ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
@@ -3139,7 +3192,7 @@ const strategyGuide =
             Momentum Swing
           </button>
           <button
-            onClick={() => setStrategy("v1_sector_momentum")}
+            onClick={() => selectStrategy("v1_sector_momentum")}
             className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
               strategy === "v1_sector_momentum"
                 ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
@@ -3149,7 +3202,7 @@ const strategyGuide =
             Sector Context
           </button>
           <button
-            onClick={() => setStrategy("v1_trend_hold")}
+            onClick={() => selectStrategy("v1_trend_hold")}
             className={`rounded-xl border px-3.5 py-1.5 text-sm font-medium transition ${
               strategy === "v1_trend_hold"
                 ? "border-[#d8c7a8] bg-[#efe2cb] text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"

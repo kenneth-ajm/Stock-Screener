@@ -23,6 +23,8 @@ export default async function IdeasPage({
 }: {
   searchParams?: Promise<{
     strategy?: string;
+    filter?: string;
+    sort?: string;
     symbol?: string;
     diag?: string;
     universe?: string;
@@ -46,8 +48,10 @@ export default async function IdeasPage({
   const params = (await searchParams) ?? {};
   const initialStrategy = normalizeIdeasStrategy(params.strategy ?? "tactical_momentum");
   const strategyParamRaw = String(params.strategy ?? "").trim() || null;
+  const initialFilter = String(params.filter ?? "").trim().toLowerCase() || "all";
+  const initialSort = String(params.sort ?? "").trim().toLowerCase() || "signal";
   const initialSymbol = String(params.symbol ?? "").trim().toUpperCase() || null;
-  const initialUniverse = (() => {
+  const requestedUniverse = (() => {
     const raw = String(params.universe ?? "").trim().toLowerCase();
     if (raw === "auto" || raw === "") return "auto";
     if (raw === "midcap_1000" || raw === "midcap" || raw === "mid") return "midcap_1000";
@@ -56,6 +60,15 @@ export default async function IdeasPage({
     if (raw === "core_800" || raw === "core") return "core_800";
     return "auto";
   })();
+  const allowedUniversesByStrategy: Record<string, string[]> = {
+    v1: ["liquid_2000", "midcap_1000"],
+    v1_trend_hold: ["core_800", "liquid_2000"],
+    v1_sector_momentum: ["liquid_2000", "midcap_1000"],
+  };
+  const initialUniverse =
+    requestedUniverse === "auto" || allowedUniversesByStrategy[initialStrategy]?.includes(requestedUniverse)
+      ? requestedUniverse
+      : "auto";
   const diagRaw = String(params.diag ?? "").trim().toLowerCase();
   const showDiagnostics = diagRaw === "1" || diagRaw === "true";
   const buildMarker = getBuildMarker();
@@ -95,6 +108,8 @@ export default async function IdeasPage({
         <IdeasWorkspaceClient
           initialStrategy={initialStrategy}
           initialUniverse={initialUniverse}
+          initialFilter={initialFilter}
+          initialSort={initialSort}
           initialSymbol={initialSymbol}
           strategyParamRaw={strategyParamRaw}
           showDiagnostics={showDiagnostics}
