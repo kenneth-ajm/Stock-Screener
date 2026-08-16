@@ -83,6 +83,10 @@ function clsx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
 }
 
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 function formatMoney(x: number | null | undefined) {
   if (typeof x !== "number" || !Number.isFinite(x)) return "—";
   return `$${x.toFixed(2)}`;
@@ -620,8 +624,8 @@ export default function PositionsClient({
           : "Position closed ✅"
       );
       setTimeout(() => window.location.reload(), 650);
-    } catch (e: any) {
-      setCloseError(e?.message ?? "Close failed.");
+    } catch (error: unknown) {
+      setCloseError(errorMessage(error, "Close failed."));
     } finally {
       setClosing(false);
     }
@@ -755,8 +759,8 @@ export default function PositionsClient({
       closeManual();
       showToast("Holding added ✅");
       setTimeout(() => window.location.reload(), 650);
-    } catch (e: any) {
-      setManualError(e?.message ?? "Manual add failed.");
+    } catch (error: unknown) {
+      setManualError(errorMessage(error, "Manual add failed."));
     } finally {
       setManualBusy(false);
     }
@@ -870,8 +874,8 @@ export default function PositionsClient({
       closeEditTpModal();
       showToast("TP plan updated ✅");
       setTimeout(() => window.location.reload(), 500);
-    } catch (e: any) {
-      setEditTpError(e?.message ?? "Update TP plan failed.");
+    } catch (error: unknown) {
+      setEditTpError(errorMessage(error, "Update TP plan failed."));
     } finally {
       setEditTpBusy(false);
     }
@@ -931,8 +935,8 @@ export default function PositionsClient({
       closeEditFeesModal();
       showToast("Fees updated ✅");
       setTimeout(() => window.location.reload(), 500);
-    } catch (e: any) {
-      setEditFeesError(e?.message ?? "Update fees failed.");
+    } catch (error: unknown) {
+      setEditFeesError(errorMessage(error, "Update fees failed."));
     } finally {
       setEditFeesBusy(false);
     }
@@ -954,7 +958,7 @@ export default function PositionsClient({
 
     const rows: GroupedOpenRow[] = [];
 
-    for (const [_key, { lots }] of map.entries()) {
+    for (const { lots } of map.values()) {
       const symbol = String(lots[0]?.symbol ?? "").trim().toUpperCase();
       let totalQty = 0;
       let costSum = 0;
@@ -1358,33 +1362,13 @@ export default function PositionsClient({
             )}
           </div>
 
-          <div className="overflow-x-auto">
+          <div>
             {openMode === "GROUPED" ? (
-              <table className="w-full text-sm">
-                <thead className="text-left text-xs text-slate-500">
-                  <tr className="border-b border-slate-200">
-                    <th className="p-3">Symbol</th>
-                    <th className="p-3">Strategy</th>
-                    <th className="p-3">TP Plan</th>
-                    <th className="p-3">Avg cost</th>
-                    <th className="p-3">Last</th>
-                    <th className="p-3">Qty</th>
-                    <th className="p-3">Unrealized $</th>
-                    <th className="p-3">Fees</th>
-                    <th className="p-3">Net $</th>
-                    <th className="p-3">Unrealized %</th>
-                    <th className="p-3">Risk intel</th>
-                    <th className="p-3">Time-stop exit</th>
-                    <th className="p-3 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <div className="space-y-3 p-3">
                   {groupedOpen.length === 0 ? (
-                    <tr>
-                      <td className="p-3 text-slate-500" colSpan={13}>
-                        No open positions.
-                      </td>
-                    </tr>
+                    <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">
+                      No open positions.
+                    </div>
                   ) : (
                     groupedOpen.map((g) => {
                       const gross = g.unrealUsd ?? null;
@@ -1473,130 +1457,159 @@ export default function PositionsClient({
                       });
 
                       return (
-                        <tr
+                        <article
                           key={`${g.strategy_version}-${g.symbol}`}
                           className={clsx(
-                            "border-b border-slate-100",
-                            timeStop.isDue && "bg-amber-50/50"
+                            "overflow-hidden rounded-2xl border bg-white shadow-sm",
+                            timeStop.isDue ? "border-amber-200" : "border-slate-200"
                           )}
                         >
-                          <td className="p-3 font-semibold text-slate-900">
-                            <div>{g.symbol}</div>
-                            {idea ? (
-                              <div className="mt-1 max-w-[220px] truncate text-[11px] font-normal text-slate-500">
-                                Idea {idea.date}: {idea.signal} • {idea.reason_summary ?? "—"}
+                          <div className="grid gap-5 p-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(280px,0.9fr)]">
+                            <section className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h3 className="text-xl font-semibold tracking-tight text-slate-900">{g.symbol}</h3>
+                                <span className={clsx("rounded-full border px-2.5 py-1 text-xs font-semibold", strategyChipClass(g.strategy_version))}>
+                                  {strategyLabel(g.strategy_version)}
+                                </span>
+                                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600">
+                                  {g.lotIds.length} lot{g.lotIds.length === 1 ? "" : "s"}
+                                </span>
                               </div>
-                            ) : null}
-                          </td>
-                          <td className="p-3">
-                            <span className={clsx("rounded-full border px-2 py-1 text-xs font-semibold", strategyChipClass(g.strategy_version))}>
-                              {strategyLabel(g.strategy_version)}
-                            </span>
-                          </td>
-                          <td className="p-3 text-slate-700">{g.tpPlanSummary ?? "—"}</td>
-                          <td className="p-3 text-slate-800">{formatMoney(g.avgEntry)}</td>
-                          <td className="p-3 text-slate-800">
-                            <div>{formatMoney(g.last)}</div>
-                            <div className={clsx("text-[11px] font-medium", grossClass)}>
-                              {typeof g.unrealPct === "number" ? `${formatPct(g.unrealPct)} vs entry` : "No price"}
-                            </div>
-                            <div className="text-[10px] text-slate-400">as of {reviewPriceDates[g.symbol] ?? "—"}</div>
-                          </td>
-                          <td className="p-3 text-slate-800">{formatInt(g.qty)}</td>
-                          <td className={clsx("p-3 font-semibold", grossClass)}>{formatMoneySigned(g.unrealUsd)}</td>
-                          <td className="p-3 text-slate-700">{formatMoney(g.feesUsd)}</td>
-                          <td className={clsx("p-3 font-semibold", netClass)}>{formatMoneySigned(g.netUsd)}</td>
-                          <td className={clsx("p-3 font-semibold", grossClass)}>
-                            {typeof g.unrealPct === "number" ? formatPct(g.unrealPct) : "—"}
-                          </td>
-                          <td className="p-3 text-xs text-slate-700">
-                            <div>Stop: {formatMoney(groupedStop)}</div>
-                            <div>TP1: {typeof intel.toTp1Pct === "number" ? formatPct(intel.toTp1Pct) : "—"}</div>
-                            <div>R now: {typeof intel.rNow === "number" && Number.isFinite(intel.rNow) ? formatNum(intel.rNow) : "—"}</div>
-                            {managementCue.state !== "HOLD" ? (
-                              <>
-                                <div className="mt-1">
-                                  <span className={clsx("rounded-full border px-2 py-0.5 text-[10px] font-semibold", managementCueClass(managementCue.state))}>
+                              {idea ? (
+                                <div className="mt-2 text-xs leading-5 text-slate-500">
+                                  Latest signal <span className="font-semibold text-slate-700">{idea.signal}</span> on {idea.date}
+                                  {idea.reason_summary ? ` • ${idea.reason_summary}` : ""}
+                                </div>
+                              ) : (
+                                <div className="mt-2 text-xs text-slate-500">No matching latest strategy scan.</div>
+                              )}
+
+                              <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Entry</div>
+                                  <div className="mt-1 font-semibold text-slate-900">{formatMoney(g.avgEntry)}</div>
+                                </div>
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Current</div>
+                                  <div className="mt-1 font-semibold text-slate-900">{formatMoney(g.last)}</div>
+                                  <div className="text-[10px] text-slate-400">{reviewPriceDates[g.symbol] ?? "date unavailable"}</div>
+                                </div>
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Shares</div>
+                                  <div className="mt-1 font-semibold text-slate-900">{formatInt(g.qty)}</div>
+                                </div>
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Return</div>
+                                  <div className={clsx("mt-1 font-semibold", grossClass)}>
+                                    {typeof g.unrealPct === "number" ? formatPct(g.unrealPct) : "—"}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                                <span>Gross <strong className={grossClass}>{formatMoneySigned(g.unrealUsd)}</strong></span>
+                                <span>Fees <strong className="text-slate-700">{formatMoney(g.feesUsd)}</strong></span>
+                                <span>Net <strong className={netClass}>{formatMoneySigned(g.netUsd)}</strong></span>
+                              </div>
+                            </section>
+
+                            <section className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Trade plan and risk</div>
+                              <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-3 text-sm">
+                                <div>
+                                  <div className="text-xs text-slate-500">Stop</div>
+                                  <div className="font-semibold text-slate-900">{formatMoney(groupedStop)}</div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-slate-500">Risk progress</div>
+                                  <div className="font-semibold text-slate-900">
+                                    {typeof intel.rNow === "number" && Number.isFinite(intel.rNow) ? `${formatNum(intel.rNow)}R` : "—"}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-slate-500">TP1</div>
+                                  <div className="font-semibold text-slate-900">{formatMoney(groupedTp1)}</div>
+                                  <div className="text-[10px] text-slate-500">
+                                    {typeof intel.toTp1Pct === "number" ? `${formatPct(intel.toTp1Pct)} from current` : "—"}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-slate-500">TP2</div>
+                                  <div className="font-semibold text-slate-900">{formatMoney(groupedTp2)}</div>
+                                  <div className="text-[10px] text-slate-500">
+                                    {typeof intel.toTp2Pct === "number" ? `${formatPct(intel.toTp2Pct)} from current` : "—"}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="mt-3 border-t border-slate-200 pt-3 text-xs leading-5 text-slate-600">
+                                {g.tpPlanSummary ?? "No take-profit plan stored"}
+                              </div>
+                            </section>
+
+                            <section className="flex min-w-0 flex-col justify-between rounded-xl border border-slate-200 p-4">
+                              <div>
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Holding review</div>
+                                  <span className={clsx("rounded-full border px-2.5 py-1 text-[10px] font-semibold", managementCueClass(managementCue.state))}>
                                     {managementCue.label}
                                   </span>
                                 </div>
-                                <div className="mt-1 max-w-[16rem] text-[10px] leading-4 text-slate-500">{managementCue.summary}</div>
-                              </>
-                            ) : null}
-                          </td>
-                          <td className="p-3 text-slate-800">
-                            <div
-                              className={clsx(
-                                "font-medium",
-                                timeStop.isDue ? "text-rose-700" : "text-slate-900"
-                              )}
-                            >
-                              {timeStop.label}
-                            </div>
-                            <div className="text-xs text-slate-500">
-                              {timeStop.daysHeld !== null ? `${timeStop.daysHeld} calendar days held` : "—"}{" "}
-                              {timeStop.daysLeft !== null ? `• ${Math.max(timeStop.daysLeft, 0)}d left` : ""}
-                            </div>
-                            <div className="text-[10px] text-slate-500">Stored plan: up to {g.maxHoldDays ?? "—"} days</div>
-                            {timeStop.warnSoon ? (
-                              <span className="mt-1 inline-block rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                                TIME STOP SOON
-                              </span>
-                            ) : null}
-                          </td>
-                          <td className="p-3 text-right text-xs text-slate-500">
-                            <div className="flex justify-end gap-2">
-                              <button
-                                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
-                                onClick={() => {
-                                  const lot = g.lotIds[0] ? openById.get(g.lotIds[0]) : null;
-                                  if (lot) openEditFeesModal(lot);
-                                }}
-                                disabled={g.lotIds.length !== 1}
-                                title={g.lotIds.length !== 1 ? "Switch to Lots mode to edit per-lot fees" : "Edit fees"}
-                              >
-                                Edit fees
-                              </button>
-                              <button
-                                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
-                                onClick={() => {
-                                  const lot = g.lotIds[0] ? openById.get(g.lotIds[0]) : null;
-                                  if (lot) openEditTpModal(lot);
-                                }}
-                                disabled={g.lotIds.length !== 1}
-                                title={g.lotIds.length !== 1 ? "Switch to Lots mode to edit per-lot TP plan" : "Edit TP plan"}
-                              >
-                                Edit TP plan
-                              </button>
-                              {managementCue.preset ? (
+                                <div className="mt-3 text-sm font-semibold text-slate-900">
+                                  {timeStop.isDue ? "Time stop due now" : `${timeStop.daysHeld ?? "—"} of ${g.maxHoldDays ?? "—"} calendar days held`}
+                                </div>
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {timeStop.daysLeft !== null ? `${Math.max(timeStop.daysLeft, 0)} days left in stored plan` : "No holding window stored"}
+                                </div>
+                                <p className="mt-3 text-xs leading-5 text-slate-600">{managementCue.summary}</p>
+                              </div>
+
+                              <div className="mt-4 flex flex-wrap gap-2">
+                                {managementCue.preset ? (
+                                  <button
+                                    className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                                    onClick={() => openCloseGroupedModal(g, managementCue.preset)}
+                                    title={managementCue.summary}
+                                  >
+                                    {managementCue.preset.exitReason === "TP1" ? "Take TP1" : "Close now"}
+                                  </button>
+                                ) : null}
                                 <button
-                                  className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
-                                  onClick={() => openCloseGroupedModal(g, managementCue.preset)}
-                                  title={managementCue.summary}
+                                  className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
+                                  onClick={() => openCloseGroupedModal(g)}
                                 >
-                                  {managementCue.preset.exitReason === "TP1" ? "Take TP1" : "Close now"}
+                                  Close position
                                 </button>
-                              ) : null}
-                              <button
-                                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-50"
-                                onClick={() => openCloseGroupedModal(g)}
-                                title="Close part or all of this grouped position"
-                              >
-                                Close
-                              </button>
-                              <span className="self-center">
-                                {g.lotIds.length} lot{g.lotIds.length === 1 ? "" : "s"}
-                              </span>
-                            </div>
-                          </td>
-                        </tr>
+                                <button
+                                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                                  onClick={() => {
+                                    const lot = g.lotIds[0] ? openById.get(g.lotIds[0]) : null;
+                                    if (lot) openEditTpModal(lot);
+                                  }}
+                                  disabled={g.lotIds.length !== 1}
+                                  title={g.lotIds.length !== 1 ? "Use Lots mode to edit a multi-lot plan" : "Edit TP plan"}
+                                >
+                                  Edit plan
+                                </button>
+                                <button
+                                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                                  onClick={() => {
+                                    const lot = g.lotIds[0] ? openById.get(g.lotIds[0]) : null;
+                                    if (lot) openEditFeesModal(lot);
+                                  }}
+                                  disabled={g.lotIds.length !== 1}
+                                  title={g.lotIds.length !== 1 ? "Use Lots mode to edit multi-lot fees" : "Edit fees"}
+                                >
+                                  Edit fees
+                                </button>
+                              </div>
+                            </section>
+                          </div>
+                        </article>
                       );
                     })
                   )}
-                </tbody>
-              </table>
+              </div>
             ) : (
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm">
                 <thead className="text-left text-xs text-slate-500">
                   <tr className="border-b border-slate-200">
                     <th className="p-3">Symbol</th>
@@ -1797,7 +1810,7 @@ export default function PositionsClient({
                     })
                   )}
                 </tbody>
-              </table>
+              </table></div>
             )}
           </div>
 
