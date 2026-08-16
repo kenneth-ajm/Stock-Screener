@@ -44,6 +44,7 @@ export default async function PositionsPage() {
     new Set(open.map((p: any) => String(p.strategy_version ?? "v2_core_momentum")).filter(Boolean))
   );
   const latestPriceBySymbol: Record<string, number | null> = {};
+  const latestPriceDateBySymbol: Record<string, string | null> = {};
   if (symbols.length > 0) {
     const { data: bars } = await supabase
       .from("price_bars")
@@ -55,6 +56,7 @@ export default async function PositionsPage() {
       const sym = String((bar as any).symbol ?? "").trim().toUpperCase();
       if (!sym || latestPriceBySymbol[sym] != null) continue;
       latestPriceBySymbol[sym] = Number((bar as any).close ?? 0);
+      latestPriceDateBySymbol[sym] = String((bar as any).date ?? "") || null;
     }
   }
 
@@ -123,6 +125,7 @@ export default async function PositionsPage() {
           closedPositions={closed as any}
           closedSummary={closedSummary}
           latestPriceBySymbol={latestPriceBySymbol}
+          latestPriceDateBySymbol={latestPriceDateBySymbol}
           scanContextByKey={scanContextByKey}
           defaultFeePerOrder={
             typeof defaultPortfolio?.default_fee_per_order === "number"

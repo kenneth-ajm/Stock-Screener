@@ -64,7 +64,16 @@ type ClosePreset = {
   exitPrice?: number | null;
 };
 type ManagementCue = {
-  state: "HOLD" | "TP1_REACHED" | "TP2_REACHED" | "STOP_BREACHED" | "TIME_STOP_SOON" | "TIME_STOP_DUE" | "TIGHTEN_STOP";
+  state:
+    | "HOLD"
+    | "TP1_REACHED"
+    | "TP2_REACHED"
+    | "STOP_BREACHED"
+    | "TIME_STOP_SOON"
+    | "TIME_STOP_DUE"
+    | "TIGHTEN_STOP"
+    | "SIGNAL_WEAKENED"
+    | "SIGNAL_EXIT_REVIEW";
   label: string;
   summary: string;
   preset: ClosePreset | null;
@@ -193,9 +202,11 @@ function managementCueClass(state: ManagementCue["state"]) {
     case "TIGHTEN_STOP":
       return "border-emerald-200 bg-emerald-50 text-emerald-700";
     case "TIME_STOP_SOON":
+    case "SIGNAL_WEAKENED":
       return "border-amber-200 bg-amber-50 text-amber-700";
     case "STOP_BREACHED":
     case "TIME_STOP_DUE":
+    case "SIGNAL_EXIT_REVIEW":
       return "border-rose-200 bg-rose-50 text-rose-700";
     case "TP2_REACHED":
       return "border-sky-200 bg-sky-50 text-sky-700";
@@ -213,6 +224,7 @@ function buildManagementCue(args: {
   tp2: number | null;
   tp1SizePct?: number | null;
   timeStop: ReturnType<typeof buildTimeStopView>;
+  latestSignal?: string | null;
 }): ManagementCue {
   const qty = typeof args.qty === "number" && Number.isFinite(args.qty) ? args.qty : 0;
   const entry = typeof args.entry === "number" && Number.isFinite(args.entry) ? args.entry : null;
@@ -237,6 +249,15 @@ function buildManagementCue(args: {
       label: "Time stop due",
       summary: "The max hold window is up. Exiting today is consistent with the current plan.",
       preset: { quantity: Math.max(1, Math.round(qty)), exitReason: "TIME", exitPrice: presetExitPrice },
+    };
+  }
+  const latestSignal = String(args.latestSignal ?? "").trim().toUpperCase();
+  if (latestSignal === "AVOID" || latestSignal === "SKIP") {
+    return {
+      state: "SIGNAL_EXIT_REVIEW" as const,
+      label: "Exit review",
+      summary: `The latest same-strategy scan is ${latestSignal}. Recheck the setup and exit early if the original thesis no longer holds.`,
+      preset: null,
     };
   }
   if (last != null && tp2 != null && last >= tp2) {
@@ -269,6 +290,14 @@ function buildManagementCue(args: {
       state: "TIME_STOP_SOON" as const,
       label: "Time stop soon",
       summary: "The time-stop window is almost up. Plan the exit path now.",
+      preset: null,
+    };
+  }
+  if (latestSignal === "WATCH") {
+    return {
+      state: "SIGNAL_WEAKENED" as const,
+      label: "Signal weakened",
+      summary: "The latest same-strategy scan is WATCH. Keep the stop firm and reassess before adding or extending the hold.",
       preset: null,
     };
   }
@@ -389,6 +418,7 @@ export default function PositionsClient({
   closedPositions,
   closedSummary,
   latestPriceBySymbol,
+  latestPriceDateBySymbol,
   scanContextByKey,
   defaultFeePerOrder = null,
 }: {
@@ -396,11 +426,17 @@ export default function PositionsClient({
   closedPositions: PositionRow[];
   closedSummary: ClosedTradeSummary;
   latestPriceBySymbol: Record<string, number | null>;
+  latestPriceDateBySymbol?: Record<string, string | null>;
   scanContextByKey?: Record<string, { date: string; signal: string; reason_summary: string | null }>;
   defaultFeePerOrder?: number | null;
 }) {
   const [tab, setTab] = useState<"OPEN" | "CLOSED">("OPEN");
   const [strategyFilter, setStrategyFilter] = useState<"ALL" | "MOMENTUM" | "TREND">("ALL");
+  const [reviewPrices, setReviewPrices] = useState<Record<string, number | null>>(latestPriceBySymbol);
+  const [reviewPriceDates, setReviewPriceDates] = useState<Record<string, string | null>>(latestPriceDateBySymbol ?? {});
+  const [priceMode, setPriceMode] = useState<"cached" | "mixed">("cached");
+  const [refreshingPrices, setRefreshingPrices] = useState(false);
+  const [priceRefreshError, setPriceRefreshError] = useState<string | null>(null);
 
   // Open table mode: grouped vs lots
   const [openMode, setOpenMode] = useState<"GROUPED" | "LOTS">("GROUPED");
@@ -937,14 +973,14 @@ export default function PositionsClient({
           (typeof l.entry_fee === "number" && Number.isFinite(l.entry_fee) ? l.entry_fee : 0) +
           (typeof l.exit_fee === "number" && Number.isFinite(l.exit_fee) ? l.exit_fee : 0);
 
-        const dt = l.created_at ?? null;
+        const dt = l.entry_date ?? l.created_at ?? null;
         if (dt && (!earliest || new Date(dt).getTime() < new Date(earliest).getTime())) {
           earliest = dt;
         }
       }
 
       const avgEntry = totalQty > 0 ? costSum / totalQty : null;
-      const last = latestPriceBySymbol?.[symbol] ?? null;
+      const last = reviewPrices?.[symbol] ?? null;
 
       let unrealUsd: number | null = null;
       let netUsd: number | null = null;
@@ -987,7 +1023,40 @@ export default function PositionsClient({
     });
 
     return rows;
-  }, [openFiltered, latestPriceBySymbol]);
+  }, [openFiltered, reviewPrices]);
+
+  async function refreshPositionPrices() {
+    const symbols = Array.from(new Set(openPositions.map((p) => String(p.symbol ?? "").trim().toUpperCase()).filter(Boolean)));
+    if (symbols.length === 0) return;
+    try {
+      setRefreshingPrices(true);
+      setPriceRefreshError(null);
+      const response = await fetch("/api/quotes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ symbols }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Price refresh failed.");
+      const nextPrices = { ...reviewPrices };
+      const nextDates = { ...reviewPriceDates };
+      for (const symbol of symbols) {
+        const quote = payload?.quotes?.[symbol];
+        if (typeof quote?.price === "number" && Number.isFinite(quote.price) && quote.price > 0) {
+          nextPrices[symbol] = quote.price;
+          nextDates[symbol] = String(quote.asOf ?? "") || null;
+        }
+      }
+      setReviewPrices(nextPrices);
+      setReviewPriceDates(nextDates);
+      setPriceMode(payload?.live_quotes > 0 ? "mixed" : "cached");
+      showToast(payload?.live_quotes > 0 ? "Latest available quotes loaded" : "Latest cached daily closes loaded");
+    } catch (error: unknown) {
+      setPriceRefreshError(error instanceof Error ? error.message : "Price refresh failed.");
+    } finally {
+      setRefreshingPrices(false);
+    }
+  }
 
   const openById = useMemo(() => {
     const m = new Map<string, PositionRow>();
@@ -1004,6 +1073,8 @@ export default function PositionsClient({
       TIME_STOP_SOON: 0,
       TIME_STOP_DUE: 0,
       TIGHTEN_STOP: 0,
+      SIGNAL_WEAKENED: 0,
+      SIGNAL_EXIT_REVIEW: 0,
     };
     const severityRank: Record<ManagementCue["state"], number> = {
       STOP_BREACHED: 5,
@@ -1012,6 +1083,8 @@ export default function PositionsClient({
       TP1_REACHED: 2,
       TIGHTEN_STOP: 1,
       TIME_STOP_SOON: 1,
+      SIGNAL_WEAKENED: 2,
+      SIGNAL_EXIT_REVIEW: 4,
       HOLD: 0,
     };
     const rows = groupedOpen.map((g) => {
@@ -1061,6 +1134,7 @@ export default function PositionsClient({
         g.qty > 0
           ? (lots.reduce((sum, p) => sum + resolveQty(p) * (tpSizePctForPosition(p, "tp1") / 100), 0) / g.qty) * 100
           : null;
+      const idea = scanContextByKey?.[`${g.strategy_version}::${g.symbol}`] ?? null;
       const cue = buildManagementCue({
         qty: g.qty,
         entry: g.avgEntry,
@@ -1070,6 +1144,7 @@ export default function PositionsClient({
         tp2: groupedTp2,
         tp1SizePct: groupedTp1SizePct,
         timeStop,
+        latestSignal: idea?.signal ?? null,
       });
       stateCounts[cue.state] += 1;
       return {
@@ -1085,7 +1160,12 @@ export default function PositionsClient({
       counts: stateCounts,
       top: rows.filter((row) => row.cue.state !== "HOLD").slice(0, 4),
     };
-  }, [groupedOpen, openById]);
+  }, [groupedOpen, openById, scanContextByKey]);
+
+  const latestReviewPriceDate = useMemo(() => {
+    const dates = Object.values(reviewPriceDates).filter((value): value is string => Boolean(value));
+    return dates.sort().at(-1) ?? null;
+  }, [reviewPriceDates]);
 
   function maybeTpPriceForPosition(p: PositionRow, tp: "tp1" | "tp2"): number | null {
     const priceField = tp === "tp1" ? p.tp1_price : p.tp2_price;
@@ -1209,15 +1289,37 @@ export default function PositionsClient({
               </div>
             </div>
 
-            <button
-              className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-              onClick={openManual}
-            >
-              + Add Existing Holding
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-xs text-slate-500">
+                Prices: {priceMode === "mixed" ? "latest available quotes" : "cached daily close"}
+                {latestReviewPriceDate ? ` • ${latestReviewPriceDate}` : ""}
+              </div>
+              <button
+                className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+                onClick={refreshPositionPrices}
+                disabled={refreshingPrices}
+              >
+                {refreshingPrices ? "Refreshing…" : "Refresh prices"}
+              </button>
+              <button
+                className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                onClick={openManual}
+              >
+                + Add Existing Holding
+              </button>
+            </div>
           </div>
 
           <div className="border-b border-slate-200 bg-slate-50/70 px-3 py-3">
+            <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">Daily exit review</div>
+                <div className="text-xs text-slate-500">
+                  Stop and time-stop rules take priority. Latest strategy signals are review cues, not automatic orders.
+                </div>
+              </div>
+              {priceRefreshError ? <div className="text-xs font-medium text-rose-600">{priceRefreshError}</div> : null}
+            </div>
             <div className="grid gap-2 md:grid-cols-4">
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
                 <div className="text-[11px] font-medium text-emerald-700">TP1 / TP2 ready</div>
@@ -1226,14 +1328,16 @@ export default function PositionsClient({
                 </div>
               </div>
               <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
-                <div className="text-[11px] font-medium text-rose-700">Urgent exits</div>
+                <div className="text-[11px] font-medium text-rose-700">Exit now / review</div>
                 <div className="mt-1 text-lg font-semibold text-rose-800">
-                  {managementSummary.counts.STOP_BREACHED + managementSummary.counts.TIME_STOP_DUE}
+                  {managementSummary.counts.STOP_BREACHED + managementSummary.counts.TIME_STOP_DUE + managementSummary.counts.SIGNAL_EXIT_REVIEW}
                 </div>
               </div>
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
-                <div className="text-[11px] font-medium text-amber-700">Time stop soon</div>
-                <div className="mt-1 text-lg font-semibold text-amber-800">{managementSummary.counts.TIME_STOP_SOON}</div>
+                <div className="text-[11px] font-medium text-amber-700">Time / signal review</div>
+                <div className="mt-1 text-lg font-semibold text-amber-800">
+                  {managementSummary.counts.TIME_STOP_SOON + managementSummary.counts.SIGNAL_WEAKENED}
+                </div>
               </div>
               <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
                 <div className="text-[11px] font-medium text-sky-700">Tighten stop</div>
@@ -1365,6 +1469,7 @@ export default function PositionsClient({
                         tp2: groupedTp2,
                         tp1SizePct: groupedTp1SizePct,
                         timeStop,
+                        latestSignal: idea?.signal ?? null,
                       });
 
                       return (
@@ -1390,7 +1495,13 @@ export default function PositionsClient({
                           </td>
                           <td className="p-3 text-slate-700">{g.tpPlanSummary ?? "—"}</td>
                           <td className="p-3 text-slate-800">{formatMoney(g.avgEntry)}</td>
-                          <td className="p-3 text-slate-800">{formatMoney(g.last)}</td>
+                          <td className="p-3 text-slate-800">
+                            <div>{formatMoney(g.last)}</div>
+                            <div className={clsx("text-[11px] font-medium", grossClass)}>
+                              {typeof g.unrealPct === "number" ? `${formatPct(g.unrealPct)} vs entry` : "No price"}
+                            </div>
+                            <div className="text-[10px] text-slate-400">as of {reviewPriceDates[g.symbol] ?? "—"}</div>
+                          </td>
                           <td className="p-3 text-slate-800">{formatInt(g.qty)}</td>
                           <td className={clsx("p-3 font-semibold", grossClass)}>{formatMoneySigned(g.unrealUsd)}</td>
                           <td className="p-3 text-slate-700">{formatMoney(g.feesUsd)}</td>
@@ -1423,9 +1534,10 @@ export default function PositionsClient({
                               {timeStop.label}
                             </div>
                             <div className="text-xs text-slate-500">
-                              {timeStop.daysHeld !== null ? `${timeStop.daysHeld}d held` : "—"}{" "}
+                              {timeStop.daysHeld !== null ? `${timeStop.daysHeld} calendar days held` : "—"}{" "}
                               {timeStop.daysLeft !== null ? `• ${Math.max(timeStop.daysLeft, 0)}d left` : ""}
                             </div>
+                            <div className="text-[10px] text-slate-500">Stored plan: up to {g.maxHoldDays ?? "—"} days</div>
                             {timeStop.warnSoon ? (
                               <span className="mt-1 inline-block rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
                                 TIME STOP SOON
@@ -1512,7 +1624,8 @@ export default function PositionsClient({
                   ) : (
                     openFiltered.map((p) => {
                       const qty = resolveQty(p);
-                      const last = latestPriceBySymbol?.[String(p.symbol ?? "").trim().toUpperCase()] ?? null;
+                      const normalizedSymbol = String(p.symbol ?? "").trim().toUpperCase();
+                      const last = reviewPrices?.[normalizedSymbol] ?? null;
                       const strategyVer = p.strategy_version ?? "v2_core_momentum";
                       const key = `${strategyVer}::${String(p.symbol ?? "").trim().toUpperCase()}`;
                       const idea = scanContextByKey?.[key] ?? null;
@@ -1573,6 +1686,7 @@ export default function PositionsClient({
                         tp2: tp2Price,
                         tp1SizePct: tpSizePctForPosition(p, "tp1"),
                         timeStop,
+                        latestSignal: idea?.signal ?? null,
                       });
 
                       return (
@@ -1598,7 +1712,13 @@ export default function PositionsClient({
                           </td>
                           <td className="p-3 text-slate-700">{tpPlanSummaryFor(p)}</td>
                           <td className="p-3 text-slate-800">{formatMoney(p.entry_price)}</td>
-                          <td className="p-3 text-slate-800">{formatMoney(last)}</td>
+                          <td className="p-3 text-slate-800">
+                            <div>{formatMoney(last)}</div>
+                            <div className={clsx("text-[11px] font-medium", grossClass)}>
+                              {typeof unrealPct === "number" ? `${formatPct(unrealPct)} vs entry` : "No price"}
+                            </div>
+                            <div className="text-[10px] text-slate-400">as of {reviewPriceDates[normalizedSymbol] ?? "—"}</div>
+                          </td>
                           <td className="p-3 text-slate-800">{qty || "—"}</td>
                           <td className={clsx("p-3 font-semibold", grossClass)}>{formatMoneySigned(unrealUsd)}</td>
                           <td className="p-3 text-slate-700">{formatMoney(feesUsd)}</td>
@@ -1631,9 +1751,10 @@ export default function PositionsClient({
                               {timeStop.label}
                             </div>
                             <div className="text-xs text-slate-500">
-                              {timeStop.daysHeld !== null ? `${timeStop.daysHeld}d held` : "—"}{" "}
+                              {timeStop.daysHeld !== null ? `${timeStop.daysHeld} calendar days held` : "—"}{" "}
                               {timeStop.daysLeft !== null ? `• ${Math.max(timeStop.daysLeft, 0)}d left` : ""}
                             </div>
+                            <div className="text-[10px] text-slate-500">Stored plan: up to {maxHold} days</div>
                             {timeStop.warnSoon ? (
                               <span className="mt-1 inline-block rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
                                 TIME STOP SOON
