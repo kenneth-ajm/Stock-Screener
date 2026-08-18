@@ -108,7 +108,7 @@ const loadTacticalCached = unstable_cache(
       new Request(`http://daily-cockpit.local/api/tactical-momentum?limit=225&source_date=${sourceDate ?? "none"}`)
     );
   },
-  ["daily-cockpit-tactical-v2"],
+  ["daily-cockpit-tactical-v3-target-quality"],
   { revalidate: 900 }
 );
 
@@ -124,7 +124,8 @@ const loadQualityCached = unstable_cache(
 function mapTacticalRow(row: JsonRecord): CockpitCandidate | null {
   const signal = String(row.signal ?? "").toUpperCase();
   const timing = String(row.timing_state ?? "").toUpperCase();
-  const state = signal === "BUY" && timing === "BUY_READY" ? "ACT_NOW" : signal === "WATCH" ? "NEAR_TRIGGER" : null;
+  let state: CockpitCandidate["state"] | null =
+    signal === "BUY" && timing === "BUY_READY" ? "ACT_NOW" : signal === "WATCH" ? "NEAR_TRIGGER" : null;
   if (!state) return null;
   const symbol = String(row.symbol ?? "").trim().toUpperCase();
   if (!symbol) return null;
@@ -136,6 +137,11 @@ function mapTacticalRow(row: JsonRecord): CockpitCandidate | null {
   const reason = String(row.reason_summary ?? "Tactical momentum setup from completed daily bars.");
   const distance = numberOrNull(row.distance_to_breakout_pct);
   const relativeVolume = numberOrNull(row.relative_volume);
+  const rrTp1 = numberOrNull(row.rr_tp1) ?? (entry != null && stop != null && tp1 != null && entry > stop ? (tp1 - entry) / (entry - stop) : null);
+  const rrTp2 = numberOrNull(row.rr_tp2) ?? (entry != null && stop != null && tp2 != null && entry > stop ? (tp2 - entry) / (entry - stop) : null);
+  const blendedRR = numberOrNull(row.blended_rr) ?? (rrTp1 != null && rrTp2 != null ? rrTp1 * 0.5 + rrTp2 * 0.5 : null);
+  const targetQualityPass = row.target_quality_pass !== false && (blendedRR == null || blendedRR >= 1.25);
+  if (state === "ACT_NOW" && !targetQualityPass) state = "NEAR_TRIGGER";
   return {
     symbol,
     name: String(row.name ?? symbol),
@@ -163,7 +169,11 @@ function mapTacticalRow(row: JsonRecord): CockpitCandidate | null {
     reason_summary: reason,
     next_trigger:
       state === "ACT_NOW"
-        ? "Enter only near the planned level; skip if price gaps materially above it."
+        ? rrTp1 != null && rrTp1 < 1
+          ? `TP1 is a partial de-risk level (${rrTp1.toFixed(2)}R), not the full trade objective. The remaining plan targets ${rrTp2?.toFixed(2) ?? "—"}R.`
+          : "Enter only near the planned level; skip if price gaps materially above it."
+        : !targetQualityPass
+          ? `Wait for a better entry or more overhead room; the current 50/50 target plan is only ${blendedRR?.toFixed(2) ?? "—"}R blended.`
         : distance != null
           ? `Watch for a confirmed move through the breakout area (${distance.toFixed(1)}% away at the completed close).`
           : "Wait for the daily breakout trigger with supportive volume.",
@@ -185,6 +195,9 @@ function mapTacticalRow(row: JsonRecord): CockpitCandidate | null {
       { label: "Breakout", value: row.breakout_level == null ? "—" : `$${Number(row.breakout_level).toFixed(2)}` },
       { label: "Rel. volume", value: relativeVolume == null ? "—" : `${relativeVolume.toFixed(2)}x` },
       { label: "Day move", value: row.day_change_pct == null ? "—" : `${Number(row.day_change_pct).toFixed(1)}%` },
+      { label: "TP1 reward", value: rrTp1 == null ? "—" : `${rrTp1.toFixed(2)}R` },
+      { label: "TP2 reward", value: rrTp2 == null ? "—" : `${rrTp2.toFixed(2)}R` },
+      { label: "50/50 plan", value: blendedRR == null ? "—" : `${blendedRR.toFixed(2)}R` },
     ],
   };
 }

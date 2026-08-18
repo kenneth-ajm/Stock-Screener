@@ -36,6 +36,8 @@ function compactTime(value: string | null) {
 }
 
 function CandidateCard({ candidate }: { candidate: CockpitCandidate }) {
+  const tp1Reward = candidate.details.find((detail) => detail.label === "TP1 reward")?.value ?? null;
+  const tp2Reward = candidate.details.find((detail) => detail.label === "TP2 reward")?.value ?? null;
   const liveDiff =
     candidate.quote_price != null && candidate.reference_price != null && candidate.reference_price > 0
       ? ((candidate.quote_price - candidate.reference_price) / candidate.reference_price) * 100
@@ -56,7 +58,7 @@ function CandidateCard({ candidate }: { candidate: CockpitCandidate }) {
         </div>
         {candidate.score != null ? (
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-right">
-            <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Quality</div>
+            <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Setup score</div>
             <div className="text-sm font-semibold text-slate-900">{candidate.score.toFixed(0)}</div>
           </div>
         ) : null}
@@ -74,10 +76,12 @@ function CandidateCard({ candidate }: { candidate: CockpitCandidate }) {
         <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 px-2.5 py-2">
           <div className="text-[10px] uppercase tracking-wide text-emerald-700">TP1</div>
           <div className="mt-0.5 text-sm font-semibold text-emerald-900">{money(candidate.tp1_price)}</div>
+          {tp1Reward ? <div className="text-[10px] text-emerald-700">{tp1Reward} · partial</div> : null}
         </div>
         <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 px-2.5 py-2">
           <div className="text-[10px] uppercase tracking-wide text-emerald-700">TP2</div>
           <div className="mt-0.5 text-sm font-semibold text-emerald-900">{money(candidate.tp2_price)}</div>
+          {tp2Reward ? <div className="text-[10px] text-emerald-700">{tp2Reward} · remainder</div> : null}
         </div>
         <div className="rounded-lg border border-sky-100 bg-sky-50/60 px-2.5 py-2">
           <div className="text-[10px] uppercase tracking-wide text-sky-700">
@@ -119,9 +123,10 @@ function CandidateCard({ candidate }: { candidate: CockpitCandidate }) {
         </div>
         <Link
           href={candidate.ticket_href}
+          style={candidate.state === "ACT_NOW" ? { color: "#ffffff" } : undefined}
           className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
             candidate.state === "ACT_NOW"
-              ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-800"
+              ? "border-slate-900 bg-slate-900 !text-white hover:bg-slate-800"
               : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
           }`}
         >

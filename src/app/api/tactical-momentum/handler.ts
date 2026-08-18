@@ -35,6 +35,10 @@ type TacticalMomentumRow = {
   target_model: string | null;
   tp1_reason: string | null;
   tp2_reason: string | null;
+  rr_tp1: number | null;
+  rr_tp2: number | null;
+  blended_rr: number | null;
+  target_quality_pass: boolean;
   reason_summary: string;
   source_date: string | null;
   bars_count: number;
@@ -241,6 +245,10 @@ function evaluateRow(item: TacticalMomentumScanItem, barsDesc: PriceBar[], spyHe
       target_model: null,
       tp1_reason: null,
       tp2_reason: null,
+      rr_tp1: null,
+      rr_tp2: null,
+      blended_rr: null,
+      target_quality_pass: false,
       reason_summary: "Insufficient price history for tactical momentum evaluation.",
       source_date: barsDesc?.[0]?.date ?? null,
       bars_count: barsDesc.length,
@@ -305,6 +313,9 @@ function evaluateRow(item: TacticalMomentumScanItem, barsDesc: PriceBar[], spyHe
     stop,
     strategy_version: "tactical_momentum_v1",
   });
+  const blendedRR = round2(targets.rr_tp1 * 0.5 + targets.rr_tp2 * 0.5) ?? 0;
+  const targetQualityPass = targets.rr_tp1 >= 0.75 && targets.rr_tp2 >= 1.75 && blendedRR >= 1.25;
+  if (signal === "BUY" && !targetQualityPass) signal = "WATCH";
 
   const setupLabel =
     setupType === "Q EP Daily"
@@ -333,16 +344,22 @@ function evaluateRow(item: TacticalMomentumScanItem, barsDesc: PriceBar[], spyHe
         : timingState === "TOO_EXTENDED"
           ? "Too extended"
           : "Defensive";
+  const targetQualityPenalty = targetQualityPass
+    ? 0
+    : (targets.rr_tp1 < 0.75 ? 8 : 0) + (targets.rr_tp2 < 1.75 ? 12 : 0) + (blendedRR < 1.25 ? 10 : 0);
+  const volumeQuality =
+    relativeVolume == null ? 0 : Math.max(-4, Math.min(10, (relativeVolume - 0.8) * 12));
   const rankingScoreRaw =
-    (setupType === "Q EP Daily" ? 76 : setupType === "Q Breakout" ? 72 : setupType === "Momentum Watch" ? 56 : 28) +
-    (trendHealthy ? 10 : 0) +
-    (spyHealthy ? 6 : -4) +
-    (nearBreakout ? 8 : nearEnoughForWatch ? 3 : -2) +
-    (tightRange ? 6 : decentRange ? 2 : -3) +
-    (volumeStrong ? 6 : relativeVolume != null ? Math.max(-3, Math.min(3, (relativeVolume - 1) * 8)) : 0) +
-    (epDay ? 6 : epWatch ? 2 : 0) +
-    (tooExtended ? -14 : 0) +
-    (stockAboveSma200 === false ? -12 : 0);
+    (setupType === "Q EP Daily" ? 36 : setupType === "Q Breakout" ? 32 : setupType === "Momentum Watch" ? 24 : 10) +
+    (trendHealthy ? 16 : 0) +
+    (spyHealthy ? 8 : -6) +
+    (nearBreakout ? 12 : nearEnoughForWatch ? 6 : 0) +
+    (tightRange ? 10 : decentRange ? 5 : -4) +
+    volumeQuality +
+    (epDay ? 6 : epWatch ? 3 : 0) +
+    (tooExtended ? -18 : 0) +
+    (stockAboveSma200 === false ? -16 : 0) -
+    targetQualityPenalty;
   const rankingScore = Math.max(0, Math.min(100, round2(rankingScoreRaw) ?? 0));
 
   return {
@@ -371,7 +388,11 @@ function evaluateRow(item: TacticalMomentumScanItem, barsDesc: PriceBar[], spyHe
     target_model: targets.target_model,
     tp1_reason: targets.tp1_reason,
     tp2_reason: targets.tp2_reason,
-    reason_summary: `${setupLabel} • ${breakoutText} • ${volumeText} • ${trendText} • ${marketText}`,
+    rr_tp1: targets.rr_tp1,
+    rr_tp2: targets.rr_tp2,
+    blended_rr: blendedRR,
+    target_quality_pass: targetQualityPass,
+    reason_summary: `${setupLabel} • ${breakoutText} • ${volumeText} • ${trendText} • ${marketText} • target plan ${targets.rr_tp1.toFixed(2)}R / ${targets.rr_tp2.toFixed(2)}R`,
     source_date: latest.date,
     bars_count: barsDesc.length,
   };
