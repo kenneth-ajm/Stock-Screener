@@ -1016,6 +1016,7 @@ export default function IdeasWorkspaceClient({
   const strategyDataCacheRef = useRef(
     new Map<string, Payload | QualityDipPayload | TacticalMomentumPayload>()
   );
+  const deepLinkHydratedRef = useRef(false);
   const tradeTicketRef = useRef<HTMLDivElement | null>(null);
   const entryInputRef = useRef<HTMLInputElement | null>(null);
   const breadth = useMemo(
@@ -1482,17 +1483,8 @@ export default function IdeasWorkspaceClient({
   }, [selected?.symbol, newsBySymbol]);
 
   useEffect(() => {
-    if (!initialSymbol || !data?.rows) return;
+    if (!initialSymbol || deepLinkHydratedRef.current) return;
     const target = String(initialSymbol).trim().toUpperCase();
-    const found = (data.rows ?? []).find((r) => String(r.symbol ?? "").trim().toUpperCase() === target);
-    if (found) {
-      if (openTicketOnLoad) {
-        openTradeTicket(found);
-      } else {
-        setSelected(found);
-      }
-      return;
-    }
     if (initialManualContext && initialManualContext.symbol === target) {
       const fallbackRow: IdeaRow = {
         symbol: target,
@@ -1505,7 +1497,10 @@ export default function IdeasWorkspaceClient({
         reason_summary: initialManualContext.reason_summary ?? "Loaded from manual ticker check context.",
         universe_slug: initialManualContext.universe_slug ?? data?.meta?.universe_slug ?? null,
         source_scan_date: initialManualContext.source_scan_date ?? data?.meta?.date_used ?? null,
-        reason_json: null,
+        reason_json: {
+          strategy: initialStrategy === "tactical_momentum" ? "tactical_momentum_v1" : initialStrategy,
+          source: "deep_link_trade_context",
+        },
         sizing: {
           shares: 0,
           est_cost: 0,
@@ -1518,6 +1513,7 @@ export default function IdeasWorkspaceClient({
           sizing_mode: "cash_only",
         },
       };
+      deepLinkHydratedRef.current = true;
       if (openTicketOnLoad) {
         openTradeTicket(fallbackRow);
       } else {
@@ -1525,8 +1521,27 @@ export default function IdeasWorkspaceClient({
       }
       return;
     }
+
+    const found =
+      (data?.rows ?? []).find((row) => String(row.symbol ?? "").trim().toUpperCase() === target) ?? null;
+    if (found) {
+      deepLinkHydratedRef.current = true;
+      if (openTicketOnLoad) openTradeTicket(found);
+      else setSelected(found);
+      return;
+    }
+
+    const relevantDataLoaded = data != null;
+    if (!relevantDataLoaded) return;
+    deepLinkHydratedRef.current = true;
     setSelected(null);
-  }, [initialSymbol, initialManualContext, openTicketOnLoad, data?.rows, data?.meta?.date_used, data?.meta?.universe_slug]);
+  }, [
+    data,
+    initialManualContext,
+    initialStrategy,
+    initialSymbol,
+    openTicketOnLoad,
+  ]);
 
   const allRows = useMemo(() => data?.rows ?? [], [data]);
   const qualityRows = useMemo(() => qualityDipData?.rows ?? [], [qualityDipData]);
@@ -2206,6 +2221,13 @@ export default function IdeasWorkspaceClient({
         typeof selectedTradePlan?.target_model === "string" && selectedTradePlan.target_model.trim()
           ? selectedTradePlan.target_model.trim()
           : "technical_resistance_r";
+      const persistedStrategyVersion =
+        strategy === "tactical_momentum"
+          ? "tactical_momentum_v1"
+          : strategy === "quality_dip"
+            ? "quality_dip_v1"
+            : strategy;
+      const maxHoldDays = strategy === "v1_trend_hold" ? 30 : strategy === "quality_dip" ? 15 : 7;
 
       const res = await fetch("/api/positions/add", {
         method: "POST",
@@ -2215,8 +2237,8 @@ export default function IdeasWorkspaceClient({
           entry_price: entry,
           stop,
           shares: qty,
-          strategy_version: strategy,
-          max_hold_days: strategy === "v1_trend_hold" ? 30 : 7,
+          strategy_version: persistedStrategyVersion,
+          max_hold_days: maxHoldDays,
           tp_model: selectedTpModel,
           entry_fee: entryFeeValue,
           exit_fee: exitFeeValue,
@@ -2278,12 +2300,18 @@ export default function IdeasWorkspaceClient({
     setPaperSaving(true);
     setError(null);
     try {
+      const persistedStrategyVersion =
+        strategy === "tactical_momentum"
+          ? "tactical_momentum_v1"
+          : strategy === "quality_dip"
+            ? "quality_dip_v1"
+            : strategy;
       const res = await fetch("/api/paper-positions/open", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           symbol: selected.symbol,
-          strategy_version: strategy,
+          strategy_version: persistedStrategyVersion,
           universe_slug:
             selected.universe_slug ?? data?.meta?.universe_slug ?? null,
           source_scan_date: selected.source_scan_date ?? data?.meta?.date_used ?? null,
