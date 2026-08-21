@@ -117,7 +117,7 @@ const loadQualityCached = unstable_cache(
     void sourceDate;
     return loadQualityDipPayloadForServer();
   },
-  ["daily-cockpit-quality-v2"],
+  ["daily-cockpit-quality-v3-target-quality"],
   { revalidate: 900 }
 );
 
@@ -204,7 +204,8 @@ function mapTacticalRow(row: JsonRecord): CockpitCandidate | null {
 
 function mapQualityRow(row: JsonRecord): CockpitCandidate | null {
   const signal = String(row.signal ?? "").toUpperCase();
-  const state = signal === "CONSIDER_BUY" ? "ACT_NOW" : signal === "WATCH" ? "NEAR_TRIGGER" : null;
+  let state: CockpitCandidate["state"] | null =
+    signal === "CONSIDER_BUY" ? "ACT_NOW" : signal === "WATCH" ? "NEAR_TRIGGER" : null;
   if (!state) return null;
   const symbol = String(row.symbol ?? "").trim().toUpperCase();
   if (!symbol) return null;
@@ -215,6 +216,18 @@ function mapQualityRow(row: JsonRecord): CockpitCandidate | null {
   const sourceDate = row.source_date ? String(row.source_date) : null;
   const reason = String(row.reason_summary ?? "Quality pullback setup from completed daily bars.");
   const drop = numberOrNull(row.drop_pct_from_30d_high);
+  const rrTp1 = numberOrNull(row.rr_tp1) ?? (entry != null && stop != null && tp1 != null && entry > stop ? (tp1 - entry) / (entry - stop) : null);
+  const rrTp2 = numberOrNull(row.rr_tp2) ?? (entry != null && stop != null && tp2 != null && entry > stop ? (tp2 - entry) / (entry - stop) : null);
+  const blendedRR = numberOrNull(row.blended_rr) ?? (rrTp1 != null && rrTp2 != null ? rrTp1 * 0.5 + rrTp2 * 0.5 : null);
+  const targetQualityPass =
+    row.target_quality_pass !== false &&
+    rrTp1 != null &&
+    rrTp2 != null &&
+    blendedRR != null &&
+    rrTp1 >= 0.75 &&
+    rrTp2 >= 1.75 &&
+    blendedRR >= 1.25;
+  if (state === "ACT_NOW" && !targetQualityPass) state = "NEAR_TRIGGER";
   const score = signal === "CONSIDER_BUY" ? 88 - Math.abs((drop ?? 7.5) - 7.5) * 2 : 62 - Math.abs((drop ?? 7.5) - 7.5);
   return {
     symbol,
@@ -244,6 +257,8 @@ function mapQualityRow(row: JsonRecord): CockpitCandidate | null {
     next_trigger:
       state === "ACT_NOW"
         ? "Use the planned stop and avoid entering after a sharp gap away from the reference close."
+        : !targetQualityPass
+          ? `Do not enter yet: chart resistance leaves only ${rrTp1?.toFixed(2) ?? "—"}R at TP1 and ${rrTp2?.toFixed(2) ?? "—"}R at TP2 (${blendedRR?.toFixed(2) ?? "—"}R blended). Wait for a better entry or more upside room.`
         : drop != null && drop < 5
           ? "Wait for the pullback to enter the 5–10% preferred dip zone while trend remains intact."
           : drop != null && drop > 10
@@ -267,6 +282,9 @@ function mapQualityRow(row: JsonRecord): CockpitCandidate | null {
       { label: "30-bar high", value: row.high_30d == null ? "—" : `$${Number(row.high_30d).toFixed(2)}` },
       { label: "Pullback", value: drop == null ? "—" : `${drop.toFixed(1)}%` },
       { label: "Trend", value: row.stock_above_sma200 === true ? "Above SMA200" : "Trend needs repair" },
+      { label: "TP1 reward", value: rrTp1 == null ? "—" : `${rrTp1.toFixed(2)}R` },
+      { label: "TP2 reward", value: rrTp2 == null ? "—" : `${rrTp2.toFixed(2)}R` },
+      { label: "50/50 plan", value: blendedRR == null ? "—" : `${blendedRR.toFixed(2)}R` },
     ],
   };
 }

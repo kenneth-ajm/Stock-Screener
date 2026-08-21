@@ -25,6 +25,10 @@ type QualityDipRow = {
   target_model: string | null;
   tp1_reason: string | null;
   tp2_reason: string | null;
+  rr_tp1: number | null;
+  rr_tp2: number | null;
+  blended_rr: number | null;
+  target_quality_pass: boolean;
   reason_summary: string;
   source_date: string | null;
   bars_count: number;
@@ -94,6 +98,10 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
       target_model: null,
       tp1_reason: null,
       tp2_reason: null,
+      rr_tp1: null,
+      rr_tp2: null,
+      blended_rr: null,
+      target_quality_pass: false,
       reason_summary: "Insufficient price history (need at least 30 daily bars).",
       source_date: barsDesc?.[0]?.date ?? null,
       bars_count: barsDesc.length,
@@ -152,6 +160,12 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
     stop: stop ?? current * 0.94,
     strategy_version: "quality_dip_v1",
   });
+  const blendedRR = round2(targets.rr_tp1 * 0.5 + targets.rr_tp2 * 0.5) ?? 0;
+  const targetQualityPass = targets.rr_tp1 >= 0.75 && targets.rr_tp2 >= 1.75 && blendedRR >= 1.25;
+  if (signal === "CONSIDER_BUY" && !targetQualityPass) signal = "WATCH";
+  const targetText = targetQualityPass
+    ? `target plan ${targets.rr_tp1.toFixed(2)}R / ${targets.rr_tp2.toFixed(2)}R`
+    : `target plan too thin (${targets.rr_tp1.toFixed(2)}R / ${targets.rr_tp2.toFixed(2)}R; ${blendedRR.toFixed(2)}R blended)`;
 
   return {
     symbol: item.symbol,
@@ -170,7 +184,11 @@ function evaluateRow(item: QualityDipWatchItem, barsDesc: Array<{ date: string; 
     target_model: targets.target_model,
     tp1_reason: targets.tp1_reason,
     tp2_reason: targets.tp2_reason,
-    reason_summary: `${dipText} • ${dropText} • ${trendText} • ${marketText}`,
+    rr_tp1: targets.rr_tp1,
+    rr_tp2: targets.rr_tp2,
+    blended_rr: blendedRR,
+    target_quality_pass: targetQualityPass,
+    reason_summary: `${dipText} • ${dropText} • ${trendText} • ${marketText} • ${targetText}`,
     source_date: latest.date,
     bars_count: barsDesc.length,
   };
